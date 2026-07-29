@@ -1,0 +1,223 @@
+import { useParams, useNavigate } from 'react-router-dom';
+import { Card, CardHeader, CardContent } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { useAppContext } from '../../components/AppContext';
+import { uploadUrl } from '../../lib/api';
+import { formatDateTime } from '../../lib/date';
+
+export function MomDetail() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { moms, claims } = useAppContext();
+
+  const mom = moms.find(m => m.id === id);
+
+  if (!mom) {
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500">
+        <nav className="flex gap-2 text-on-surface-variant font-label-sm">
+          <span className="cursor-pointer hover:text-primary" onClick={() => navigate('/moms')}>Minutes of Meeting</span>
+        </nav>
+        <Card className="p-12 text-center text-outline">
+          <span className="material-symbols-outlined text-[48px] mb-3">meeting_room</span>
+          <p className="font-headline-sm text-on-surface mb-1">Not found</p>
+          <p className="text-sm">This record doesn't exist, or you don't have access to it.</p>
+        </Card>
+      </div>
+    );
+  }
+
+  const dateStr = mom.meetingDate ? formatDateTime(mom.meetingDate) : 'No date specified';
+  const linkedClaim = mom.claimId ? claims.find(c => c.id === mom.claimId) : undefined;
+  const fileUrl = uploadUrl(mom.fileUrl);
+
+  const internalParticipants = mom.participantsInternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
+  const externalParticipants = mom.participantsExternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500 pb-12">
+      <nav className="flex gap-2 text-on-surface-variant font-label-sm">
+        <span className="cursor-pointer hover:text-primary" onClick={() => navigate('/moms')}>Minutes of Meeting</span>
+        <span>/</span>
+        <span className="text-on-surface font-semibold">{mom.companyName || 'Untitled meeting'}</span>
+      </nav>
+
+      <Card>
+        <CardHeader className="flex-col md:flex-row items-start md:items-center gap-4">
+          <div>
+            <h2 className="text-headline-md font-semibold text-brand-slate">
+              {mom.companyName || 'Unknown Company'}
+            </h2>
+            <p className="text-body-sm text-outline mt-1">
+              {mom.typeOfAccount || mom.preparedBy} &bull; {dateStr}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider bg-surface-container-highest text-on-surface-variant">
+              {mom.status || 'Draft'}
+            </span>
+            {linkedClaim && (
+              <Button variant="outline" className="gap-2" onClick={() => navigate(`/claims/${linkedClaim.id}`)}>
+                <span className="material-symbols-outlined text-[18px]">receipt_long</span>
+                View Claim ({linkedClaim.ref})
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-8">
+
+          <div className="space-y-6">
+            <section>
+              <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Meeting Details</h3>
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+                <div>
+                  <dt className="text-label-sm text-outline">Purpose</dt>
+                  <dd className="text-body-base font-medium mt-1">{mom.purposeOfMeeting || '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-label-sm text-outline">Location</dt>
+                  <dd className="text-body-base font-medium mt-1">{mom.location || '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-label-sm text-outline">Meeting Type</dt>
+                  <dd className="text-body-base font-medium mt-1">{mom.meetingType || '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-label-sm text-outline">Category</dt>
+                  <dd className="text-body-base font-medium mt-1">{mom.category || '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-label-sm text-outline">Prepared By</dt>
+                  <dd className="text-body-base font-medium mt-1">{mom.preparedBy || '-'}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section>
+              <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Contact Person</h3>
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+                <div>
+                  <dt className="text-label-sm text-outline">Name & Designation</dt>
+                  <dd className="text-body-base font-medium mt-1">
+                    {mom.contactPerson || '-'}
+                    {mom.contactPersonDesignation ? ` (${mom.contactPersonDesignation})` : ''}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-label-sm text-outline">Email</dt>
+                  <dd className="text-body-base font-medium mt-1">{mom.contactPersonEmail || '-'}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section>
+              <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Participants</h3>
+              <div className="space-y-3">
+                <div>
+                  <span className="text-label-sm text-outline block mb-2">Internal</span>
+                  {internalParticipants.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {internalParticipants.map((p, i) => (
+                        <span key={i} className="px-3 py-1 bg-surface-container-high rounded-full text-label-sm">
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-body-sm text-outline">None listed</span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-label-sm text-outline block mb-2">External</span>
+                  {externalParticipants.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {externalParticipants.map((p, i) => (
+                        <span key={i} className="px-3 py-1 bg-surface-container-high rounded-full text-label-sm border border-brand-border">
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-body-sm text-outline">None listed</span>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Discussion & Outcomes</h3>
+              <div className="space-y-4 bg-surface-container-lowest border border-brand-border rounded-[10px] p-4">
+                <div>
+                  <h4 className="text-label-sm font-semibold mb-1">Summary / Description</h4>
+                  <p className="text-body-sm text-on-surface-variant whitespace-pre-wrap">{mom.description || mom.summary || 'No description provided.'}</p>
+                </div>
+
+                {mom.agreements && (
+                  <div>
+                    <h4 className="text-label-sm font-semibold mb-1">Agreements</h4>
+                    <p className="text-body-sm text-on-surface-variant whitespace-pre-wrap">{mom.agreements}</p>
+                  </div>
+                )}
+
+                {mom.actionItems && (
+                  <div>
+                    <h4 className="text-label-sm font-semibold mb-1">Action Items</h4>
+                    <p className="text-body-sm text-on-surface-variant whitespace-pre-wrap">{mom.actionItems}</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <div className="space-y-6">
+             <section className="h-full flex flex-col">
+                <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Attached Document</h3>
+
+                {fileUrl ? (
+                  <div className="flex flex-col flex-1 border border-brand-border rounded-[10px] overflow-hidden bg-surface-container-low min-h-[400px]">
+                    <div className="p-3 border-b border-brand-border flex items-center justify-between bg-surface-container-lowest">
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-outline">description</span>
+                        <span className="text-label-sm font-medium truncate max-w-[200px] sm:max-w-[300px]">
+                          {mom.fileName || 'document.pdf'}
+                        </span>
+                      </div>
+                      <a href={fileUrl} target="_blank" rel="noreferrer" download={mom.fileName}>
+                        <Button size="sm" variant="outline" className="gap-2">
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                          Download
+                        </Button>
+                      </a>
+                    </div>
+
+                    <div className="flex-1 flex items-center justify-center p-4">
+                      {mom.fileName?.match(/\.(jpeg|jpg|gif|png)$/i) ? (
+                        <img src={fileUrl} alt="Attachment Preview" className="max-w-full max-h-full object-contain rounded" />
+                      ) : mom.fileName?.match(/\.pdf$/i) ? (
+                        <iframe title="MOM attachment" src={fileUrl} className="w-full h-full min-h-[350px] rounded border border-brand-border" />
+                      ) : (
+                        <div className="w-full h-full min-h-[300px] flex flex-col items-center justify-center bg-surface-container rounded border border-brand-border border-dashed text-center text-outline">
+                          <span className="material-symbols-outlined text-[48px] mb-2 opacity-50">description</span>
+                          <p className="text-body-sm">Preview not available for this file type.</p>
+                          <p className="text-[12px] mt-1">Use Download to open it.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 min-h-[200px] border border-brand-border border-dashed rounded-[10px] bg-surface-container-low flex flex-col items-center justify-center p-6 text-center text-outline">
+                    <span className="material-symbols-outlined text-[32px] mb-2 opacity-50">draft</span>
+                    <p className="text-body-sm font-medium">No file attached</p>
+                    <p className="text-[12px] mt-1 max-w-[250px]">
+                      This MOM was created via the template form — the fields on the left are the record.
+                    </p>
+                  </div>
+                )}
+             </section>
+          </div>
+
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

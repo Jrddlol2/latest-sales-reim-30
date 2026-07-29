@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 60" width="300" height="60">
+  <rect width="300" height="60" rx="8" fill="#ffffff" />
+  <g transform="translate(15, 12)">
+    <path d="M0 0 L12 24 L24 0 L36 24 L36 36 L24 36 L18 18 L12 36 L0 36 Z" fill="#1A5BDB"/>
+    <text x="48" y="25" font-family="sans-serif" font-weight="800" font-size="18" fill="#1A5BDB" letter-spacing="0.5">MICROGENESIS</text>
+    <text x="48" y="35" font-family="sans-serif" font-weight="600" font-size="8" fill="#666666" letter-spacing="1">EXPENSE MANAGEMENT</text>
+  </g>
+</svg>
