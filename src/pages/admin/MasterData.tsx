@@ -8,6 +8,16 @@ import { createMasterData, updateMasterData } from '../../lib/api';
 import { MasterData as IMasterData } from '../../types';
 import { Pagination } from '../../components/ui/Pagination';
 
+// Plausible sample values per catalog, used by the demo-mode autofill.
+const DEMO_SAMPLES: Record<string, { name: string; code: string; notes: string }> = {
+  department: { name: 'Corporate Sales', code: 'CSALES', notes: 'Demo sample department' },
+  costCenter: { name: 'CC — Field Operations', code: 'CC-4200', notes: 'Demo sample cost center' },
+  businessUnit: { name: 'Enterprise Solutions', code: 'BU-ENT', notes: 'Demo sample business unit' },
+  branch: { name: 'Cebu Branch', code: 'BR-CEB', notes: 'Demo sample branch' },
+  projectCode: { name: 'Project Horizon', code: 'PRJ-HZN', notes: 'Demo sample project code' },
+  vendor: { name: 'Northwind Supplies Inc.', code: 'VND-NW', notes: 'Demo sample vendor' },
+};
+
 const ITEMS_PER_PAGE = 15;
 
 export function MasterData() {
@@ -141,6 +151,9 @@ export function MasterData() {
                    </td>
                    <td className="px-6 py-3 text-right">
                       <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" className="gap-1" onClick={() => setEditForm(p => ({ ...p, ...DEMO_SAMPLES[activeTab], active: p.active ?? true }))}>
+                          <span className="material-symbols-outlined text-[16px]">bolt</span> Autofill
+                        </Button>
                         <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
                         <Button size="sm" onClick={handleSave}>Save</Button>
                       </div>

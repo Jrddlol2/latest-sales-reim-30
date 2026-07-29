@@ -48,9 +48,39 @@ let systemSettings = {
   // cash advance release, liquidation refund collection) so adding/removing
   // a method is a one-line admin change, not a hunt through JSX.
   paymentMethods: ['Cash', 'GCash', 'Bank Transfer', 'Check'],
+  // Company spending policy: the maximum amount allowed on a single expense line
+  // item, per category. A category absent here (or set to 0) has no cap. Admins
+  // edit this from the Company Policy screen; the claim/liquidation submit routes
+  // reject any line that exceeds its category's cap.
+  categoryLimits: {
+    Meals: 2000,
+    Transportation: 3000,
+  } as Record<string, number>,
 };
 
 let claimCounter = 123;
+
+/**
+ * Enforce the company spending policy against a set of expense lines. Returns an
+ * error message describing the first line that breaks its category cap, or null
+ * if every line is within policy. Shared by the reimbursement and liquidation
+ * submit paths so the rule lives in exactly one place.
+ */
+function checkCategoryLimits(items: Array<{ category?: string; amount?: number }>): string | null {
+  const limits = systemSettings.categoryLimits || {};
+  for (const item of items) {
+    const cap = item.category ? limits[item.category] : undefined;
+    if (cap && cap > 0 && Number(item.amount) > cap) {
+      return `Company policy caps ${item.category} at ${formatPHP(cap)} per item — one line is ${formatPHP(Number(item.amount))}. Adjust it or request an exception.`;
+    }
+  }
+  return null;
+}
+
+/** Bare PHP amount formatter for server-side policy messages (no Intl on the amount). */
+function formatPHP(n: number): string {
+  return `PHP ${Number(n).toLocaleString('en-PH')}`;
+}
 
 // Company Directory - canonical master list of client companies. Seeded from
 // the same names the mock-data generators use (see SEED_COMPANIES below)
@@ -934,7 +964,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     if (!user || user.role !== UserRole.ADMIN) {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    const { expenseCategories, highValueThreshold, paymentMethods } = req.body;
+    const { expenseCategories, highValueThreshold, paymentMethods, categoryLimits } = req.body;
     if (expenseCategories && Array.isArray(expenseCategories)) {
       systemSettings.expenseCategories = expenseCategories;
     }
@@ -943,6 +973,15 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     }
     if (paymentMethods && Array.isArray(paymentMethods)) {
       systemSettings.paymentMethods = paymentMethods;
+    }
+    if (categoryLimits && typeof categoryLimits === 'object' && !Array.isArray(categoryLimits)) {
+      // Keep only positive numeric caps; a 0 or blank clears that category's cap.
+      const cleaned: Record<string, number> = {};
+      for (const [cat, val] of Object.entries(categoryLimits)) {
+        const num = Number(val);
+        if (Number.isFinite(num) && num > 0) cleaned[cat] = num;
+      }
+      systemSettings.categoryLimits = cleaned;
     }
     res.json(systemSettings);
   });
@@ -1544,7 +1583,12 @@ ${user.name}`;
           amount: numericAmount,
           receipt_url: item.receipt_url,
           or_number: item.or_number,
-          business_purpose: remarks || `Sales reimbursement for meeting with ${mom.client}`
+          // Preserve the per-row detail the requestor entered; fall back to the
+          // meeting-derived values only when a field wasn't provided.
+          vendor: item.vendor,
+          expense_date: item.expense_date,
+          payment_method: item.payment_method,
+          business_purpose: item.business_purpose || remarks || `Sales reimbursement for meeting with ${mom.client}`
         });
         claimTotal += numericAmount;
       }
@@ -1576,8 +1620,15 @@ ${user.name}`;
       mainReceipt = receipt_url;
     }
 
+    // Company spending policy — enforce per-category caps on a real submission.
+    // Drafts are allowed to hold over-cap lines so the requestor can save and fix.
+    if (!is_draft) {
+      const policyError = checkCategoryLimits(itemsToCreate);
+      if (policyError) return res.status(400).json({ error: policyError });
+    }
+
     const claimId = uuidv4();
-    
+
     // Generate Philippine format Claim Number (e.g. REIM-2026-000123)
     const year = new Date().getFullYear();
     const numStr = String(claimCounter++).padStart(6, '0');
@@ -1588,11 +1639,11 @@ ${user.name}`;
       expenses.push({
         id: uuidv4(),
         claim_id: claimId,
-        expense_date: mom.meeting_date,
-        vendor: mom.client || 'Client Meeting',
+        expense_date: item.expense_date || mom.meeting_date,
+        vendor: item.vendor || mom.client || 'Client Meeting',
         category: item.category,
         amount: item.amount,
-        payment_method: 'Cash',
+        payment_method: item.payment_method || 'Cash',
         business_purpose: item.business_purpose,
         receipt_url: item.receipt_url,
         or_number: item.or_number
@@ -1904,7 +1955,12 @@ Please log in to the system and confirm or decline this new time.`
           amount: numericAmount,
           receipt_url: item.receipt_url,
           or_number: item.or_number,
-          business_purpose: remarks || `Sales reimbursement for meeting with ${mom.client}`
+          // Preserve the per-row detail the requestor entered; fall back to the
+          // meeting-derived values only when a field wasn't provided.
+          vendor: item.vendor,
+          expense_date: item.expense_date,
+          payment_method: item.payment_method,
+          business_purpose: item.business_purpose || remarks || `Sales reimbursement for meeting with ${mom.client}`
         });
         claimTotal += numericAmount;
       }
@@ -1936,6 +1992,10 @@ Please log in to the system and confirm or decline this new time.`
       mainReceipt = receipt_url;
     }
 
+    // Company spending policy — a resubmit is always a real submission.
+    const policyError = checkCategoryLimits(itemsToCreate);
+    if (policyError) return res.status(400).json({ error: policyError });
+
     // Re-link the MOM if the requestor swapped it out for a different one.
     if (claim.mom_id !== mom_id) {
       const oldMom = moms.find(m => m.id === claim.mom_id);
@@ -1953,11 +2013,11 @@ Please log in to the system and confirm or decline this new time.`
       expenses.push({
         id: uuidv4(),
         claim_id: claim.id,
-        expense_date: mom.meeting_date,
-        vendor: mom.client || 'Client Meeting',
+        expense_date: item.expense_date || mom.meeting_date,
+        vendor: item.vendor || mom.client || 'Client Meeting',
         category: item.category,
         amount: item.amount,
-        payment_method: 'Cash',
+        payment_method: item.payment_method || 'Cash',
         business_purpose: item.business_purpose,
         receipt_url: item.receipt_url,
         or_number: item.or_number
@@ -2309,6 +2369,24 @@ BSM Assistant | BSD - IT Security Business`;
     if (claim.sourceLiquidationId) {
       addLiqHistory(claim.sourceLiquidationId, LiquidationStatus.CLOSED, LiquidationStatus.CLOSED, user.id, 'Reimbursement Processed');
     }
+
+    // Notify the custodian who processed the payout that the requestor has now
+    // confirmed receipt and the claim is closed — previously this final step
+    // produced no notification at all, so Finance never saw it complete.
+    const claimNumber = claim.claim_number || `REIM-${claim.id.substring(0, 6)}`;
+    if (claim.processed_by) {
+      sendEmail(
+        claim.processed_by,
+        `Reimbursement Completed - ${claimNumber}`,
+        `${user.name} has confirmed receipt of the payout for ${claimNumber} (PHP ${claim.total_amount}). The claim is now complete — no further action is required.`
+      );
+    }
+    // Confirmation copy to the requestor, matching every other step's pattern.
+    sendEmail(
+      claim.requestor_id,
+      `Reimbursement Completed - ${claimNumber}`,
+      `You've confirmed receipt of your reimbursement ${claimNumber} (PHP ${claim.total_amount}). This claim is now complete.`
+    );
 
     res.json(claim);
   });
@@ -3009,6 +3087,10 @@ You'll receive another email as soon as a decision is made.`
     if (l.status !== LiquidationStatus.DRAFT && l.status !== LiquidationStatus.RETURNED_FOR_REVISION) {
       return res.status(400).json({ error: 'Only Liquidations in Draft or ReturnedForRevision status can be submitted.' });
     }
+
+    // Company spending policy — enforce per-category caps across all lines.
+    const liqPolicyError = checkCategoryLimits(liquidationLineItems.filter(i => i.liquidationId === l.id));
+    if (liqPolicyError) return res.status(400).json({ error: liqPolicyError });
 
     recalculateLiquidation(l.id);
 

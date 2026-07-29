@@ -283,6 +283,20 @@ export function FieldDefinitionsAdmin() {
                    </td>
                    <td className="px-6 py-3 text-right">
                       <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" className="gap-1" disabled={saving} onClick={() => {
+                          const label = 'Cost Center Approval';
+                          setEditForm(p => ({
+                            ...p,
+                            label,
+                            key: generateUniqueKey(label, filteredFields.map(f => f.key)),
+                            input_type: 'text',
+                            required: false,
+                            active: true,
+                          }));
+                          setKeyManuallyEdited(false);
+                        }}>
+                          <span className="material-symbols-outlined text-[16px]">bolt</span> Autofill
+                        </Button>
                         <Button size="sm" variant="ghost" onClick={() => setEditingId(null)} disabled={saving}>Cancel</Button>
                         <Button size="sm" onClick={handleSave} disabled={saving}>Save</Button>
                       </div>

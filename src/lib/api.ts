@@ -434,6 +434,10 @@ export interface WorkspaceData {
   supportRequests: SupportRequest[];
   delegations: ApproverDelegation[];
   paymentMethods: string[];
+  /** Admin-configurable amount above which a line item is flagged high-value. */
+  highValueThreshold: number;
+  /** Company spending policy: max amount per line item, keyed by expense category. */
+  categoryLimits: Record<string, number>;
 }
 
 /**
@@ -505,8 +509,14 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
     supportRequests: (rawSupport || []).map(fromServerSupport),
     delegations: (rawDelegations || []).map(fromServerDelegation),
     paymentMethods: rawSettings?.paymentMethods || ['Cash', 'GCash', 'Bank Transfer', 'Check'],
+    highValueThreshold: Number(rawSettings?.highValueThreshold) || 15000,
+    categoryLimits: (rawSettings?.categoryLimits && typeof rawSettings.categoryLimits === 'object') ? rawSettings.categoryLimits : {},
   };
 }
+
+/** Admin: update system settings (payment methods, high-value threshold, category limits). */
+export const updateAdminSettings = (body: Record<string, unknown>) =>
+  apiFetch('/api/admin/settings', { method: 'PUT', body: JSON.stringify(body) });
 
 // --- audit / support / delegation reads and mutations ---------------------
 
@@ -800,6 +810,12 @@ export async function submitClaimFlow(input: SubmitClaimInput) {
         amount: Number(li.amount) || 0,
         receipt_url: li.receiptUrl,
         or_number: li.orNumber || '',
+        // Per-row detail the requestor entered — previously dropped here, so the
+        // server backfilled vendor/date/method from the meeting. Send them through.
+        vendor: li.vendor || '',
+        expense_date: li.expenseDate || '',
+        payment_method: li.paymentMethod || '',
+        business_purpose: li.businessPurpose || '',
       })),
     }),
   });
@@ -852,6 +868,10 @@ export async function resubmitClaimFlow(input: ResubmitClaimInput) {
         amount: Number(li.amount) || 0,
         receipt_url: li.receiptUrl,
         or_number: li.orNumber || '',
+        vendor: li.vendor || '',
+        expense_date: li.expenseDate || '',
+        payment_method: li.paymentMethod || '',
+        business_purpose: li.businessPurpose || '',
       })),
     }),
   });

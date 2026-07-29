@@ -30,6 +30,10 @@ interface AppContextType {
   delegations: ApproverDelegation[];
   /** Admin-configurable list of valid payment methods; drives every payment picker. */
   paymentMethods: string[];
+  /** Admin-configurable amount above which a line item is flagged high-value. */
+  highValueThreshold: number;
+  /** Company spending policy: max amount per line item, keyed by expense category. */
+  categoryLimits: Record<string, number>;
   resetData: () => void;
 }
 
@@ -52,6 +56,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [supportRequests, setSupportRequests] = useState<SupportRequest[]>([]);
   const [delegations, setDelegations] = useState<ApproverDelegation[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<string[]>([]);
+  const [highValueThreshold, setHighValueThreshold] = useState<number>(15000);
+  const [categoryLimits, setCategoryLimits] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -75,6 +81,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSupportRequests(data.supportRequests);
       setDelegations(data.delegations);
       setPaymentMethods(data.paymentMethods);
+      setHighValueThreshold(data.highValueThreshold);
+      setCategoryLimits(data.categoryLimits);
       setLoadError(null);
     } catch (err: any) {
       setLoadError(err?.message || 'Could not reach the server');
@@ -218,6 +226,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       importBatches,
       delegations,
       paymentMethods,
+      highValueThreshold,
+      categoryLimits,
       resetData
     }}>
       {children}

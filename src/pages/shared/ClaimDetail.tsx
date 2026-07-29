@@ -343,14 +343,15 @@ export function ClaimDetail() {
               <CardContent className="p-6">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="material-symbols-outlined text-primary">key</span>
-                  <h3 className="font-headline-md text-on-surface">Release Code</h3>
+                  <h3 className="font-headline-md text-on-surface">Ready for Release</h3>
                 </div>
                 <p className="text-body-sm text-on-surface-variant mb-4">
-                  The custodian released your payout. Enter this code below to confirm receipt.
+                  The custodian has released your payout. Enter the release code they gave you
+                  (in person or by message) to confirm receipt and complete this claim.
                 </p>
-                <p className="font-mono-data text-2xl tracking-widest text-center bg-surface-container-lowest border border-outline-variant rounded-lg py-3">
-                  {claim.releaseCode}
-                </p>
+                <Button className="w-full gap-2" onClick={() => { setReceiptCode(''); setReceiptError(''); setConfirmingReceipt(true); }}>
+                  <span className="material-symbols-outlined text-[18px]">check_circle</span> Enter Code to Confirm
+                </Button>
               </CardContent>
             </Card>
           )}

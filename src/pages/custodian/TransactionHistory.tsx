@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
 import { Pagination } from '../../components/ui/Pagination';
@@ -9,6 +10,7 @@ import { formatMoney } from '../../lib/money';
 import { formatDate } from '../../lib/date';
 
 export function TransactionHistory() {
+  const navigate = useNavigate();
   const { claims, users, statusHistory } = useAppContext();
 
   const [search, setSearch] = useState('');
@@ -90,7 +92,7 @@ export function TransactionHistory() {
                 const req = users.find(u => u.id === claim.requestorId) || users[0];
                 const completedAt = completionDateFor(claim.id);
                 return (
-                  <tr key={claim.id} className="hover:bg-primary-container/5 transition-colors">
+                  <tr key={claim.id} className="hover:bg-primary-container/5 transition-colors cursor-pointer" onClick={() => navigate(`/claims/${claim.id}`)}>
                     <td className="px-6 py-5 font-mono-data text-primary font-bold">{claim.ref}</td>
                     <td className="px-6 py-5">
                       <div className="flex items-center gap-3">

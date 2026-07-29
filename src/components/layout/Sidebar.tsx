@@ -69,6 +69,7 @@ const getNavItems = (role: UserRole): NavItem[] => {
       { label: 'Master Data Admin', icon: 'database', path: '/admin/master-data' },
       { label: 'Field Definitions', icon: 'input', path: '/admin/fields' },
       { label: 'Company Directory', icon: 'business', path: '/admin/companies' },
+      { label: 'Company Policy', icon: 'policy', path: '/admin/policy' },
       { label: 'Historical Import', icon: 'upload_file', path: '/admin/import' },
       { label: 'Admin Reporting', icon: 'bar_chart', path: '/admin/reports' },
       { label: 'Audit Log', icon: 'gavel', path: '/admin/audit' },

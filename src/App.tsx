@@ -46,6 +46,7 @@ const FieldDefinitionsAdmin = lazy(() => import('./pages/admin/FieldDefinitionsA
 const AdminReporting = lazy(() => import('./pages/admin/AdminReporting').then(m => ({ default: m.AdminReporting })));
 const SystemEmails = lazy(() => import('./pages/admin/SystemEmails').then(m => ({ default: m.SystemEmails })));
 const HistoricalImport = lazy(() => import('./pages/admin/HistoricalImport').then(m => ({ default: m.HistoricalImport })));
+const CompanyPolicy = lazy(() => import('./pages/admin/CompanyPolicy').then(m => ({ default: m.CompanyPolicy })));
 
 function RouteFallback() {
   return (
@@ -105,6 +106,7 @@ function RoleBasedRouter() {
         <Route path="/admin/master-data" element={<MasterData />} />
         <Route path="/admin/fields" element={<FieldDefinitionsAdmin />} />
         <Route path="/admin/companies" element={<CompanyDirectory />} />
+        <Route path="/admin/policy" element={<CompanyPolicy />} />
         <Route path="/admin/import" element={<HistoricalImport />} />
         <Route path="/admin/reports" element={<AdminReporting />} />
         <Route path="/admin/audit" element={<AuditLog />} />

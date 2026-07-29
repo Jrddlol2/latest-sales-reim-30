@@ -11,6 +11,8 @@ import { useToast } from '../../components/shared/ToastContext';
 import { MinutesSource, ClaimStatus } from '../../types';
 import { submitClaimFlow, submitCashAdvanceFlow, submitLiquidationFlow, DraftLineItem } from '../../lib/api';
 import { formatMoney } from '../../lib/money';
+import { EXPENSE_CATEGORIES } from '../../lib/expenseCategories';
+import { FieldDefinition, FieldDefinitionEntity } from '../../types';
 
 const TYPE_PARAM_MAP: Record<string, 'Reimbursement' | 'Cash Advance' | 'Liquidation'> = {
   reimbursement: 'Reimbursement',
@@ -20,7 +22,7 @@ const TYPE_PARAM_MAP: Record<string, 'Reimbursement' | 'Cash Advance' | 'Liquida
 
 export function SubmitClaim() {
   const navigate = useNavigate();
-  const { currentUser, fieldDefinitions, users, claims, companies, refresh } = useAppContext();
+  const { currentUser, fieldDefinitions, users, claims, companies, masterData, highValueThreshold, categoryLimits, refresh } = useAppContext();
   const { addToast } = useToast();
   const [searchParams] = useSearchParams();
   const typeFromQuery = TYPE_PARAM_MAP[searchParams.get('type') ?? ''];
@@ -77,6 +79,11 @@ export function SubmitClaim() {
       addToast('Please add at least one line item', 'error');
       return;
     }
+    // Company spending policy — block advancing past Details with an over-cap line.
+    if (step === 1 && claimType !== 'Cash Advance' && firstOverLimit) {
+      addToast(`${firstOverLimit.category} is capped at ${formatMoney(limitFor(firstOverLimit.category))} per item by company policy.`, 'error');
+      return;
+    }
     if (step === 1 && claimType === 'Cash Advance') {
       if (!cashAdvanceAmount || cashAdvanceAmount <= 0) {
         addToast('Please enter the amount you\'re requesting', 'error');
@@ -129,7 +136,15 @@ export function SubmitClaim() {
   const totalAmount = claimType === 'Cash Advance'
     ? Number(cashAdvanceAmount) || 0
     : lineItemsLocal.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const flaggedHighValue = lineItemsLocal.some(item => (Number(item.amount) || 0) > 15000);
+  const flaggedHighValue = lineItemsLocal.some(item => (Number(item.amount) || 0) > highValueThreshold);
+
+  /** Company spending policy: the cap for a line's category, or 0 if none. */
+  const limitFor = (category?: string) => (category && categoryLimits[category]) || 0;
+  const overLimit = (item: DraftLineItem) => {
+    const cap = limitFor(item.category);
+    return cap > 0 && (Number(item.amount) || 0) > cap;
+  };
+  const firstOverLimit = lineItemsLocal.find(overLimit);
   
   let varianceAmount = 0;
   let varianceType: 'Settled' | 'RefundDue' | 'ReimbursementDue' = 'Settled';
@@ -171,40 +186,121 @@ export function SubmitClaim() {
     setMomData(p => ({ ...p, fileName: file.name }));
   };
 
-  /** Dev-only convenience: the server rejects any expense line without a
-   *  receipt, which normally means attaching a real file by hand on every
-   *  manual test run. Fetch the app's own placeholder image and reuse it as
-   *  a mock receipt so a full claim can be filled and submitted in one click.
-   *  Gated by import.meta.env.DEV — never available in a production build. */
+  /** Presenter convenience (the header "Autofill" button): fill the ENTIRE
+   *  flow — Minutes of Meeting, admin-configured custom fields, expense line
+   *  items (with a mock receipt, since the server rejects any expense line
+   *  without one) and the review meeting — in one click, so a full claim can be
+   *  filled and submitted while presenting instead of typing every field. */
+  const today = () => new Date().toISOString().split('T')[0];
+
+  /** Produce a plausible value for one admin-configured custom field, matching
+   *  its input type so dropdowns land on a real option and the renderer's own
+   *  required-field checks pass. */
+  const sampleFieldValue = (fd: FieldDefinition): string => {
+    if (fd.default_value) return fd.default_value;
+    if (fd.input_type === 'dropdown') {
+      const options = fd.master_data_entity
+        ? masterData.filter(m => m.type === fd.master_data_entity && m.active).map(m => m.name)
+        : fd.options || [];
+      if (options.length > 0) return options[0];
+      if (fd.allow_other) return 'Other';
+      return '';
+    }
+    if (fd.input_type === 'number') return '100';
+    if (fd.input_type === 'date') return today();
+    return `${fd.label} (demo)`;
+  };
+
+  /** Build a values map for every active custom field of an entity, filling the
+   *  required ones (and any with a sensible default) so validation never blocks
+   *  a demo. Filters claim fields by the current claim type, mirroring the
+   *  DynamicFieldRenderer so we only fill fields that are actually shown. */
+  const fillCustomFields = (entity: FieldDefinitionEntity): Record<string, string> => {
+    const out: Record<string, string> = {};
+    fieldDefinitions
+      .filter(fd => fd.entity === entity && fd.active)
+      .filter(fd => entity !== 'claim' || !fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType))
+      .forEach(fd => {
+        if (fd.required || fd.default_value) {
+          const v = sampleFieldValue(fd);
+          if (v) out[fd.key] = v;
+        }
+      });
+    return out;
+  };
+
+  /** Generate a small, valid PNG receipt entirely in the browser. The server
+   *  rejects any expense line without an image/PDF receipt, and generating one
+   *  here (rather than fetching a file from /public) means the autofill never
+   *  depends on a placeholder asset being present in the deployed build. */
+  const makeReceiptBlob = (): Promise<Blob> => new Promise((resolve, reject) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 400;
+    canvas.height = 520;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { reject(new Error('no canvas context')); return; }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillText('DEMO RECEIPT', 28, 56);
+    ctx.fillStyle = '#475569';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('Sample receipt — autofilled for demo', 28, 86);
+    ctx.fillText(`Date: ${today()}`, 28, 130);
+    ctx.fillText('Vendor: Cafe Manila', 28, 156);
+    ctx.font = 'bold 18px sans-serif';
+    ctx.fillStyle = '#0f172a';
+    ctx.fillText('TOTAL: PHP 850.00', 28, 200);
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/png');
+  });
+
   const [autofilling, setAutofilling] = useState(false);
   const handleAutofillTestData = async () => {
     setAutofilling(true);
     try {
-      const res = await fetch('/receipt_placeholder.png');
-      const blob = await res.blob();
-      const mockReceipt = (name: string) => new File([blob], name, { type: blob.type || 'image/png' });
+      const blob = await makeReceiptBlob();
+      const mockReceipt = (name: string) => new File([blob], name, { type: 'image/png' });
 
       if (claimType === 'Cash Advance') {
         setCashAdvanceAmount(5000);
-        setCashAdvancePurpose('Test cash advance — autofilled for QA');
+        setCashAdvancePurpose('Client site visit — travel and meals advance');
       } else if (claimType === 'Liquidation') {
         if (!cashAdvanceId && myCashAdvances.length > 0) setCashAdvanceId(myCashAdvances[0].id);
         setLineItemsLocal([
-          { expenseDate: new Date().toISOString().split('T')[0], amount: 1200, paymentMethod: 'Personal Card', vendor: 'Test Vendor', category: 'Travel', businessPurpose: 'Test liquidation line — autofilled for QA', receiptFile: mockReceipt('receipt_1.png'), receiptUrl: URL.createObjectURL(mockReceipt('receipt_1.png')) },
+          { expenseDate: today(), amount: 1200, paymentMethod: 'Personal Card', vendor: 'Grand Hotel', category: 'Travel', businessPurpose: 'Accommodation during client visit', receiptFile: mockReceipt('receipt_1.png'), receiptUrl: URL.createObjectURL(mockReceipt('receipt_1.png')) },
         ]);
+        setClaimCustomFields(fillCustomFields('claim'));
       } else {
+        // Reimbursement — fill the whole multi-step flow at once.
         setLineItemsLocal([
-          { expenseDate: new Date().toISOString().split('T')[0], amount: 850, paymentMethod: 'Personal Card', vendor: 'Test Vendor', category: 'Meals', businessPurpose: 'Test expense line — autofilled for QA', receiptFile: mockReceipt('receipt_1.png'), receiptUrl: URL.createObjectURL(mockReceipt('receipt_1.png')) },
+          { expenseDate: today(), amount: 850, paymentMethod: 'Personal Card', vendor: 'Cafe Manila', category: 'Meals', businessPurpose: 'Client lunch meeting', receiptFile: mockReceipt('receipt_1.png'), receiptUrl: URL.createObjectURL(mockReceipt('receipt_1.png')) },
         ]);
-        if (companies.length > 0) applyCompanyDefaults(companies[0].name);
-        setMomCore(p => ({ ...p, purpose: p.purpose || 'Test meeting — autofilled for QA', discussion: p.discussion || 'Discussed test scenario for QA purposes.' }));
+        setClaimCustomFields(fillCustomFields('claim'));
+        if (companies.length > 0) {
+          setClientMode('select');
+          applyCompanyDefaults(companies[0].name);
+        } else {
+          setMomCore(p => ({ ...p, client: p.client || 'Acme Corporation' }));
+        }
+        setMomCore(p => ({
+          ...p,
+          purpose: p.purpose || 'Quarterly account review',
+          location: p.location || 'Makati City, Philippines',
+          contactPerson: p.contactPerson || 'Jane Dela Cruz',
+          contactPersonEmail: p.contactPersonEmail || 'jane@client.com',
+          discussion: p.discussion || 'Reviewed pipeline, agreed next steps and follow-up schedule.',
+        }));
+        setMomData(p => ({ ...p, ...fillCustomFields('mom') }));
         const inThreeDays = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
         setMeetingDate(d => d || inThreeDays.toISOString().split('T')[0]);
         setMeetingTime(t => t || '14:00');
       }
-      addToast('Filled with test data (dev only).', 'success');
+      addToast('Form filled with demo data.', 'success');
     } catch {
-      addToast('Could not load the placeholder receipt for autofill.', 'error');
+      addToast('Could not generate the demo receipt for autofill.', 'error');
     } finally {
       setAutofilling(false);
     }
@@ -310,8 +406,14 @@ export function SubmitClaim() {
             <h2 className="font-headline-lg text-on-surface">Submit {claimType}</h2>
             <p className="font-body-base text-on-surface-variant md:hidden">Step {flowPosition + 1} of {stepFlow.length}: {steps.find(s => s.num === step)?.title}</p>
           </div>
-          <div className="text-right hidden sm:block">
-            <span className="font-label-sm text-primary uppercase">Draft mode</span>
+          <div className="flex items-center gap-3">
+            <Button size="sm" variant="outline" className="gap-2" onClick={handleAutofillTestData} disabled={autofilling}>
+              <span className="material-symbols-outlined text-[16px]">bolt</span>
+              {autofilling ? 'Filling…' : 'Autofill'}
+            </Button>
+            <div className="text-right hidden sm:block">
+              <span className="font-label-sm text-primary uppercase">Draft mode</span>
+            </div>
           </div>
         </div>
 
@@ -351,12 +453,6 @@ export function SubmitClaim() {
             <CardHeader>
               <h3 className="font-headline-md text-on-surface">{claimType} Details</h3>
               <div className="flex items-center gap-2">
-                {import.meta.env.DEV && (
-                  <Button size="sm" variant="outline" className="gap-2" onClick={handleAutofillTestData} disabled={autofilling}>
-                    <span className="material-symbols-outlined text-[16px]">bolt</span>
-                    {autofilling ? 'Filling…' : 'Autofill Test Data'}
-                  </Button>
-                )}
               {claimType !== 'Cash Advance' && (
                 <Button size="sm" className="gap-2" onClick={() => setLineItemsLocal(p => [...p, { expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }])}>
                   <span className="material-symbols-outlined text-[18px]">add</span> Add Row
@@ -422,25 +518,19 @@ export function SubmitClaim() {
                     {lineItemsLocal.map((item, idx) => (
                       <tr key={idx} className="hover:bg-brand-row-hover transition-colors group">
                         <td className="px-3 py-3 sticky left-0 bg-white z-10 shadow-[1px_0_0_var(--color-brand-border)] group-hover:bg-brand-row-hover">
-                          <Input type="date" value={item.expenseDate || ''} onChange={e => { const n = [...lineItemsLocal]; n[idx].expenseDate = e.target.value; setLineItemsLocal(n); }} className="py-1 px-2 text-xs" />
+                          <Input type="date" value={item.expenseDate || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, expenseDate: e.target.value } : li))} className="py-1 px-2 text-xs" />
                         </td>
                         <td className="px-3 py-3">
-                          <Select className="py-1 px-2 text-xs" value={item.category || ''} onChange={e => { const n = [...lineItemsLocal]; n[idx].category = e.target.value; setLineItemsLocal(n); }}>
+                          <Select className="py-1 px-2 text-xs" value={item.category || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, category: e.target.value } : li))}>
                             <option value="">Select Category</option>
-                            <option>Meals</option>
-                            <option>Travel</option>
-                            <option>Supplies</option>
-                            <option>Lodging</option>
-                            <option>Transportation</option>
-                            <option>Utilities</option>
-                            <option>Entertainment</option>
+                            {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                           </Select>
                         </td>
                         <td className="px-3 py-3">
-                          <Input type="text" value={item.vendor || ''} onChange={e => { const n = [...lineItemsLocal]; n[idx].vendor = e.target.value; setLineItemsLocal(n); }} className="py-1 px-2 text-xs" placeholder="Vendor..." />
+                          <Input type="text" value={item.vendor || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, vendor: e.target.value } : li))} className="py-1 px-2 text-xs" placeholder="Vendor..." />
                         </td>
                         <td className="px-3 py-3">
-                          <Select className="py-1 px-2 text-xs" value={item.paymentMethod || 'Personal Card'} onChange={e => { const n = [...lineItemsLocal]; n[idx].paymentMethod = e.target.value; setLineItemsLocal(n); }}>
+                          <Select className="py-1 px-2 text-xs" value={item.paymentMethod || 'Personal Card'} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, paymentMethod: e.target.value } : li))}>
                             <option>Personal Card</option>
                             <option>Company Card</option>
                             <option>Cash</option>
@@ -448,13 +538,19 @@ export function SubmitClaim() {
                           </Select>
                         </td>
                         <td className="px-3 py-3">
-                          <Input type="text" value={item.businessPurpose || ''} onChange={e => { const n = [...lineItemsLocal]; n[idx].businessPurpose = e.target.value; setLineItemsLocal(n); }} className="py-1 px-2 text-xs" placeholder="Purpose..." />
+                          <Input type="text" value={item.businessPurpose || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, businessPurpose: e.target.value } : li))} className="py-1 px-2 text-xs" placeholder="Purpose..." />
                         </td>
                         <td className="px-3 py-3">
                           <div className="relative">
                             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-outline-variant text-xs">₱</span>
-                            <Input type="number" value={item.amount || ''} onChange={e => { const n = [...lineItemsLocal]; n[idx].amount = Number(e.target.value); setLineItemsLocal(n); }} className="pl-5 py-1 px-2 text-right font-mono-data text-xs" />
+                            <Input type="number" value={item.amount || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, amount: Number(e.target.value) } : li))} className={cn("pl-5 py-1 px-2 text-right font-mono-data text-xs", overLimit(item) && "border-error text-error")} />
                           </div>
+                          {overLimit(item) && (
+                            <p className="text-error text-[11px] mt-1 whitespace-nowrap flex items-center gap-0.5">
+                              <span className="material-symbols-outlined text-[13px]">error</span>
+                              Max {formatMoney(limitFor(item.category))}
+                            </p>
+                          )}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2">

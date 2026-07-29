@@ -6,6 +6,7 @@ import { formatMoney } from '../../lib/money';
 import { ConfirmModal } from './ConfirmModal';
 import { useAppContext } from '../AppContext';
 import { useToast } from './ToastContext';
+import { generateClaimCode } from '../../lib/api';
 
 interface CustodianActionButtonsProps {
   claim: Claim;
@@ -17,11 +18,11 @@ interface CustodianActionButtonsProps {
 // line-item review) so the transition rules and required fields live in
 // exactly one place.
 export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionButtonsProps) {
-  const { lineItems, currentUser, updateClaimStatus, paymentMethods } = useAppContext();
+  const { lineItems, currentUser, updateClaimStatus, refresh, paymentMethods } = useAppContext();
   const { addToast } = useToast();
 
   const [activeModal, setActiveModal] = useState<'markReady' | 'release' | 'closeLiq' | null>(null);
-  const [releaseCode, setReleaseCode] = useState('');
+  const [generatingCode, setGeneratingCode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('');
   const [paymentRef, setPaymentRef] = useState('');
   const [refundMethod, setRefundMethod] = useState('');
@@ -30,7 +31,6 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAction = (action: 'markReady' | 'release' | 'closeLiq') => {
-    setReleaseCode('');
     setPaymentMethod('');
     setPaymentRef('');
     setRefundMethod('');
@@ -39,17 +39,37 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
     setActiveModal(action);
   };
 
+  /**
+   * Mint the claim code server-side and reveal it to the custodian. This is the
+   * one authoritative code — the same value the requestor must quote back on the
+   * Payouts page to complete the claim. The custodian conveys it to the
+   * requestor out of band (in person, chat, etc.); it is never shown on the
+   * requestor's own screen, which is the point of the two-party check.
+   */
+  const handleGenerateCode = async () => {
+    setGeneratingCode(true);
+    setError('');
+    try {
+      await generateClaimCode(claim.id);
+      await refresh();
+      addToast('Claim code generated — give it to the requestor.', 'success');
+    } catch (err: any) {
+      setError(err?.message || 'Could not generate the claim code.');
+      addToast(err?.message || 'Could not generate the claim code.', 'error');
+    } finally {
+      setGeneratingCode(false);
+    }
+  };
+
   const handleConfirm = async () => {
     if (!activeModal) return;
 
-    // The code is only something to verify once one has been issued. A claim
-    // that has never had one gets it minted server-side on mark-ready, so
-    // demanding it up front would make the step unreachable.
-    if (activeModal === 'markReady' && claim.releaseCode) {
-      if (releaseCode !== claim.releaseCode) {
-        setError('Invalid release code. Please verify the code provided by Finance Audit.');
-        return;
-      }
+    // A claim code must be generated (and handed to the requestor) before the
+    // claim can be released — it's the code the requestor quotes back to confirm
+    // receipt. Generating it is an explicit step in this same modal.
+    if (activeModal === 'markReady' && !claim.releaseCode) {
+      setError('Generate the claim code first, then give it to the requestor.');
+      return;
     }
     if (activeModal === 'markReady' && !paymentMethod) {
       setError('Select a payment method.');
@@ -71,7 +91,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
     switch (activeModal) {
       case 'markReady':
         newStatus = ClaimStatus.READY_FOR_CLAIM;
-        toastMsg = 'Claim marked ready for payout.';
+        toastMsg = `Marked ready. Claim code ${claim.releaseCode} — make sure the requestor has it.`;
         updates = { paymentMethod };
         break;
       case 'release':
@@ -125,7 +145,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
         onClose={() => setActiveModal(null)}
         onConfirm={handleConfirm}
         title="Review & Mark Ready"
-        confirmLabel={isSubmitting ? "Verifying..." : "Verify & Mark Ready"}
+        confirmLabel={isSubmitting ? "Marking ready..." : "Mark Ready for Claim"}
         disabled={isSubmitting}
       >
         {(() => {
@@ -133,8 +153,8 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
           return (
             <div className="space-y-4">
               <p className="text-body-sm text-on-surface-variant">
-                Review the submitted expenses and receipts, then verify the release code
-                generated when this claim entered processing.
+                Review the submitted expenses and receipts, generate the claim code and give
+                it to the requestor, then mark the claim ready for payout.
               </p>
               {items.length === 0 ? (
                 <p className="text-body-sm text-outline italic">No expense line items found for this claim.</p>
@@ -191,18 +211,35 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
                 </Select>
               </div>
               <div>
-                <label className="block text-label-md text-on-surface mb-1">Release Code</label>
-                <input
-                  type="text"
-                  className="w-full p-3 rounded-lg border border-outline-variant bg-surface text-on-surface font-mono-data uppercase focus:outline-primary"
-                  placeholder="e.g. RC-12345"
-                  value={releaseCode}
-                  onChange={(e) => {
-                    setReleaseCode(e.target.value.toUpperCase());
-                    setError('');
-                  }}
-                  disabled={isSubmitting}
-                />
+                <label className="block text-label-md text-on-surface mb-1">Claim Code</label>
+                {claim.releaseCode ? (
+                  <div className="rounded-lg border border-primary/40 bg-primary-container/20 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-mono-data text-xl tracking-widest font-bold text-on-surface">{claim.releaseCode}</span>
+                      <button
+                        type="button"
+                        onClick={handleGenerateCode}
+                        disabled={generatingCode || isSubmitting}
+                        className="text-body-sm text-primary hover:underline disabled:opacity-50"
+                      >
+                        {generatingCode ? 'Regenerating…' : 'Regenerate'}
+                      </button>
+                    </div>
+                    <p className="text-[12px] text-on-surface-variant mt-1">
+                      Give this code to the requestor — they enter it on Payouts to confirm receipt. It is not shown on their screen.
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleGenerateCode}
+                    disabled={generatingCode || isSubmitting}
+                    className="w-full p-3 rounded-lg border border-dashed border-outline-variant text-primary font-label-md hover:bg-primary/5 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">key</span>
+                    {generatingCode ? 'Generating…' : 'Generate Claim Code'}
+                  </button>
+                )}
                 {error && <p className="text-error text-body-sm mt-2 flex items-center"><span className="material-symbols-outlined text-[16px] mr-1">error</span>{error}</p>}
               </div>
             </div>

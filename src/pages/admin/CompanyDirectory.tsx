@@ -40,6 +40,18 @@ export function CompanyDirectory() {
     setShowModal(true);
   };
 
+  /** Demo/presenter aid — fill the create form with a plausible sample company
+   *  in one click. Hidden unless demo mode is on (`?demo=1`). */
+  const autofillDemo = () => {
+    const n = companies.length + 1;
+    setName(`Northwind Trading ${n}`);
+    setIndustry('Wholesale Distribution');
+    setContactPerson('Jane Dela Cruz');
+    setContactEmail(`contact${n}@northwind.example`);
+    setAddress('Bonifacio Global City, Taguig, Philippines');
+    setNotes('Added via demo autofill — key account, quarterly review cadence.');
+  };
+
   const handleSave = async () => {
     if (!name.trim()) {
       addToast('Company name is required.', 'error');
@@ -136,9 +148,16 @@ export function CompanyDirectory() {
             <div className="bg-surface-container-lowest rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
               <div className="flex justify-between items-center border-b border-outline-variant pb-3">
                 <h3 className="font-headline-sm text-on-surface">{editing ? 'Edit Company' : 'Add New Company'}</h3>
-                <button onClick={() => setShowModal(false)} className="text-outline hover:text-on-surface">
-                  <span className="material-symbols-outlined">close</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {!editing && (
+                    <Button size="sm" variant="outline" className="gap-1.5" onClick={autofillDemo}>
+                      <span className="material-symbols-outlined text-[16px]">bolt</span> Autofill
+                    </Button>
+                  )}
+                  <button onClick={() => setShowModal(false)} className="text-outline hover:text-on-surface">
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-4">
