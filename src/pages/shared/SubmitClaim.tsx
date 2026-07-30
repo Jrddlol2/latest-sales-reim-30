@@ -385,6 +385,10 @@ export function SubmitClaim() {
     c.status === ClaimStatus.RELEASED &&
     !liquidatedCaIds.has(c.id)
   );
+  // A liquidation must settle an actual released advance — with none available
+  // there's nothing to file, so we hide the expense form and the Next button
+  // rather than letting someone build a liquidation against no advance.
+  const liquidationBlocked = claimType === 'Liquidation' && myCashAdvances.length === 0;
 
   if (step === 0) {
     return (
@@ -442,7 +446,12 @@ export function SubmitClaim() {
         </div>
 
         {/* Stepper â€” only renders the steps this claim type actually visits */}
-        <div className="hidden md:flex relative items-center justify-between w-full max-w-4xl mx-auto pt-6">
+        <div className={cn(
+          "hidden md:flex relative items-center justify-between w-full mx-auto pt-6",
+          // A 2-step flow (Cash Advance / Liquidation) shouldn't stretch its two
+          // dots across the full 4xl width — cap it so they sit sensibly close.
+          stepFlow.length <= 2 ? "max-w-sm" : "max-w-4xl"
+        )}>
           <div className="absolute top-[44px] left-0 w-full h-[2px] bg-outline-variant -z-10"></div>
           <div
             className="absolute top-[44px] left-0 h-[2px] bg-primary -z-10 transition-all duration-500"
@@ -477,7 +486,7 @@ export function SubmitClaim() {
             <CardHeader>
               <h3 className="font-headline-md text-on-surface">{claimType} Details</h3>
               <div className="flex items-center gap-2">
-              {claimType !== 'Cash Advance' && (
+              {claimType !== 'Cash Advance' && !liquidationBlocked && (
                 <Button size="sm" className="gap-2" onClick={() => setLineItemsLocal(p => [...p, { expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }])}>
                   <span className="material-symbols-outlined text-[18px]">add</span> Add Row
                 </Button>
@@ -524,7 +533,7 @@ export function SubmitClaim() {
                 </div>
               )}
 
-              {claimType !== 'Cash Advance' && (
+              {claimType !== 'Cash Advance' && !liquidationBlocked && (
               <div className="mb-6">
                 <DynamicFieldRenderer
                   entity="claim"
@@ -534,7 +543,7 @@ export function SubmitClaim() {
                 />
               </div>
               )}
-              {claimType !== 'Cash Advance' && (
+              {claimType !== 'Cash Advance' && !liquidationBlocked && (
               <div className="overflow-x-auto">
                 <table className="w-full text-left min-w-[900px]">
                   <thead className="bg-brand-table-header text-on-surface-variant font-label-sm uppercase tracking-wider">
@@ -616,6 +625,7 @@ export function SubmitClaim() {
                 </table>
               </div>
               )}
+              {!liquidationBlocked && (
               <div className="mt-6 flex justify-end gap-8 bg-surface-container-low p-6 rounded-lg">
                 {claimType !== 'Cash Advance' && (
                   <div className="text-right">
@@ -634,6 +644,7 @@ export function SubmitClaim() {
                   <p className="text-[28px] font-bold leading-none mt-1">{formatMoney(claimType === 'Liquidation' ? Math.abs(varianceAmount) : totalAmount)}</p>
                 </div>
               </div>
+              )}
 
               {/* Refund due: the requestor spent less than the advance and owes
                   the balance back. Let them declare how they'll return it — the
@@ -810,8 +821,8 @@ export function SubmitClaim() {
           <span className="material-symbols-outlined">arrow_back</span> Back
         </Button>
         <div className="flex gap-4">
-          {step > 0 && <Button variant="ghost" onClick={handleSaveDraft} className="hidden md:inline-flex">Save Draft</Button>}
-          {step > 0 && step < 4 ? (
+          {step > 0 && !liquidationBlocked && <Button variant="ghost" onClick={handleSaveDraft} className="hidden md:inline-flex">Save Draft</Button>}
+          {step > 0 && step < 4 && !liquidationBlocked ? (
             <Button className="gap-2 px-8" onClick={handleNext}>Next Step <span className="material-symbols-outlined hidden sm:inline-block">arrow_forward</span></Button>
           ) : step === 4 ? (
             <Button className="gap-2 px-8" onClick={handleSubmit} disabled={loading}>

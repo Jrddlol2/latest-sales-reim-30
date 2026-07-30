@@ -10,9 +10,16 @@ const LIQUIDATION_DEADLINE_DAYS = 7; // mirrors server.ts's LIQUIDATION_DEADLINE
 export function LiquidationProgressCard({ claims }: { claims: Claim[] }) {
   const navigate = useNavigate();
 
-  const openAdvances = useMemo(
-    () => claims.filter(c => c.type === 'Cash Advance' && c.status === ClaimStatus.RELEASED),
+  // An advance is only liquidatable if it's Released AND doesn't already have a
+  // liquidation started against it — otherwise the "Start a Liquidation" CTA
+  // leads straight to a dead end (the submit picker excludes those too).
+  const liquidatedCaIds = useMemo(
+    () => new Set(claims.filter(c => c.type === 'Liquidation' && c.cashAdvanceId).map(c => c.cashAdvanceId)),
     [claims]
+  );
+  const openAdvances = useMemo(
+    () => claims.filter(c => c.type === 'Cash Advance' && c.status === ClaimStatus.RELEASED && !liquidatedCaIds.has(c.id)),
+    [claims, liquidatedCaIds]
   );
   const overdueAdvances = useMemo(
     () => openAdvances.filter(c => {
