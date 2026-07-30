@@ -47,7 +47,15 @@ export function ConfirmModal({
 
   return (
     <Portal>
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+    {/* Stop clicks from bubbling. This modal is rendered through a Portal, and
+        React re-dispatches events up the COMPONENT tree, not the DOM tree — so
+        without this, clicking a plain control inside the modal (a <select>, an
+        input) would bubble to whatever clickable ancestor rendered the modal
+        (e.g. a table row with a row-click navigation) and fire it. */}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+      onClick={e => e.stopPropagation()}
+    >
       <div className="w-full max-w-md animate-in slide-in-from-bottom-4 duration-300">
         <Card className="shadow-lg">
           <div className="p-6">

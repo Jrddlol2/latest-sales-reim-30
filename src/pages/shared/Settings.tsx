@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input, Select, Label } from '../../components/ui/Input';
+import { Pagination } from '../../components/ui/Pagination';
 import { ConfirmModal } from '../../components/shared/ConfirmModal';
 import { useAppContext, DemoSeedOptions, FULL_DEMO_SEED_OPTIONS } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
@@ -29,6 +30,8 @@ function Toggle({ checked, onChange }: { checked: boolean, onChange: (c: boolean
   );
 }
 
+const DELEGATION_PAGE_SIZE = 5;
+
 function DelegationPanel() {
   const { currentUser, users, delegations, refresh } = useAppContext();
   const { addToast } = useToast();
@@ -36,6 +39,8 @@ function DelegationPanel() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [busy, setBusy] = useState(false);
+  const [requestedPage, setRequestedPage] = useState(1);
+  const [coveredPage, setCoveredPage] = useState(1);
 
   const nameOf = (id: string) => users.find(u => u.id === id)?.name || id;
 
@@ -44,6 +49,14 @@ function DelegationPanel() {
   // Someone asked me to cover for them.
   const asDelegate = delegations.filter(d => d.delegate_id === currentUser.id);
   const pendingOnMe = asDelegate.filter(d => d.status === DelegationStatus.PENDING);
+
+  const requestedTotalPages = Math.max(1, Math.ceil(asApprover.length / DELEGATION_PAGE_SIZE));
+  const pagedRequested = asApprover.slice((requestedPage - 1) * DELEGATION_PAGE_SIZE, requestedPage * DELEGATION_PAGE_SIZE);
+  const coveredTotalPages = Math.max(1, Math.ceil(asDelegate.length / DELEGATION_PAGE_SIZE));
+  const pagedCovered = asDelegate.slice((coveredPage - 1) * DELEGATION_PAGE_SIZE, coveredPage * DELEGATION_PAGE_SIZE);
+
+  useEffect(() => { setRequestedPage(1); }, [asApprover.length]);
+  useEffect(() => { setCoveredPage(1); }, [asDelegate.length]);
 
   const otherApprovers = users.filter(u => u.role === UserRole.APPROVER && u.id !== currentUser.id);
 
@@ -147,8 +160,9 @@ function DelegationPanel() {
         {asApprover.length === 0 ? (
           <p className="text-sm text-outline">None yet.</p>
         ) : (
+          <>
           <div className="space-y-2">
-            {asApprover.map(d => (
+            {pagedRequested.map(d => (
               <div key={d.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg text-sm">
                 <div>
                   <span className={`px-2 py-0.5 rounded-full text-xs font-bold mr-2 ${STATUS_STYLE[d.status]}`}>{d.status}</span>
@@ -161,6 +175,10 @@ function DelegationPanel() {
               </div>
             ))}
           </div>
+          {requestedTotalPages > 1 && (
+            <Pagination currentPage={requestedPage} totalPages={requestedTotalPages} onPageChange={setRequestedPage} className="!px-0 !bg-transparent !border-t-0 mt-1" />
+          )}
+          </>
         )}
       </div>
 
@@ -168,13 +186,16 @@ function DelegationPanel() {
         <div>
           <h4 className="font-headline-sm text-on-surface mb-3">Delegations you've covered</h4>
           <div className="space-y-2">
-            {asDelegate.map(d => (
+            {pagedCovered.map(d => (
               <div key={d.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg text-sm">
                 <span className={`px-2 py-0.5 rounded-full text-xs font-bold mr-2 ${STATUS_STYLE[d.status]}`}>{d.status}</span>
                 <span className="text-on-surface flex-1 ml-2">For {nameOf(d.approver_id)}, {d.start_date} → {d.end_date}</span>
               </div>
             ))}
           </div>
+          {coveredTotalPages > 1 && (
+            <Pagination currentPage={coveredPage} totalPages={coveredTotalPages} onPageChange={setCoveredPage} className="!px-0 !bg-transparent !border-t-0 mt-1" />
+          )}
         </div>
       )}
     </div>

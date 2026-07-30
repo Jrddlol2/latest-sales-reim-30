@@ -368,7 +368,19 @@ export function SubmitClaim() {
   const handleSubmit = () => send(false);
 
   const approver = users.find(u => u.id === currentUser.reportsTo);
-  const myCashAdvances = claims.filter(c => c.requestorId === currentUser.id && c.type === 'Cash Advance' && c.status === ClaimStatus.RELEASED);
+  // A Released advance stays Released until its liquidation is fully closed, so
+  // "Released" alone isn't enough — one that already has a liquidation (draft or
+  // in-flight) can't be liquidated again, and offering it here only leads to a
+  // dead-end "A Liquidation already exists" error at submit. Exclude those.
+  const liquidatedCaIds = new Set(
+    claims.filter(c => c.type === 'Liquidation' && c.cashAdvanceId).map(c => c.cashAdvanceId)
+  );
+  const myCashAdvances = claims.filter(c =>
+    c.requestorId === currentUser.id &&
+    c.type === 'Cash Advance' &&
+    c.status === ClaimStatus.RELEASED &&
+    !liquidatedCaIds.has(c.id)
+  );
 
   if (step === 0) {
     return (
@@ -470,13 +482,24 @@ export function SubmitClaim() {
             </CardHeader>
             <CardContent>
               {claimType === 'Liquidation' && (
-                <div className="mb-6 max-w-md">
-                  <Label required>Select Cash Advance to Liquidate</Label>
-                  <Select value={cashAdvanceId} onChange={e => setCashAdvanceId(e.target.value)}>
-                    <option value="">-- Select --</option>
-                    {myCashAdvances.map(ca => <option key={ca.id} value={ca.id}>{ca.ref} - {formatMoney(ca.total)} ({ca.purpose})</option>)}
-                  </Select>
-                </div>
+                myCashAdvances.length === 0 ? (
+                  <div className="mb-6 p-6 rounded-lg border border-outline-variant bg-surface-container-low text-center">
+                    <span className="material-symbols-outlined text-[36px] text-outline mb-2">check_circle</span>
+                    <p className="font-label-md text-on-surface mb-1">No cash advances to liquidate</p>
+                    <p className="text-body-sm text-outline">
+                      You have no released cash advances awaiting liquidation. Any advance you've already
+                      started liquidating won't appear here.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mb-6 max-w-md">
+                    <Label required>Select Cash Advance to Liquidate</Label>
+                    <Select value={cashAdvanceId} onChange={e => setCashAdvanceId(e.target.value)}>
+                      <option value="">-- Select --</option>
+                      {myCashAdvances.map(ca => <option key={ca.id} value={ca.id}>{ca.ref} - {formatMoney(ca.total)} ({ca.purpose})</option>)}
+                    </Select>
+                  </div>
+                )
               )}
 
               {/* A Cash Advance has no expense lines of its own — it's an
