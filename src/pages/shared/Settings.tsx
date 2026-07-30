@@ -3,7 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input, Select, Label } from '../../components/ui/Input';
-import { useAppContext } from '../../components/AppContext';
+import { ConfirmModal } from '../../components/shared/ConfirmModal';
+import { useAppContext, DemoSeedOptions, FULL_DEMO_SEED_OPTIONS } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { requestDelegation, acceptDelegation, declineDelegation, cancelDelegation, updateNotificationPrefs, ApiError } from '../../lib/api';
 import { UserRole, DelegationStatus } from '../../types';
@@ -180,6 +181,138 @@ function DelegationPanel() {
   );
 }
 
+/**
+ * Admin-only customizable demo-data generator. Each category maps to one of the
+ * server seed's toggles; the admin picks which to generate, then regenerates.
+ * A separate danger action clears everything to an empty slate.
+ */
+const DEMO_CATEGORIES: { key: keyof DemoSeedOptions; label: string; description: string }[] = [
+  { key: 'demoClaims', label: 'Reimbursement claims', description: 'Claims across every status (Draft → Completed), each with a MOM and line items.' },
+  { key: 'demoCashAdvances', label: 'Cash advances & liquidations', description: 'Advances in each stage (submitted, approved, released) plus their liquidations.' },
+  { key: 'delegations', label: 'Approver delegations', description: 'Sample active and expired delegations to demo the coverage/delegation flow.' },
+  { key: 'historicalBackfill', label: '12 months of history', description: 'A year of completed/rejected records across departments — powers analytics & reporting. Large.' },
+  { key: 'reviewMeetings', label: 'Review meetings', description: 'Meetings attached to pending claims — populates the Calendar.' },
+  { key: 'supportRequests', label: 'Support tickets', description: 'Helpdesk tickets in open / in-progress / resolved states.' },
+];
+
+function DemoDataPanel() {
+  const { generateData, clearData } = useAppContext();
+  const { addToast } = useToast();
+  const [options, setOptions] = useState<DemoSeedOptions>({ ...FULL_DEMO_SEED_OPTIONS });
+  const [confirmAction, setConfirmAction] = useState<'generate' | 'clear' | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const toggle = (key: keyof DemoSeedOptions) =>
+    setOptions(prev => ({ ...prev, [key]: !prev[key] }));
+
+  const anySelected = Object.values(options).some(Boolean);
+
+  const run = async () => {
+    if (!confirmAction) return;
+    setBusy(true);
+    try {
+      if (confirmAction === 'generate') {
+        await generateData(options);
+        addToast('Demo data regenerated with your selected categories.', 'success');
+      } else {
+        await clearData();
+        addToast('All transactional data cleared — start a flow from a clean slate.', 'success');
+      }
+      setConfirmAction(null);
+    } catch (err) {
+      addToast((err as ApiError).message || 'Could not update demo data.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h4 className="font-headline-sm text-on-surface mb-1">Generate demo data</h4>
+        <p className="text-body-sm text-outline mb-4">
+          Pick which categories to seed, then regenerate. This wipes the current data first, so the
+          app lands on exactly what you select. Users and master data are always kept.
+        </p>
+        <div className="space-y-2">
+          {DEMO_CATEGORIES.map(cat => (
+            <div
+              key={cat.key}
+              className="flex items-start justify-between gap-4 p-3 rounded-lg border border-outline-variant bg-surface-container-lowest"
+            >
+              <div className="min-w-0">
+                <p className="font-label-md text-on-surface">{cat.label}</p>
+                <p className="text-body-sm text-outline mt-0.5">{cat.description}</p>
+              </div>
+              <div className="pt-0.5 flex-shrink-0">
+                <Toggle checked={options[cat.key]} onChange={() => toggle(cat.key)} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 mt-4">
+          <Button className="gap-2" onClick={() => setConfirmAction('generate')} disabled={!anySelected || busy}>
+            <span className="material-symbols-outlined text-[18px]">restart_alt</span>
+            Generate data
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setOptions({ ...FULL_DEMO_SEED_OPTIONS })} disabled={busy}>
+            Select all
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setOptions({ demoClaims: false, demoCashAdvances: false, delegations: false, historicalBackfill: false, reviewMeetings: false, supportRequests: false })}
+            disabled={busy}
+          >
+            Clear selection
+          </Button>
+          {!anySelected && <span className="text-body-sm text-outline">Select at least one category.</span>}
+        </div>
+      </div>
+
+      <div className="border-t border-outline-variant pt-6">
+        <h4 className="font-headline-sm text-error mb-1">Danger zone</h4>
+        <p className="text-body-sm text-outline mb-4">
+          Empty every claim, MOM, cash advance, liquidation, history entry, email and support ticket
+          without reseeding — ideal for presenting a workflow from the very first step.
+        </p>
+        <Button
+          variant="outline"
+          className="gap-2 text-error border-error/40 hover:bg-error/5"
+          onClick={() => setConfirmAction('clear')}
+          disabled={busy}
+        >
+          <span className="material-symbols-outlined text-[18px]">mop</span>
+          Clear all data
+        </Button>
+      </div>
+
+      <ConfirmModal
+        isOpen={confirmAction !== null}
+        onClose={() => { if (!busy) setConfirmAction(null); }}
+        onConfirm={run}
+        title={confirmAction === 'clear' ? 'Clear all data?' : 'Regenerate demo data?'}
+        confirmLabel={busy ? 'Working…' : confirmAction === 'clear' ? 'Clear everything' : 'Generate'}
+        variant={confirmAction === 'clear' ? 'error' : 'warning'}
+        disabled={busy}
+      >
+        {confirmAction === 'clear' ? (
+          <p>
+            This permanently removes <strong>every</strong> claim, MOM, cash advance, liquidation,
+            status-history entry, email and support ticket. Users and master data are kept, and the
+            app lands on an empty slate.
+          </p>
+        ) : (
+          <p>
+            This discards the current state and reseeds the categories you selected. Anything not
+            ticked will be absent afterward.
+          </p>
+        )}
+      </ConfirmModal>
+    </div>
+  );
+}
+
 const DEFAULT_NOTIFY_PREFS: Record<string, { inApp: boolean, email: boolean }> = {
   submitted: { inApp: true, email: true },
   approved: { inApp: true, email: true },
@@ -190,7 +323,7 @@ const DEFAULT_NOTIFY_PREFS: Record<string, { inApp: boolean, email: boolean }> =
 
 export function Settings() {
   const { addToast } = useToast();
-  const { currentUser, refresh, resetData } = useAppContext();
+  const { currentUser, refresh } = useAppContext();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'profile');
   const [savingPrefs, setSavingPrefs] = useState(false);
@@ -223,6 +356,8 @@ export function Settings() {
     { id: 'profile', label: 'Profile' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'delegation', label: 'Delegation' },
+    // The demo-data generator lives in its own admin-only category.
+    ...(currentUser.role === UserRole.ADMIN ? [{ id: 'demo-data', label: 'Demo Data' }] : []),
     { id: 'security', label: 'Security' },
   ];
 
@@ -287,13 +422,14 @@ export function Settings() {
                     </div>
                   </div>
                   <div className="pt-4 flex justify-end gap-3">
-                    <Button variant="outline" className="text-error border-error hover:bg-error/10" onClick={() => resetData()}>Generate New Mock Data</Button>
                     <Button onClick={() => addToast('Changes saved successfully', 'success')}>Save Changes</Button>
                   </div>
                 </>
               )}
 
               {activeTab === 'delegation' && <DelegationPanel />}
+
+              {activeTab === 'demo-data' && currentUser.role === UserRole.ADMIN && <DemoDataPanel />}
 
               {activeTab === 'notifications' && (
                 <div className="space-y-6">

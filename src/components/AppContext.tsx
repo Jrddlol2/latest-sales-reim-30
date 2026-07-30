@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { User, Claim, StatusHistory, ClaimStatus, ExpenseLineItem, MOM, FieldDefinition, MasterData, ReviewMeeting, SupportRequest, ImportBatch, ApproverDelegation, Company, SystemEmail } from '../types';
-import { mockImportBatches } from '../data';
 import {
   loadWorkspace, setCurrentUserId, decideOnClaim,
   markReadyForClaim, confirmReceipt, releaseCashAdvance, markEmailsRead,
@@ -34,8 +33,40 @@ interface AppContextType {
   highValueThreshold: number;
   /** Company spending policy: max amount per line item, keyed by expense category. */
   categoryLimits: Record<string, number>;
-  resetData: () => void;
+  /** Reset to a fresh, fully-populated year of demo data. */
+  resetData: () => Promise<void>;
+  /** Regenerate demo data using only the selected categories (customizable generator). */
+  generateData: (options: DemoSeedOptions) => Promise<void>;
+  /** Empty every transactional table WITHOUT reseeding — for a clean demo from scratch. */
+  clearData: () => void;
 }
+
+/**
+ * The six independently-toggleable categories the server's seed generator
+ * understands (see /api/admin/seed-year). Drives the customizable generator in
+ * Settings → Demo Data.
+ */
+export interface DemoSeedOptions {
+  demoClaims: boolean;
+  demoCashAdvances: boolean;
+  delegations: boolean;
+  historicalBackfill: boolean;
+  reviewMeetings: boolean;
+  supportRequests: boolean;
+}
+
+export const FULL_DEMO_SEED_OPTIONS: DemoSeedOptions = {
+  demoClaims: true,
+  demoCashAdvances: true,
+  delegations: true,
+  historicalBackfill: true,
+  reviewMeetings: true,
+  supportRequests: true,
+};
+
+/** How often idle tabs re-pull the workspace so cross-tab changes (e.g. an
+ *  approval firing a notification) surface without a manual reload. */
+const POLL_INTERVAL_MS = 15000;
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -61,8 +92,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Import batches have no read endpoint wired yet — still generated.
-  const [importBatches, setImportBatches] = useState<ImportBatch[]>(mockImportBatches);
+  // Import batches have no read endpoint wired yet, so this stays empty until
+  // one exists. (Previously sourced from a stale frontend mock generator that
+  // modelled the domain inaccurately; that generator has been removed.)
+  const [importBatches] = useState<ImportBatch[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -93,6 +126,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  /**
+   * Live-ish updates across tabs. The backend is shared in-memory but pushes
+   * nothing, so a tab left idle (e.g. the Requestor tab while the Approver tab
+   * approves a claim) wouldn't see the new notification/status on its own.
+   * A light interval poll — paused while the tab is hidden to avoid needless
+   * load — plus an immediate refresh whenever the tab regains focus keeps the
+   * notification bell and queues current without a manual reload. refresh()
+   * never toggles the loading gate, so this never flashes a spinner.
+   */
+  useEffect(() => {
+    const tick = () => { if (document.visibilityState === 'visible') refresh(); };
+    const interval = window.setInterval(tick, POLL_INTERVAL_MS);
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [refresh]);
+
   /** Role switch: change the mock identity, then reload everything as them. */
   const setCurrentUser = useCallback((user: User) => {
     setCurrentUserId(user.id);
@@ -100,15 +155,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refresh();
   }, [refresh]);
 
-  const resetData = useCallback(async () => {
+  /**
+   * Customizable generator: wipe everything, then reseed ONLY the selected
+   * categories. `resetData` below is just this called with every category on.
+   */
+  const generateData = useCallback(async (options: DemoSeedOptions) => {
     const headers = { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id || '' };
-    // Reset alone empties every transactional table — immediately reseed a full
-    // year so the demo lands on populated data, not a blank app.
+    // Reset alone empties every transactional table — immediately reseed with
+    // the chosen options so the app lands on the exact dataset requested.
     await fetch('/api/admin/reset', { method: 'POST', headers });
     await fetch('/api/admin/seed-year', {
       method: 'POST', headers,
-      body: JSON.stringify({ options: { demoClaims: true, demoCashAdvances: true, delegations: true, historicalBackfill: true } }),
+      body: JSON.stringify({ options }),
     });
+    setLoading(true);
+    await refresh();
+  }, [refresh, currentUser]);
+
+  const resetData = useCallback(() => generateData(FULL_DEMO_SEED_OPTIONS), [generateData]);
+
+  /**
+   * Empty every transactional table (claims, MOMs, advances, liquidations,
+   * history, emails, delegations, support) but keep the org chart and master
+   * data. Unlike resetData this does NOT reseed — it leaves a clean slate so a
+   * presenter can build a flow from scratch with no seeded records as noise.
+   */
+  const clearData = useCallback(async () => {
+    const headers = { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id || '' };
+    await fetch('/api/admin/reset', { method: 'POST', headers });
     setLoading(true);
     refresh();
   }, [refresh, currentUser]);
@@ -228,7 +302,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       paymentMethods,
       highValueThreshold,
       categoryLimits,
-      resetData
+      resetData,
+      generateData,
+      clearData
     }}>
       {children}
     </AppContext.Provider>

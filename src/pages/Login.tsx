@@ -54,6 +54,34 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
         {error && <p className="text-center text-error">{error}</p>}
 
         {!loading && !error && (
+          <>
+          {/* Presenter helper: each tab keeps its own signed-in role, so these
+              open a fresh tab already signed in as the canonical account for
+              that role. Follow one claim across all four without account
+              switching. */}
+          <div className="mb-6 p-4 rounded-lg border border-outline-variant bg-surface-container-low">
+            <p className="text-label-sm text-outline uppercase tracking-wider font-medium mb-2">Presenter mode — open a role in its own tab</p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { role: 'requestor', label: 'Requestor', icon: 'person' },
+                { role: 'approver', label: 'Approver', icon: 'how_to_reg' },
+                { role: 'custodian', label: 'Custodian', icon: 'payments' },
+                { role: 'admin', label: 'Admin', icon: 'admin_panel_settings' },
+              ].map(r => (
+                <a
+                  key={r.role}
+                  href={`/?role=${r.role}`}
+                  target="_blank"
+                  rel="noopener"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary/10 text-primary text-body-sm font-medium hover:bg-primary/20 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[18px]">{r.icon}</span>
+                  {r.label}
+                </a>
+              ))}
+            </div>
+          </div>
+
           <div className="space-y-6">
             {Object.entries(grouped).map(([role, roleUsers]) => (
               <div key={role}>
@@ -82,6 +110,7 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
               </div>
             ))}
           </div>
+          </>
         )}
       </div>
     </div>

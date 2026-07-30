@@ -24,22 +24,66 @@ import {
 /** The mock-auth identity every API route reads. Set by AppContext on role switch. */
 export const CURRENT_USER_KEY = 'mockUserId';
 
-export const getCurrentUserId = () => localStorage.getItem(CURRENT_USER_KEY) || 'u15';
-export const setCurrentUserId = (id: string) => localStorage.setItem(CURRENT_USER_KEY, id);
+/**
+ * Identity lives in sessionStorage, not localStorage, so each browser TAB
+ * holds its own signed-in role. That's what lets a presenter open one tab per
+ * role (Requestor, Approver, Custodian, Admin) against the same shared backend
+ * and watch a claim flow between them — signing in as someone in one tab no
+ * longer clobbers the others. sessionStorage survives an in-tab reload but is
+ * scoped to the tab, which is exactly the demo behaviour we want.
+ */
+export const getCurrentUserId = () => sessionStorage.getItem(CURRENT_USER_KEY) || 'u15';
+export const setCurrentUserId = (id: string) => sessionStorage.setItem(CURRENT_USER_KEY, id);
 
 /**
  * Distinct from CURRENT_USER_KEY (which always has a default so the API
- * layer never has no identity to send). This one tracks whether *this
- * browser* went through the explicit Login screen — see App.tsx's
- * production-mode gate. Dev builds skip this entirely and go straight in.
+ * layer never has no identity to send). This one tracks whether *this tab*
+ * went through the explicit Login screen — see App.tsx's login gate.
  */
 const SESSION_KEY = 'hasLoggedIn';
-export const isLoggedIn = () => localStorage.getItem(SESSION_KEY) === 'true';
+export const isLoggedIn = () => sessionStorage.getItem(SESSION_KEY) === 'true';
 export const login = (userId: string) => {
   setCurrentUserId(userId);
-  localStorage.setItem(SESSION_KEY, 'true');
+  sessionStorage.setItem(SESSION_KEY, 'true');
 };
-export const logout = () => localStorage.removeItem(SESSION_KEY);
+export const logout = () => {
+  sessionStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(CURRENT_USER_KEY);
+};
+
+/**
+ * Canonical demo account for each role, so a presenter can deep-link straight
+ * into a role's tab (e.g. `/?role=approver`) without clicking through the
+ * account picker. These ids match buildDefaultUsers() in server.ts.
+ */
+const ROLE_DEEP_LINK: Record<string, string> = {
+  requestor: 'u1', // Alice Reyes
+  approver: 'u2',  // Bob Santos (Alice's manager)
+  custodian: 'u3', // Carol Ramos
+  admin: 'u4',     // Dave Lopez
+};
+
+/**
+ * Honour a `?role=` or `?uid=` query param by signing this tab in as that
+ * account, then strip the param from the URL so a reload doesn't force the
+ * identity back. Returns true if it logged the tab in. Called once at startup
+ * before the login gate is evaluated.
+ */
+export const applyDeepLinkLogin = (): boolean => {
+  const params = new URLSearchParams(window.location.search);
+  const roleParam = params.get('role')?.toLowerCase();
+  const uidParam = params.get('uid');
+  const targetId = uidParam || (roleParam ? ROLE_DEEP_LINK[roleParam] : undefined);
+  if (!targetId) return false;
+
+  login(targetId);
+  params.delete('role');
+  params.delete('uid');
+  const cleaned = params.toString();
+  const url = window.location.pathname + (cleaned ? `?${cleaned}` : '') + window.location.hash;
+  window.history.replaceState({}, '', url);
+  return true;
+};
 
 export interface ApiError extends Error {
   status?: number;

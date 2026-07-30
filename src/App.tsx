@@ -10,7 +10,7 @@ import { ToastProvider } from './components/shared/ToastContext';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { Layout } from './components/layout/Layout';
 import { Login } from './pages/Login';
-import { isLoggedIn } from './lib/api';
+import { isLoggedIn, applyDeepLinkLogin } from './lib/api';
 import { UserRole } from './types';
 import { CardSkeleton } from './components/shared/states/Skeleton';
 
@@ -121,10 +121,12 @@ function RoleBasedRouter() {
 }
 
 export default function App() {
-  // The account-picker Login screen is now the entry point in every build,
-  // dev included — matching the deployed instance. Sign-out (Topbar) is the
-  // only way back to it; there's no dev-only bypass or role-switcher anymore.
-  const [loggedIn, setLoggedIn] = useState(() => isLoggedIn());
+  // The account-picker Login screen is the entry point in every build, dev
+  // included. Identity is per-tab (sessionStorage), so each tab can be signed
+  // in as a different role against the same backend. A `?role=`/`?uid=` deep
+  // link signs this tab straight in — see applyDeepLinkLogin — which is what
+  // lets a presenter open one tab per role in a single click each.
+  const [loggedIn, setLoggedIn] = useState(() => applyDeepLinkLogin() || isLoggedIn());
 
   if (!loggedIn) {
     return <Login onLoggedIn={() => setLoggedIn(true)} />;

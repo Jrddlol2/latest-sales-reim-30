@@ -138,10 +138,16 @@ export function AdminDashboard() {
           <h1 className="font-display text-display text-on-surface">System Administration</h1>
           <p className="text-body-md text-outline mt-1">Global platform metrics, settings, and health.</p>
         </div>
-        <Button variant="outline" className="gap-2" onClick={() => navigate('/settings')}>
-          <span className="material-symbols-outlined text-[18px]">settings</span>
-          System Settings
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" className="gap-2" onClick={() => navigate('/settings?tab=demo-data')}>
+            <span className="material-symbols-outlined text-[18px]">tune</span>
+            Demo Data
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => navigate('/settings')}>
+            <span className="material-symbols-outlined text-[18px]">settings</span>
+            System Settings
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
