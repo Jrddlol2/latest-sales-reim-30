@@ -21,6 +21,7 @@ interface ReceiptRecord {
   claimRef?: string;
   claimId?: string;
   requestorId?: string;
+  requestorName?: string;
 }
 
 export function Receipts() {
@@ -30,6 +31,8 @@ export function Receipts() {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptRecord | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [teamMemberFilter, setTeamMemberFilter] = useState('');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const itemsPerPage = 12;
 
   // Approvers manage their own submissions plus whatever's routed through
@@ -54,12 +57,16 @@ export function Receipts() {
         claimRef: parentClaim?.ref,
         claimId: item.claimId,
         requestorId: parentClaim?.requestorId,
+        requestorName: users.find(u => u.id === parentClaim?.requestorId)?.name,
       };
     });
 
-  const scopedReceipts = !isApprover ? derivedReceipts : derivedReceipts.filter(r =>
+  const baseScopedReceipts = !isApprover ? derivedReceipts : derivedReceipts.filter(r =>
     scope === 'mine' ? r.requestorId === currentUser.id : r.requestorId && reporteeIds.has(r.requestorId)
   );
+  const scopedReceipts = baseScopedReceipts.filter(r => scope !== 'team' || !teamMemberFilter || r.requestorId === teamMemberFilter);
+  const teamMembers = users.filter(u => reporteeIds.has(u.id));
+  const teamTotal = scopedReceipts.reduce((sum, receipt) => sum + receipt.amount, 0);
 
   const filteredReceipts = scopedReceipts.filter(r => {
     const matchesSearch =
@@ -75,7 +82,7 @@ export function Receipts() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedCategory, scope]);
+  }, [searchTerm, selectedCategory, scope, teamMemberFilter, viewMode]);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -103,6 +110,14 @@ export function Receipts() {
         </div>
       )}
 
+      {isApprover && scope === 'team' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card className="p-5"><p className="text-label-sm uppercase text-outline">Team Receipts</p><p className="font-headline-lg mt-2">{scopedReceipts.length}</p></Card>
+          <Card className="p-5"><p className="text-label-sm uppercase text-outline">Documented Spend</p><p className="font-headline-lg mt-2">{formatMoney(teamTotal)}</p></Card>
+          <Card className="p-5"><p className="text-label-sm uppercase text-outline">Team Members</p><p className="font-headline-lg mt-2">{new Set(scopedReceipts.map(r => r.requestorId)).size}</p></Card>
+        </div>
+      )}
+
       {/* Filter Bar */}
       <div className="flex flex-col sm:flex-row gap-4 bg-surface-container-low p-4 rounded-xl border border-outline-variant">
         <div className="flex-1">
@@ -124,6 +139,18 @@ export function Receipts() {
             <option value="Utilities">Utilities</option>
           </Select>
         </div>
+        {isApprover && scope === 'team' && (
+          <div className="w-full sm:w-52">
+            <Select value={teamMemberFilter} onChange={e => setTeamMemberFilter(e.target.value)}>
+              <option value="">All team members</option>
+              {teamMembers.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
+            </Select>
+          </div>
+        )}
+        <div className="flex rounded-lg border border-outline-variant overflow-hidden">
+          <button className={`px-3 py-2 ${viewMode === 'grid' ? 'bg-primary text-white' : 'bg-white text-outline'}`} onClick={() => setViewMode('grid')} title="Grid view"><span className="material-symbols-outlined text-[18px]">grid_view</span></button>
+          <button className={`px-3 py-2 ${viewMode === 'list' ? 'bg-primary text-white' : 'bg-white text-outline'}`} onClick={() => setViewMode('list')} title="List view"><span className="material-symbols-outlined text-[18px]">view_list</span></button>
+        </div>
       </div>
 
       {/* Receipts Grid */}
@@ -138,6 +165,7 @@ export function Receipts() {
         <div className="p-6 pb-2 flex justify-end">
           <span className="font-label-sm text-outline whitespace-nowrap">{filteredReceipts.length} of {scopedReceipts.length}</span>
         </div>
+        {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 p-6 pt-4">
           {paginatedReceipts.map(receipt => (
             <Card 
@@ -171,6 +199,27 @@ export function Receipts() {
             </Card>
           ))}
         </div>
+        ) : (
+          <div className="overflow-x-auto p-6 pt-4">
+            <table className="w-full text-left">
+              <thead className="bg-surface-container-low text-label-sm uppercase text-outline">
+                <tr><th className="px-4 py-3">Receipt / OR</th><th className="px-4 py-3">Team Member</th><th className="px-4 py-3">Vendor</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Date of Purchase</th><th className="px-4 py-3 text-right">Amount</th></tr>
+              </thead>
+              <tbody className="divide-y divide-outline-variant">
+                {paginatedReceipts.map(receipt => (
+                  <tr key={receipt.id} className="hover:bg-primary/5 cursor-pointer" onClick={() => setSelectedReceipt(receipt)}>
+                    <td className="px-4 py-3 font-mono-data text-primary">{receipt.fileName}</td>
+                    <td className="px-4 py-3">{receipt.requestorName || '—'}</td>
+                    <td className="px-4 py-3">{receipt.vendor}</td>
+                    <td className="px-4 py-3">{receipt.category}</td>
+                    <td className="px-4 py-3">{receipt.date}</td>
+                    <td className="px-4 py-3 text-right font-mono-data font-bold">{formatMoney(receipt.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}

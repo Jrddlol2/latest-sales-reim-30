@@ -4,6 +4,7 @@ import { Claim, ClaimStatus, ClaimType, User } from '../../types';
 
 const STAGE_FLOWS: Record<ClaimType, ClaimStatus[]> = {
   'Reimbursement': [ClaimStatus.PENDING_APPROVAL, ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED],
+  'Transport Reimbursement': [ClaimStatus.PENDING_APPROVAL, ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED],
   'Cash Advance': [ClaimStatus.SUBMITTED, ClaimStatus.APPROVED, ClaimStatus.RELEASED, ClaimStatus.LIQUIDATED],
   'Liquidation': [ClaimStatus.SUBMITTED, ClaimStatus.REVIEWED, ClaimStatus.CLOSED],
 };

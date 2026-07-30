@@ -18,7 +18,7 @@ import {
 
 // --- enums ------------------------------------------------------------
 
-export const userRoleEnum = pgEnum('user_role', ['Requestor', 'Approver', 'Custodian', 'Admin']);
+export const userRoleEnum = pgEnum('user_role', ['Requestor', 'Approver', 'Custodian', 'Admin', 'Finance']);
 export const employmentStatusEnum = pgEnum('employment_status', ['Active', 'Inactive']);
 export const delegationStatusEnum = pgEnum('delegation_status', ['Pending', 'Active', 'Declined', 'Expired', 'Cancelled']);
 export const momStatusEnum = pgEnum('mom_status', ['Draft', 'Completed']);
@@ -91,6 +91,7 @@ export const moms = pgTable('moms', {
   client: text('client'),
   contactPerson: text('contact_person'),
   contactPersonEmail: text('contact_person_email'),
+  ccClient: boolean('cc_client').notNull().default(false),
   meetingDate: text('meeting_date').notNull(),
   meetingTime: text('meeting_time'),
   location: text('location'),
@@ -156,9 +157,11 @@ export const claims = pgTable('claims', {
   requestorId: text('requestor_id').notNull().references(() => users.id),
   currentApproverId: text('current_approver_id').notNull().references(() => users.id),
   originalApproverId: text('original_approver_id').references(() => users.id),
-  momId: text('mom_id').notNull().references(() => moms.id),
+  momId: text('mom_id').references(() => moms.id),
+  reimbursementType: text('reimbursement_type').notNull().default('Standard'),
   status: claimStatusEnum('status').notNull(),
   totalAmount: numeric('total_amount', { precision: 12, scale: 2 }).notNull(),
+  reimbursableAmount: numeric('reimbursable_amount', { precision: 12, scale: 2 }),
   expenseCategory: text('expense_category'),
   receiptUrl: text('receipt_url'),
   remarks: text('remarks'),

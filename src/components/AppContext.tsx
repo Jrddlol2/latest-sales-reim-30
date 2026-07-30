@@ -207,7 +207,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     newStatus: ClaimStatus,
     _changedBy: string,
     comment?: string,
-    updates?: Partial<Claim>,
+    updates?: Partial<Claim> & { reviewMeetingSchedule?: { meetingDate: string; meetingTime: string } },
   ) => {
     const claim = claims.find(c => c.id === claimId);
     if (!claim) throw new Error(`Unknown claim ${claimId}`);
@@ -220,7 +220,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await decideOnClaim(claim, 'Rejected', comment || '');
         break;
       case ClaimStatus.RETURNED:
-        await decideOnClaim(claim, 'Returned', comment || '');
+        await decideOnClaim(claim, 'Returned', comment || '', updates?.reviewMeetingSchedule);
         break;
       case ClaimStatus.READY_FOR_CLAIM:
         await markReadyForClaim(claimId, updates?.paymentMethod);

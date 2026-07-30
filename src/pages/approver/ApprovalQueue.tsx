@@ -10,6 +10,7 @@ import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { transferApprover } from '../../lib/api';
 import { Pagination } from '../../components/ui/Pagination';
+import { Input, Select } from '../../components/ui/Input';
 
 const ITEMS_PER_PAGE = 15;
 
@@ -28,6 +29,13 @@ export function ApprovalQueue() {
   const { addToast } = useToast();
 
   const [filter, setFilter] = useState('All');
+  const [requestorFilter, setRequestorFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const [minAge, setMinAge] = useState('');
   const [transferringId, setTransferringId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -79,6 +87,15 @@ export function ApprovalQueue() {
   if (filter === 'Advances') displayedClaims = pendingClaims.filter(c => c.type === 'Cash Advance');
   if (filter === 'HighPriority') displayedClaims = pendingClaims.filter(c => c.flaggedHighValue || c.total > 15000);
   if (filter === 'Stale') displayedClaims = pendingClaims.filter(c => c.approverStaleSince);
+  displayedClaims = displayedClaims
+    .filter(c => !requestorFilter || c.requestorId === requestorFilter)
+    .filter(c => !typeFilter || c.type === typeFilter)
+    .filter(c => !dateFrom || new Date(c.submittedAt || c.createdAt) >= new Date(`${dateFrom}T00:00:00`))
+    .filter(c => !dateTo || new Date(c.submittedAt || c.createdAt) <= new Date(`${dateTo}T23:59:59`))
+    .filter(c => !minAmount || c.total >= Number(minAmount))
+    .filter(c => !maxAmount || c.total <= Number(maxAmount))
+    .filter(c => !minAge || getAgingInfo(c.submittedAt, c.createdAt).raw >= Number(minAge))
+    .sort((a, b) => new Date(a.submittedAt || a.createdAt).getTime() - new Date(b.submittedAt || b.createdAt).getTime());
 
   const staleClaims = pendingClaims.filter(c => c.approverStaleSince);
 
@@ -87,7 +104,7 @@ export function ApprovalQueue() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filter]);
+  }, [filter, requestorFilter, typeFilter, dateFrom, dateTo, minAmount, maxAmount, minAge]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -121,6 +138,32 @@ export function ApprovalQueue() {
           <button onClick={() => setFilter('Stale')} className={`px-5 py-2 rounded-full font-label-md transition-colors shadow-sm ${filter === 'Stale' ? 'bg-primary text-white' : 'bg-surface-container-high text-on-surface-variant hover:bg-outline-variant'}`}>Stale ({staleClaims.length})</button>
         )}
       </div>
+
+      <Card className="p-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+          <Select aria-label="Requestor filter" value={requestorFilter} onChange={e => setRequestorFilter(e.target.value)}>
+            <option value="">All requestors</option>
+            {users.filter(u => pendingClaims.some(c => c.requestorId === u.id)).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </Select>
+          <Select aria-label="Claim type filter" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+            <option value="">All types</option>
+            <option>Reimbursement</option>
+            <option>Transport Reimbursement</option>
+            <option>Cash Advance</option>
+            <option>Liquidation</option>
+          </Select>
+          <Input aria-label="Submitted from" type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} title="Submitted from" />
+          <Input aria-label="Submitted to" type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} title="Submitted to" />
+          <Input aria-label="Minimum amount" type="number" placeholder="Min amount" value={minAmount} onChange={e => setMinAmount(e.target.value)} />
+          <Input aria-label="Maximum amount" type="number" placeholder="Max amount" value={maxAmount} onChange={e => setMaxAmount(e.target.value)} />
+          <Select aria-label="Minimum age" value={minAge} onChange={e => setMinAge(e.target.value)}>
+            <option value="">Any age</option>
+            <option value="1">1+ days</option>
+            <option value="3">3+ days</option>
+            <option value="5">5+ days</option>
+          </Select>
+        </div>
+      </Card>
 
       <Card>
         <CardHeader className="bg-surface-container-low/50 border-b border-outline-variant">

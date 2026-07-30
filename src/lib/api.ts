@@ -61,6 +61,7 @@ const ROLE_DEEP_LINK: Record<string, string> = {
   approver: 'u2',  // Bob Santos (Alice's manager)
   custodian: 'u3', // Carol Ramos
   admin: 'u4',     // Dave Lopez
+  finance: 'u22',  // Fiona Mercado
 };
 
 /**
@@ -207,6 +208,7 @@ function fromServerExpense(e: any, claimId: string): ExpenseLineItem {
     // The server carries an OR number rather than a filename; surface it as the
     // label so Receipt Archive and the detail modal have something to show.
     receiptFileName: e.or_number || undefined,
+    orNumber: e.or_number || undefined,
   };
 }
 
@@ -228,6 +230,7 @@ export function fromServerMom(m: any): MOM | null {
     contactPerson: m.contact_person || undefined,
     contactPersonDesignation: m.custom_fields?.contact_person_designation || undefined,
     contactPersonEmail: m.contact_person_email || undefined,
+    ccClient: Boolean(m.cc_client),
     description: m.discussion || undefined,
     agreements: m.agreements || undefined,
     actionItems: m.action_items || undefined,
@@ -290,9 +293,11 @@ export function fromServerClaim(c: any): Claim {
     requestorId: c.requestor_id,
     status: CLAIM_STATUS[c.status] ?? (c.status as ClaimStatus),
     total: Number(c.total_amount) || 0,
+    reimbursableAmount: Number(c.reimbursable_amount ?? Math.min(Number(c.total_amount) || 0, 1000)),
     submittedAt: submitted?.timestamp,
     createdAt: c.created_at,
-    type: 'Reimbursement',
+    type: c.reimbursement_type === 'Transport' ? 'Transport Reimbursement' : 'Reimbursement',
+    reimbursementType: c.reimbursement_type === 'Transport' ? 'Transport' : 'Standard',
     purpose: c.remarks || c.mom?.purpose || c.expense_category || 'Reimbursement',
     flaggedHighValue: Boolean(c.flagged_high_value),
     releaseCode: c.release_code || undefined,
@@ -358,6 +363,8 @@ export function fromServerEmail(e: any): SystemEmail {
     to: e.to || '',
     subject: e.subject || '',
     body: e.body || '',
+    channel: e.channel || 'Email',
+    deliveryStatus: e.delivery_status || 'Logged',
     read: Boolean(e.read),
     timestamp: e.timestamp,
   };
@@ -553,7 +560,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
     emails: (rawOutbox || []).map(fromServerEmail),
     supportRequests: (rawSupport || []).map(fromServerSupport),
     delegations: (rawDelegations || []).map(fromServerDelegation),
-    paymentMethods: rawSettings?.paymentMethods || ['Cash', 'GCash', 'Bank Transfer', 'Check'],
+    paymentMethods: rawSettings?.paymentMethods || ['Cash'],
     highValueThreshold: Number(rawSettings?.highValueThreshold) || 15000,
     categoryLimits: (rawSettings?.categoryLimits && typeof rawSettings.categoryLimits === 'object') ? rawSettings.categoryLimits : {},
   };
@@ -639,6 +646,40 @@ export const cancelDelegation = (id: string) => apiFetch(`/api/delegations/${id}
 export const updateNotificationPrefs = (prefs: NotificationPrefs) =>
   apiFetch('/api/me/notification-prefs', { method: 'PUT', body: JSON.stringify(prefs) });
 
+export const createStandaloneMom = (input: {
+  meetingDate: string;
+  client: string;
+  purpose: string;
+  location?: string;
+  contactPerson?: string;
+  contactPersonEmail?: string;
+  discussion?: string;
+  actionItems?: string;
+  typeOfAccount?: string;
+  category?: string;
+  contactPersonDesignation?: string;
+}) =>
+  apiFetch('/api/moms', {
+    method: 'POST',
+    body: JSON.stringify({
+      meeting_date: input.meetingDate,
+      client: input.client,
+      purpose: input.purpose,
+      location: input.location,
+      contact_person: input.contactPerson,
+      contact_person_email: input.contactPersonEmail,
+      discussion: input.discussion,
+      action_items: input.actionItems,
+      custom_fields: {
+        type_of_account: input.typeOfAccount || '',
+        category: input.category || '',
+        contact_person_designation: input.contactPersonDesignation || '',
+      },
+      minutes_source: 'Template',
+      status: 'Completed',
+    }),
+  });
+
 // --- outbound mutations ---------------------------------------------------
 
 /**
@@ -648,7 +689,8 @@ export const updateNotificationPrefs = (prefs: NotificationPrefs) =>
 export async function decideOnClaim(
   claim: Claim,
   decision: 'Approved' | 'Rejected' | 'Returned',
-  comment: string
+  comment: string,
+  reviewMeeting?: { meetingDate: string; meetingTime: string }
 ) {
   if (claim.type === 'Cash Advance') {
     return apiFetch(`/api/cash-advances/${claim.id}/approve`, {
@@ -664,9 +706,25 @@ export async function decideOnClaim(
   }
   return apiFetch(`/api/claims/${claim.id}/approve`, {
     method: 'POST',
-    body: JSON.stringify({ decision, comment }),
+    body: JSON.stringify({
+      decision,
+      comment,
+      review_meeting: reviewMeeting
+        ? { meeting_date: reviewMeeting.meetingDate, meeting_time: reviewMeeting.meetingTime }
+        : undefined,
+    }),
   });
 }
+
+export const custodianDecideOnClaim = (
+  claimId: string,
+  decision: 'Returned' | 'Rejected',
+  comment: string,
+) =>
+  apiFetch(`/api/claims/${claimId}/custodian-decision`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, comment }),
+  });
 
 /**
  * Approver (or Admin): hand a claim off to another approver after an
@@ -762,24 +820,26 @@ export interface DraftLineItem {
 
 export interface SubmitClaimInput {
   lineItems: DraftLineItem[];
+  reimbursementType?: 'Standard' | 'Transport';
   /** Core MOM columns the server models as first-class fields. */
-  mom: {
+  mom?: {
     client?: string;
     purpose?: string;
     location?: string;
     contactPerson?: string;
     contactPersonEmail?: string;
     discussion?: string;
+    agreements?: string;
+    actionItems?: string;
+    ccClient?: boolean;
     meetingDate?: string;
     meetingTime?: string;
-    source: MinutesSource;
+    source?: MinutesSource;
     documentType?: 'MoM' | 'LOA';
     file?: File;
   };
   /** Admin-defined dynamic fields, keyed by FieldDefinition.key. */
   customFields?: Record<string, string>;
-  meetingDate: string;
-  meetingTime: string;
   remarks?: string;
   isDraft?: boolean;
 }
@@ -791,7 +851,7 @@ export interface SubmitClaimInput {
  * earlier writes in place, which is why the error message names the stage.
  */
 export async function submitClaimFlow(input: SubmitClaimInput) {
-  const { lineItems, mom, customFields, meetingDate, meetingTime, remarks, isDraft } = input;
+  const { lineItems, mom, customFields, remarks, isDraft, reimbursementType = 'Standard' } = input;
 
   // 1. Receipts. The server rejects any line item without a receipt_url.
   let uploaded: DraftLineItem[];
@@ -814,43 +874,43 @@ export async function submitClaimFlow(input: SubmitClaimInput) {
     throw new Error(`Expense row ${missing + 1} needs a receipt attached before you can submit.`);
   }
 
-  // 2. MOM. Must be Completed for a real submission; a draft claim may carry a draft MOM.
-  let momFileUrl: string | undefined;
-  let momFileName: string | undefined;
-  if (mom.file) {
-    const up = await uploadFile(mom.file);
-    momFileUrl = up.url;
-    momFileName = mom.file.name;
+  // 2. Standard reimbursements create a structured MOM. Transport claims skip
+  // this step by design while retaining the same receipt and approval rules.
+  let createdMom: any | undefined;
+  if (reimbursementType !== 'Transport') {
+    if (!mom) throw new Error('Minutes of Meeting details are required.');
+    createdMom = await apiFetch('/api/moms', {
+      method: 'POST',
+      body: JSON.stringify({
+        client: mom.client || '',
+        purpose: mom.purpose || '',
+        location: mom.location || '',
+        contact_person: mom.contactPerson || '',
+        contact_person_email: mom.contactPersonEmail || '',
+        cc_client: Boolean(mom.ccClient),
+        discussion: mom.discussion || '',
+        agreements: mom.agreements || '',
+        action_items: mom.actionItems || '',
+        meeting_date: mom.meetingDate || new Date().toISOString().split('T')[0],
+        meeting_time: mom.meetingTime || '',
+        minutes_source: MinutesSource.TEMPLATE,
+        document_type: mom.documentType || 'MoM',
+        status: 'Draft',
+        custom_fields: customFields,
+      }),
+    });
+    if (!isDraft) {
+      await apiFetch(`/api/moms/${createdMom.id}/send`, { method: 'POST' });
+    }
   }
-
-  const createdMom = await apiFetch('/api/moms', {
-    method: 'POST',
-    body: JSON.stringify({
-      client: mom.client || '',
-      purpose: mom.purpose || '',
-      location: mom.location || '',
-      contact_person: mom.contactPerson || '',
-      contact_person_email: mom.contactPersonEmail || '',
-      discussion: mom.discussion || '',
-      meeting_date: mom.meetingDate || meetingDate || new Date().toISOString().split('T')[0],
-      meeting_time: mom.meetingTime || meetingTime || '',
-      minutes_source: mom.source,
-      document_type: mom.documentType || 'MoM',
-      file_url: momFileUrl,
-      file_name: momFileName,
-      status: isDraft ? 'Draft' : 'Completed',
-      custom_fields: customFields,
-    }),
-  });
 
   // 3. Claim.
   return apiFetch('/api/claims', {
     method: 'POST',
     body: JSON.stringify({
-      mom_id: createdMom.id,
-      remarks: remarks || mom.purpose || '',
-      meeting_date: meetingDate,
-      meeting_time: meetingTime,
+      mom_id: createdMom?.id,
+      reimbursement_type: reimbursementType,
+      remarks: remarks || mom?.purpose || (reimbursementType === 'Transport' ? 'Transport reimbursement' : ''),
       is_draft: Boolean(isDraft),
       line_items: uploaded.map((li) => ({
         category: li.category,
@@ -870,7 +930,7 @@ export async function submitClaimFlow(input: SubmitClaimInput) {
 
 export interface ResubmitClaimInput {
   claimId: string;
-  momId: string;
+  momId?: string;
   lineItems: DraftLineItem[];
   remarks?: string;
 }

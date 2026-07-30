@@ -66,16 +66,24 @@ const getNavItems = (role: UserRole): NavItem[] => {
     return [
       ...common,
       { label: 'User Accounts', icon: 'people', path: '/admin/users' },
-      { label: 'Master Data Admin', icon: 'database', path: '/admin/master-data' },
-      { label: 'Field Definitions', icon: 'input', path: '/admin/fields' },
       { label: 'Company Directory', icon: 'business', path: '/admin/companies' },
-      { label: 'Company Policy', icon: 'policy', path: '/admin/policy' },
       { label: 'Historical Import', icon: 'upload_file', path: '/admin/import' },
       { label: 'Admin Reporting', icon: 'bar_chart', path: '/admin/reports' },
-      { label: 'Audit Log', icon: 'gavel', path: '/admin/audit' },
-      { label: 'System Emails', icon: 'mail', path: '/admin/emails' },
+      { label: 'System Activity', icon: 'manage_search', path: '/admin/audit' },
       { label: 'Notifications', icon: 'notifications', path: '/notifications', badgeKey: 'notifications' },
       { label: 'Support', icon: 'help', path: '/support' },
+      { label: 'Settings', icon: 'settings', path: '/settings' },
+    ];
+  }
+
+  if (role === UserRole.FINANCE) {
+    return [
+      ...common,
+      { label: 'Company Reporting', icon: 'bar_chart', path: '/admin/reports' },
+      { label: 'Receipt Archive', icon: 'receipt_long', path: '/receipts' },
+      { label: 'All Claims', icon: 'description', path: '/claims' },
+      { label: 'System Activity', icon: 'manage_search', path: '/admin/audit' },
+      { label: 'Notifications', icon: 'notifications', path: '/notifications', badgeKey: 'notifications' },
       { label: 'Settings', icon: 'settings', path: '/settings' },
     ];
   }

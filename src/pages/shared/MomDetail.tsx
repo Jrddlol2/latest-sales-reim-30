@@ -5,11 +5,14 @@ import { useAppContext } from '../../components/AppContext';
 import { uploadUrl } from '../../lib/api';
 import { formatDateTime } from '../../lib/date';
 import { DOCUMENT_TYPE_LABEL, MomDocumentType } from '../../types';
+import { exportMomPdf, exportMomWord } from '../../lib/momExport';
+import { useToast } from '../../components/shared/ToastContext';
 
 export function MomDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { moms, claims } = useAppContext();
+  const { addToast } = useToast();
 
   const mom = moms.find(m => m.id === id);
 
@@ -55,6 +58,16 @@ export function MomDetail() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Button variant="outline" className="gap-2" onClick={() => {
+              try { exportMomPdf(mom); } catch (error: any) { addToast(error.message, 'error'); }
+            }}>
+              <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span>
+              Export PDF
+            </Button>
+            <Button variant="outline" className="gap-2" onClick={() => exportMomWord(mom)}>
+              <span className="material-symbols-outlined text-[18px]">description</span>
+              Export Word
+            </Button>
             <span
               title={DOCUMENT_TYPE_LABEL[docType]}
               className={`inline-flex items-center gap-1 px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider ${docType === 'LOA' ? 'bg-tertiary-container/50 text-tertiary' : 'bg-primary-container/40 text-on-primary-container'}`}
@@ -84,7 +97,7 @@ export function MomDetail() {
                   <dd className="text-body-base font-medium mt-1">{mom.purposeOfMeeting || '-'}</dd>
                 </div>
                 <div>
-                  <dt className="text-label-sm text-outline">Location</dt>
+                  <dt className="text-label-sm text-outline">Location of Meeting</dt>
                   <dd className="text-body-base font-medium mt-1">{mom.location || '-'}</dd>
                 </div>
                 <div>

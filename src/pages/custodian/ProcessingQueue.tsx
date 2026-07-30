@@ -9,6 +9,7 @@ import { useAppContext } from '../../components/AppContext';
 import { Pagination } from '../../components/ui/Pagination';
 
 const ITEMS_PER_PAGE = 15;
+const ageInDays = (date: string) => Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 86400000));
 
 export function ProcessingQueue() {
   const navigate = useNavigate();
@@ -30,6 +31,9 @@ export function ProcessingQueue() {
   if (filter === 'Audit') displayedClaims = processingClaims.filter(c => c.status === ClaimStatus.PROCESSING);
   if (filter === 'Advances') displayedClaims = processingClaims.filter(c => c.type === 'Cash Advance');
   if (filter === 'Liquidations') displayedClaims = processingClaims.filter(c => c.type === 'Liquidation');
+  displayedClaims = [...displayedClaims].sort(
+    (a, b) => new Date(a.submittedAt || a.createdAt).getTime() - new Date(b.submittedAt || b.createdAt).getTime()
+  );
 
   const totalPages = Math.ceil(displayedClaims.length / ITEMS_PER_PAGE);
   const paginatedClaims = displayedClaims.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
@@ -64,6 +68,7 @@ export function ProcessingQueue() {
               <tr>
                 <th className="px-6 py-4">Requestor</th>
                 <th className="px-6 py-4">Ref & Type</th>
+                <th className="px-6 py-4">Aging</th>
                 <th className="px-6 py-4">Amount</th>
                 <th className="px-6 py-4 text-center">Status</th>
                 <th className="px-6 py-4 text-right">Actions</th>
@@ -72,7 +77,7 @@ export function ProcessingQueue() {
             <tbody className="divide-y divide-outline-variant">
               {displayedClaims.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-outline">
+                  <td colSpan={6} className="px-6 py-12 text-center text-outline">
                     <span className="material-symbols-outlined text-4xl mb-2 opacity-50">task_alt</span>
                     <p className="font-label-md">Queue is empty!</p>
                   </td>
@@ -80,7 +85,7 @@ export function ProcessingQueue() {
               ) : paginatedClaims.map(claim => {
                 const req = users.find(u => u.id === claim.requestorId) || users[0];
                 return (
-                  <tr key={claim.id} className="hover:bg-primary-fixed/20 transition-colors group cursor-pointer" onClick={(e) => {
+                  <tr key={claim.id} className={`hover:bg-primary-fixed/20 transition-colors group cursor-pointer ${claim.id === displayedClaims[0]?.id ? 'bg-tertiary-container/20' : ''}`} onClick={(e) => {
                     if (!(e.target as HTMLElement).closest('button')) {
                       navigate(`/claims/${claim.id}`);
                     }
@@ -108,8 +113,19 @@ export function ProcessingQueue() {
                         {claim.type}
                       </div>
                     </td>
+                    <td className="px-6 py-4">
+                      <span className={`rounded-md px-2 py-1 text-xs font-bold ${ageInDays(claim.submittedAt || claim.createdAt) >= 5 ? 'bg-error-container text-error' : 'bg-surface-container text-outline'}`}>
+                        {claim.id === displayedClaims[0]?.id ? 'Oldest · ' : ''}{ageInDays(claim.submittedAt || claim.createdAt)} day(s)
+                      </span>
+                    </td>
                     <td className="px-6 py-4 font-mono-data text-on-surface font-bold">
-                       {formatMoney(claim.type === 'Liquidation' ? Math.abs(claim.varianceAmount || 0) : claim.total)}
+                       {formatMoney(
+                         claim.type === 'Liquidation'
+                           ? Math.abs(claim.varianceAmount || 0)
+                           : (claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement')
+                             ? (claim.reimbursableAmount ?? Math.min(claim.total, 1000))
+                             : claim.total
+                       )}
                        {claim.type === 'Liquidation' && <span className="block text-xs font-normal text-on-surface-variant">{claim.varianceType}</span>}
                     </td>
                     <td className="px-6 py-4 text-center">

@@ -40,13 +40,9 @@ const Support = lazy(() => import('./pages/shared/Support').then(m => ({ default
 const Notifications = lazy(() => import('./pages/shared/Notifications').then(m => ({ default: m.Notifications })));
 const CompanyDirectory = lazy(() => import('./pages/admin/CompanyDirectory').then(m => ({ default: m.CompanyDirectory })));
 const Receipts = lazy(() => import('./pages/shared/Receipts').then(m => ({ default: m.Receipts })));
-const MasterData = lazy(() => import('./pages/admin/MasterData').then(m => ({ default: m.MasterData })));
-const FieldDefinitionsAdmin = lazy(() => import('./pages/admin/FieldDefinitionsAdmin').then(m => ({ default: m.FieldDefinitionsAdmin })));
 // recharts alone is a big chunk only this page needs — the audit's own example.
 const AdminReporting = lazy(() => import('./pages/admin/AdminReporting').then(m => ({ default: m.AdminReporting })));
-const SystemEmails = lazy(() => import('./pages/admin/SystemEmails').then(m => ({ default: m.SystemEmails })));
 const HistoricalImport = lazy(() => import('./pages/admin/HistoricalImport').then(m => ({ default: m.HistoricalImport })));
-const CompanyPolicy = lazy(() => import('./pages/admin/CompanyPolicy').then(m => ({ default: m.CompanyPolicy })));
 
 function RouteFallback() {
   return (
@@ -103,14 +99,10 @@ function RoleBasedRouter() {
         
         {/* Admin */}
         <Route path="/admin/users" element={<UserAccounts />} />
-        <Route path="/admin/master-data" element={<MasterData />} />
-        <Route path="/admin/fields" element={<FieldDefinitionsAdmin />} />
         <Route path="/admin/companies" element={<CompanyDirectory />} />
-        <Route path="/admin/policy" element={<CompanyPolicy />} />
         <Route path="/admin/import" element={<HistoricalImport />} />
         <Route path="/admin/reports" element={<AdminReporting />} />
         <Route path="/admin/audit" element={<AuditLog />} />
-        <Route path="/admin/emails" element={<SystemEmails />} />
         
         {/* Catch all */}
         <Route path="*" element={<Navigate to="/" replace />} />

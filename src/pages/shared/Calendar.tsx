@@ -19,7 +19,7 @@ const STATUS_STYLE: Record<string, string> = {
 
 export function Calendar() {
   const navigate = useNavigate();
-  const { reviewMeetings, currentUser, refresh } = useAppContext();
+  const { reviewMeetings, moms, currentUser, refresh } = useAppContext();
   const { addToast } = useToast();
   const [cursor, setCursor] = useState(() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() }; });
   const [selected, setSelected] = useState<ReviewMeeting | null>(null);
@@ -46,6 +46,17 @@ export function Calendar() {
     }
     return map;
   }, [reviewMeetings, year, month]);
+  const momsByDay = useMemo<Record<string, typeof moms>>(() => {
+    const map: Record<string, typeof moms> = {};
+    for (const mom of moms) {
+      if (!mom.meetingDate) continue;
+      const d = new Date(`${mom.meetingDate.split('T')[0]}T00:00:00`);
+      if (d.getFullYear() !== year || d.getMonth() !== month) continue;
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      (map[key] ||= []).push(mom);
+    }
+    return map;
+  }, [moms, year, month]);
 
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -55,7 +66,9 @@ export function Calendar() {
     return { year: c.year + Math.floor(m / 12), month: ((m % 12) + 12) % 12 };
   });
 
-  const totalThisMonth = Object.keys(byDay).reduce((n, key) => n + byDay[key].length, 0);
+  const totalThisMonth =
+    Object.keys(byDay).reduce((n, key) => n + byDay[key].length, 0) +
+    Object.keys(momsByDay).reduce((n, key) => n + momsByDay[key].length, 0);
 
   // Selected always reflects the latest server data (after a refresh, the
   // object reference changes — look it up by id instead of trusting the stale one).
@@ -128,7 +141,7 @@ export function Calendar() {
       <div className="flex justify-between items-end">
         <div>
           <h1 className="font-display text-display text-on-surface">Calendar</h1>
-          <p className="text-body-md text-outline mt-1">Schedule and view upcoming review meetings.</p>
+          <p className="text-body-md text-outline mt-1">View client meeting dates and optional claim review meetings.</p>
         </div>
       </div>
 
@@ -137,7 +150,7 @@ export function Calendar() {
           <div className="flex items-center justify-between w-full">
             <h3 className="font-label-md uppercase tracking-wider text-on-surface">{MONTHS[month]} {year}</h3>
             <div className="flex items-center gap-2">
-              <span className="font-label-sm text-outline mr-2">{totalThisMonth} review meeting{totalThisMonth === 1 ? '' : 's'}</span>
+              <span className="font-label-sm text-outline mr-2">{totalThisMonth} event{totalThisMonth === 1 ? '' : 's'}</span>
               <button onClick={() => step(-1)} className="p-1.5 rounded-lg hover:bg-outline-variant transition-colors" title="Previous month">
                 <span className="material-symbols-outlined text-outline">chevron_left</span>
               </button>
@@ -167,6 +180,7 @@ export function Calendar() {
 
             {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
               const events = byDay[`${year}-${month}-${day}`] || [];
+              const momEvents = momsByDay[`${year}-${month}-${day}`] || [];
               const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
               return (
                 <div key={day} className={`min-h-[100px] p-2 border rounded-lg transition-colors group ${isToday ? 'border-primary ring-1 ring-primary/30' : 'border-outline-variant hover:border-primary'}`}>
@@ -182,6 +196,16 @@ export function Calendar() {
                         {rm.meetingTime ? `${rm.meetingTime} ` : ''}{rm.claimNumber || 'Review'}
                       </button>
                     ))}
+                    {momEvents.map(mom => (
+                      <button
+                        key={mom.id}
+                        onClick={() => navigate(`/moms/${mom.id}`)}
+                        title={`Client meeting · ${mom.companyName || 'Untitled'}`}
+                        className="w-full text-left text-[12px] px-2 py-1 rounded truncate bg-secondary-container text-on-secondary-container"
+                      >
+                        MOM · {mom.companyName || 'Client meeting'}
+                      </button>
+                    ))}
                   </div>
                 </div>
               );
@@ -192,6 +216,7 @@ export function Calendar() {
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-primary-container"></span> Confirmed</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-tertiary-container"></span> Pending confirmation</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-error-container"></span> Reschedule requested</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-secondary-container"></span> Client MOM meeting</span>
           </div>
         </div>
       </Card>

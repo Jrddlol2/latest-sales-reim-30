@@ -10,24 +10,18 @@ import { formatMoney } from '../../lib/money';
 
 export function CustodianDashboard() {
   const navigate = useNavigate();
-  const { claims, users, lineItems } = useAppContext();
+  const { claims, users } = useAppContext();
 
-  const processingClaims = claims.filter(c => c.status === ClaimStatus.PROCESSING || c.status === ClaimStatus.READY_FOR_CLAIM);
+  const processingClaims = claims
+    .filter(c => c.status === ClaimStatus.APPROVED || c.status === ClaimStatus.PROCESSING || c.status === ClaimStatus.READY_FOR_CLAIM)
+    .sort((a, b) => new Date(a.submittedAt || a.createdAt).getTime() - new Date(b.submittedAt || b.createdAt).getTime());
   const readyForPickup = claims.filter(c => c.status === ClaimStatus.READY_FOR_CLAIM).length;
 
-  const missingReceiptsCount = useMemo(() => {
-    const processingClaimIds = new Set(processingClaims.map(c => c.id));
-    return lineItems.filter(li => processingClaimIds.has(li.claimId) && !li.receiptUrl).length;
-  }, [processingClaims, lineItems]);
-
-  const oldestItemDays = useMemo(() => {
-    if (processingClaims.length === 0) return null;
-    const oldest = processingClaims.reduce((min, c) => {
-      const created = new Date(c.createdAt).getTime();
-      return created < min ? created : min;
-    }, Date.now());
-    return (Date.now() - oldest) / (1000 * 60 * 60 * 24);
-  }, [processingClaims]);
+  const oldestItem = processingClaims[0];
+  const oldestItemDays = oldestItem
+    ? (Date.now() - new Date(oldestItem.submittedAt || oldestItem.createdAt).getTime()) / (1000 * 60 * 60 * 24)
+    : null;
+  const oldestRequestor = oldestItem ? users.find(u => u.id === oldestItem.requestorId) : undefined;
 
   const byType = useMemo(() => {
     const counts: Record<string, number> = { Reimbursement: 0, 'Cash Advance': 0, Liquidation: 0 };
@@ -60,7 +54,10 @@ export function CustodianDashboard() {
               ['Ref', 'Requestor', 'Type', 'Amount', 'Status'],
               ...processingClaims.map(c => {
                 const req = users.find(u => u.id === c.requestorId);
-                return [c.ref, req?.name || '', c.type, c.total.toFixed(2), c.status];
+                const payout = c.type === 'Reimbursement' || c.type === 'Transport Reimbursement'
+                  ? (c.reimbursableAmount ?? Math.min(c.total, 1000))
+                  : c.total;
+                return [c.ref, req?.name || '', c.type, payout.toFixed(2), c.status];
               }),
             ];
             const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -75,15 +72,7 @@ export function CustodianDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <KPICard
-          title="Missing Receipts"
-          value={missingReceiptsCount.toString()}
-          icon="receipt_long"
-          iconColorClass={missingReceiptsCount > 0 ? 'bg-error-container text-on-error-container' : 'bg-primary-fixed text-on-primary-fixed-variant'}
-          trend={missingReceiptsCount > 0 ? 'Needs follow-up' : 'All receipts on file'}
-          trendColorClass={missingReceiptsCount > 0 ? 'text-error bg-error-container px-2 py-1 rounded-full' : 'text-primary bg-primary-fixed px-2 py-1 rounded-full'}
-        />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <KPICard
           title="Total Pending"
           value={processingClaims.length.toString()}
@@ -98,7 +87,7 @@ export function CustodianDashboard() {
           prefix=""
           icon="schedule"
           iconColorClass="bg-tertiary-fixed text-on-tertiary-fixed-variant"
-          trend={oldestItemDays !== null && oldestItemDays > 3 ? 'Urgent' : oldestItemDays === null ? 'Queue empty' : 'On track'}
+          trend={oldestItem ? `${oldestItem.ref} · ${oldestRequestor?.name || 'Unknown requestor'}` : 'Queue empty'}
           trendColorClass="text-tertiary bg-tertiary-fixed px-2 py-1 rounded-full"
         />
       </div>
@@ -171,7 +160,11 @@ export function CustodianDashboard() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-5 font-mono-data text-sm font-bold">{formatMoney(claim.total)}</td>
+                    <td className="px-6 py-5 font-mono-data text-sm font-bold">{formatMoney(
+                      claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement'
+                        ? (claim.reimbursableAmount ?? Math.min(claim.total, 1000))
+                        : claim.total
+                    )}</td>
                     <td className="px-6 py-5">
                       <StatusBadge status={claim.status} />
                     </td>

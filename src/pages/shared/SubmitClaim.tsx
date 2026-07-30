@@ -1,5 +1,5 @@
 import React from "react";
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
 import { Input, Select, Label } from '../../components/ui/Input';
@@ -8,31 +8,35 @@ import { cn } from '../../components/ui/Button';
 import { useAppContext } from '../../components/AppContext';
 import { DynamicFieldRenderer } from '../../components/shared/DynamicFieldRenderer';
 import { useToast } from '../../components/shared/ToastContext';
-import { MinutesSource, ClaimStatus, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
+import { ClaimStatus, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
 import { submitClaimFlow, submitCashAdvanceFlow, submitLiquidationFlow, DraftLineItem } from '../../lib/api';
 import { formatMoney } from '../../lib/money';
 import { EXPENSE_CATEGORIES } from '../../lib/expenseCategories';
 import { FieldDefinition, FieldDefinitionEntity } from '../../types';
+import { reimbursableAmount, REIMBURSEMENT_CAP, isPurchaseOlderThan30Days } from '../../lib/reimbursement';
 
-const TYPE_PARAM_MAP: Record<string, 'Reimbursement' | 'Cash Advance' | 'Liquidation'> = {
+type SubmissionType = 'Reimbursement' | 'Transport Reimbursement' | 'Cash Advance' | 'Liquidation';
+
+const TYPE_PARAM_MAP: Record<string, SubmissionType> = {
   reimbursement: 'Reimbursement',
+  transport: 'Transport Reimbursement',
   advance: 'Cash Advance',
   liquidation: 'Liquidation',
 };
 
 export function SubmitClaim() {
   const navigate = useNavigate();
-  const { currentUser, fieldDefinitions, users, claims, companies, masterData, highValueThreshold, categoryLimits, paymentMethods, refresh } = useAppContext();
+  const { currentUser, fieldDefinitions, users, claims, companies, masterData, paymentMethods, refresh } = useAppContext();
   const { addToast } = useToast();
   const [searchParams] = useSearchParams();
   const typeFromQuery = TYPE_PARAM_MAP[searchParams.get('type') ?? ''];
+  const reimbursementChoiceOnly = searchParams.get('choose') === 'reimbursement';
 
-  const [claimType, setClaimType] = useState<'Reimbursement' | 'Cash Advance' | 'Liquidation'>(typeFromQuery ?? 'Reimbursement');
+  const [claimType, setClaimType] = useState<SubmissionType>(typeFromQuery ?? 'Reimbursement');
   // Step 0 is Type Selection. A Reimbursement now opens on the Minutes of
   // Meeting step (2) rather than Details & Items (1) — see stepFlow below.
   const [step, setStep] = useState(typeFromQuery ? (typeFromQuery === 'Reimbursement' ? 2 : 1) : 0);
   const [loading, setLoading] = useState(false);
-  const momFileInputRef = useRef<HTMLInputElement>(null);
 
   // Form State. Holds the real File alongside the preview URL â€” the server
   // needs the bytes, and an object URL can't be re-read after a reload.
@@ -40,27 +44,36 @@ export function SubmitClaim() {
     { expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }
   ]);
   const [momCore, setMomCore] = useState({
-    client: '', purpose: '', location: '', contactPerson: '', contactPersonEmail: '', discussion: '',
+    meetingDate: new Date().toISOString().split('T')[0], meetingTime: '',
+    client: '', purpose: '', location: '', contactPerson: '', contactPersonEmail: '',
+    discussion: '', agreements: '', actionItems: '', ccClient: false,
   });
   // A known Company Directory entry can pre-fill the meeting details below
   // (mirrors the original system's "Company Auto-Fill" MOM behavior). Default
   // to the picker when companies exist; fall back to free text otherwise.
   const [clientMode, setClientMode] = useState<'select' | 'custom'>('select');
-  const [momFile, setMomFile] = useState<File | undefined>();
   const [cashAdvanceId, setCashAdvanceId] = useState<string>('');
   const [cashAdvanceAmount, setCashAdvanceAmount] = useState<number>(0);
   const [cashAdvancePurpose, setCashAdvancePurpose] = useState('');
   // How the requestor intends to return an over-advance (refund due). Only
   // relevant to a Liquidation whose actual spend came in under the advance.
   const [refundMethod, setRefundMethod] = useState('');
-  const [momSource, setMomSource] = useState<MinutesSource>(MinutesSource.TEMPLATE);
   // Whether this claim is anchored to Minutes of Meeting or a Letter of
   // Agreement — same record, different intent/labelling.
   const [documentType, setDocumentType] = useState<MomDocumentType>('MoM');
   const [momData, setMomData] = useState<Record<string, any>>({});
   const [claimCustomFields, setClaimCustomFields] = useState<Record<string, string>>({});
-  const [meetingDate, setMeetingDate] = useState('');
-  const [meetingTime, setMeetingTime] = useState('');
+  const momField = (key: string) =>
+    fieldDefinitions.find(fd => fd.entity === 'mom' && fd.key === key && fd.active);
+  const momFieldOptions = (key: string, fallback: string[]) => {
+    const field = momField(key);
+    if (field?.master_data_entity) {
+      return masterData
+        .filter(item => item.type === field.master_data_entity && item.active)
+        .map(item => item.name);
+    }
+    return field?.options?.length ? field.options : fallback;
+  };
 
   // Declared in the order a Reimbursement actually visits them (MOM before
   // Details & Items) — the stepper dots and the "Step X of Y" label below
@@ -68,7 +81,6 @@ export function SubmitClaim() {
   const steps = [
     { num: 2, title: DOCUMENT_TYPE_LABEL[documentType] },
     { num: 1, title: 'Details & Items' },
-    { num: 3, title: 'Schedule Review' },
     { num: 4, title: 'Review & Submit' }
   ];
 
@@ -77,19 +89,22 @@ export function SubmitClaim() {
   // Review & Submit. A Reimbursement captures the Minutes of Meeting first,
   // then the expense details/items, so the approver's context (who, why) is
   // already on record before line items are entered.
-  const stepFlow = claimType === 'Reimbursement' ? [2, 1, 3, 4] : [1, 4];
+  const stepFlow = claimType === 'Reimbursement' ? [2, 1, 4] : [1, 4];
   const flowPosition = stepFlow.indexOf(step);
 
   const handleNext = () => {
-    if (step === 1 && claimType === 'Reimbursement' && lineItemsLocal.length === 0) {
+    if (step === 1 && (claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && lineItemsLocal.length === 0) {
       addToast('Please add at least one line item', 'error');
       return;
     }
-    // Company spending policy — block advancing past Details with an over-cap line.
-    if (step === 1 && claimType !== 'Cash Advance' && firstOverLimit) {
-      addToast(`${firstOverLimit.category} is capped at ${formatMoney(limitFor(firstOverLimit.category))} per item by company policy.`, 'error');
-      return;
+    if (step === 1 && claimType !== 'Cash Advance') {
+      const expiredPurchaseIndex = lineItemsLocal.findIndex(item => isPurchaseOlderThan30Days(item.expenseDate));
+      if (expiredPurchaseIndex >= 0) {
+        addToast(`Row ${expiredPurchaseIndex + 1} has a purchase date older than 30 days. Correct or remove it before continuing.`, 'error');
+        return;
+      }
     }
+    // Company spending policy — block advancing past Details with an over-cap line.
     if (step === 1 && claimType === 'Cash Advance') {
       if (!cashAdvanceAmount || cashAdvanceAmount <= 0) {
         addToast('Please enter the amount you\'re requesting', 'error');
@@ -114,12 +129,12 @@ export function SubmitClaim() {
         return;
       }
     }
-    if (step === 1 && claimType === 'Reimbursement') {
+    if (step === 1 && (claimType === 'Reimbursement' || claimType === 'Transport Reimbursement')) {
       // Must mirror DynamicFieldRenderer's own filter exactly â€” validating a
       // field the renderer hides leaves the user blocked by an invisible input.
       const activeClaimFields = fieldDefinitions.filter(fd =>
         fd.entity === 'claim' && fd.active &&
-        (!fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType))
+        (!fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType === 'Transport Reimbursement' ? 'Reimbursement' : claimType))
       );
       const missingRequired = activeClaimFields.find(fd => fd.required && (!claimCustomFields[fd.key] || claimCustomFields[fd.key].trim() === ''));
       if (missingRequired) {
@@ -127,7 +142,7 @@ export function SubmitClaim() {
         return;
       }
     }
-    if (step === 2 && momSource === MinutesSource.TEMPLATE) {
+    if (step === 2) {
       const activeMomFields = fieldDefinitions.filter(fd => fd.entity === 'mom' && fd.active);
       const missingRequired = activeMomFields.find(fd => fd.required && (!momData[fd.key] || momData[fd.key].trim() === ''));
       if (missingRequired) {
@@ -146,15 +161,7 @@ export function SubmitClaim() {
   const totalAmount = claimType === 'Cash Advance'
     ? Number(cashAdvanceAmount) || 0
     : lineItemsLocal.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const flaggedHighValue = lineItemsLocal.some(item => (Number(item.amount) || 0) > highValueThreshold);
-
-  /** Company spending policy: the cap for a line's category, or 0 if none. */
-  const limitFor = (category?: string) => (category && categoryLimits[category]) || 0;
-  const overLimit = (item: DraftLineItem) => {
-    const cap = limitFor(item.category);
-    return cap > 0 && (Number(item.amount) || 0) > cap;
-  };
-  const firstOverLimit = lineItemsLocal.find(overLimit);
+  const cappedPayout = reimbursableAmount(totalAmount);
   
   let varianceAmount = 0;
   let varianceType: 'Settled' | 'RefundDue' | 'ReimbursementDue' = 'Settled';
@@ -187,13 +194,6 @@ export function SubmitClaim() {
       contactPerson: p.contactPerson || company.contactPerson || '',
       contactPersonEmail: p.contactPersonEmail || company.contactEmail || '',
     }));
-  };
-
-  const handleFileUploadForMOM = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setMomFile(file);
-    setMomData(p => ({ ...p, fileName: file.name }));
   };
 
   /** Presenter convenience (the header "Autofill" button): fill the ENTIRE
@@ -229,7 +229,7 @@ export function SubmitClaim() {
     const out: Record<string, string> = {};
     fieldDefinitions
       .filter(fd => fd.entity === entity && fd.active)
-      .filter(fd => entity !== 'claim' || !fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType))
+      .filter(fd => entity !== 'claim' || !fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType === 'Transport Reimbursement' ? 'Reimbursement' : claimType))
       .forEach(fd => {
         if (fd.required || fd.default_value) {
           const v = sampleFieldValue(fd);
@@ -297,16 +297,17 @@ export function SubmitClaim() {
         }
         setMomCore(p => ({
           ...p,
+          meetingDate: p.meetingDate || today(),
+          meetingTime: p.meetingTime || '10:00',
           purpose: p.purpose || 'Quarterly account review',
           location: p.location || 'Makati City, Philippines',
           contactPerson: p.contactPerson || 'Jane Dela Cruz',
           contactPersonEmail: p.contactPersonEmail || 'jane@client.com',
           discussion: p.discussion || 'Reviewed pipeline, agreed next steps and follow-up schedule.',
+          agreements: p.agreements || 'Client confirmed the next milestone and delivery date.',
+          actionItems: p.actionItems || 'Send the updated proposal and schedule a follow-up.',
         }));
         setMomData(p => ({ ...p, ...fillCustomFields('mom') }));
-        const inThreeDays = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-        setMeetingDate(d => d || inThreeDays.toISOString().split('T')[0]);
-        setMeetingTime(t => t || '14:00');
       }
       addToast('Form filled with demo data.', 'success');
     } catch {
@@ -341,18 +342,13 @@ export function SubmitClaim() {
       } else {
         await submitClaimFlow({
           lineItems: lineItemsLocal,
-          mom: {
+          reimbursementType: claimType === 'Transport Reimbursement' ? 'Transport' : 'Standard',
+          mom: claimType === 'Transport Reimbursement' ? undefined : {
             ...momCore,
-            meetingDate,
-            meetingTime,
-            source: momSource,
             documentType,
-            file: momFile,
           },
           customFields: { ...momData, ...claimCustomFields },
-          meetingDate,
-          meetingTime,
-          remarks: momCore.purpose,
+          remarks: claimType === 'Transport Reimbursement' ? 'Transport reimbursement' : momCore.purpose,
           isDraft,
         });
       }
@@ -393,29 +389,49 @@ export function SubmitClaim() {
   if (step === 0) {
     return (
       <div className="max-w-[800px] mx-auto py-12 px-6">
-        <h2 className="font-headline-lg mb-6">What would you like to submit?</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <h2 className="font-headline-lg mb-2">
+          {reimbursementChoiceOnly ? 'Choose a reimbursement type' : 'What would you like to submit?'}
+        </h2>
+        {reimbursementChoiceOnly && (
+          <p className="text-on-surface-variant mb-6">Select whether this claim requires a MOM or is for transportation only.</p>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
           <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Reimbursement'); setStep(2); }}>
             <CardContent className="p-6 text-center">
               <span className="material-symbols-outlined text-[48px] text-primary mb-4">receipt_long</span>
-              <h3 className="font-headline-sm">Reimbursement</h3>
-              <p className="text-sm text-on-surface-variant mt-2">Claim business expenses already paid for.</p>
+              <h3 className="font-headline-sm">MOM Reimbursement</h3>
+              <p className="text-sm text-on-surface-variant mt-2">Business expenses supported by Minutes of Meeting.</p>
             </CardContent>
           </Card>
-          <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Cash Advance'); setStep(1); }}>
+          <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => {
+            setClaimType('Transport Reimbursement');
+            setLineItemsLocal([{ expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Transportation' }]);
+            setStep(1);
+          }}>
             <CardContent className="p-6 text-center">
-              <span className="material-symbols-outlined text-[48px] text-primary mb-4">payments</span>
-              <h3 className="font-headline-sm">Cash Advance</h3>
-              <p className="text-sm text-on-surface-variant mt-2">Request funds before an upcoming expense.</p>
+              <span className="material-symbols-outlined text-[48px] text-primary mb-4">directions_car</span>
+              <h3 className="font-headline-sm">Transport Reimbursement</h3>
+              <p className="text-sm text-on-surface-variant mt-2">Transport expenses with receipts; no MOM required.</p>
             </CardContent>
           </Card>
-          <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Liquidation'); setStep(1); }}>
-            <CardContent className="p-6 text-center">
-              <span className="material-symbols-outlined text-[48px] text-primary mb-4">account_balance_wallet</span>
-              <h3 className="font-headline-sm">Liquidation</h3>
-              <p className="text-sm text-on-surface-variant mt-2">Settle an existing cash advance.</p>
-            </CardContent>
-          </Card>
+          {!reimbursementChoiceOnly && (
+            <>
+              <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Cash Advance'); setStep(1); }}>
+                <CardContent className="p-6 text-center">
+                  <span className="material-symbols-outlined text-[48px] text-primary mb-4">payments</span>
+                  <h3 className="font-headline-sm">Cash Advance</h3>
+                  <p className="text-sm text-on-surface-variant mt-2">Request funds before an upcoming expense.</p>
+                </CardContent>
+              </Card>
+              <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Liquidation'); setStep(1); }}>
+                <CardContent className="p-6 text-center">
+                  <span className="material-symbols-outlined text-[48px] text-primary mb-4">account_balance_wallet</span>
+                  <h3 className="font-headline-sm">Liquidation</h3>
+                  <p className="text-sm text-on-surface-variant mt-2">Settle an existing cash advance.</p>
+                </CardContent>
+              </Card>
+            </>
+          )}
         </div>
       </div>
     );
@@ -487,7 +503,7 @@ export function SubmitClaim() {
               <h3 className="font-headline-md text-on-surface">{claimType} Details</h3>
               <div className="flex items-center gap-2">
               {claimType !== 'Cash Advance' && !liquidationBlocked && (
-                <Button size="sm" className="gap-2" onClick={() => setLineItemsLocal(p => [...p, { expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }])}>
+                <Button size="sm" className="gap-2" onClick={() => setLineItemsLocal(p => [...p, { expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: claimType === 'Transport Reimbursement' ? 'Transportation' : 'Meals' }])}>
                   <span className="material-symbols-outlined text-[18px]">add</span> Add Row
                 </Button>
               )}
@@ -537,7 +553,7 @@ export function SubmitClaim() {
               <div className="mb-6">
                 <DynamicFieldRenderer
                   entity="claim"
-                  claimType={claimType}
+                  claimType={claimType === 'Transport Reimbursement' ? 'Reimbursement' : claimType}
                   values={claimCustomFields}
                   onChange={(key, value) => setClaimCustomFields(p => ({ ...p, [key]: value }))}
                 />
@@ -545,10 +561,11 @@ export function SubmitClaim() {
               )}
               {claimType !== 'Cash Advance' && !liquidationBlocked && (
               <div className="overflow-x-auto">
-                <table className="w-full text-left min-w-[900px]">
+                <table className="w-full text-left min-w-[1080px]">
                   <thead className="bg-brand-table-header text-on-surface-variant font-label-sm uppercase tracking-wider">
                     <tr>
-                      <th className="px-3 py-3 sticky left-0 bg-brand-table-header z-20 shadow-[1px_0_0_var(--color-brand-border)]">Date</th>
+                      <th className="px-3 py-3 sticky left-0 bg-brand-table-header z-20 shadow-[1px_0_0_var(--color-brand-border)]">Date of Purchase</th>
+                      <th className="px-3 py-3">OR Number</th>
                       <th className="px-3 py-3">Category</th>
                       <th className="px-3 py-3">Vendor / Supplier</th>
                       <th className="px-3 py-3">Payment Method</th>
@@ -563,9 +580,15 @@ export function SubmitClaim() {
                       <tr key={idx} className="hover:bg-brand-row-hover transition-colors group">
                         <td className="px-3 py-3 sticky left-0 bg-white z-10 shadow-[1px_0_0_var(--color-brand-border)] group-hover:bg-brand-row-hover">
                           <Input type="date" value={item.expenseDate || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, expenseDate: e.target.value } : li))} className="py-1 px-2 text-xs" />
+                          {isPurchaseOlderThan30Days(item.expenseDate) && (
+                            <p className="text-error text-[11px] mt-1 whitespace-nowrap">Over 30 days old — cannot continue</p>
+                          )}
                         </td>
                         <td className="px-3 py-3">
-                          <Select className="py-1 px-2 text-xs" value={item.category || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, category: e.target.value } : li))}>
+                          <Input type="text" value={item.orNumber || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, orNumber: e.target.value } : li))} className="py-1 px-2 text-xs" placeholder="OR-000123" />
+                        </td>
+                        <td className="px-3 py-3">
+                          <Select disabled={claimType === 'Transport Reimbursement'} className="py-1 px-2 text-xs" value={item.category || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, category: e.target.value } : li))}>
                             <option value="">Select Category</option>
                             {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                           </Select>
@@ -587,14 +610,8 @@ export function SubmitClaim() {
                         <td className="px-3 py-3">
                           <div className="relative">
                             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-outline-variant text-xs">₱</span>
-                            <Input type="number" value={item.amount || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, amount: Number(e.target.value) } : li))} className={cn("pl-5 py-1 px-2 text-right font-mono-data text-xs", overLimit(item) && "border-error text-error")} />
+                            <Input type="number" value={item.amount || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, amount: Number(e.target.value) } : li))} className="pl-5 py-1 px-2 text-right font-mono-data text-xs" />
                           </div>
-                          {overLimit(item) && (
-                            <p className="text-error text-[11px] mt-1 whitespace-nowrap flex items-center gap-0.5">
-                              <span className="material-symbols-outlined text-[13px]">error</span>
-                              Max {formatMoney(limitFor(item.category))}
-                            </p>
-                          )}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
@@ -645,6 +662,11 @@ export function SubmitClaim() {
                 </div>
               </div>
               )}
+              {(claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && totalAmount > REIMBURSEMENT_CAP && (
+                <div className="mt-4 rounded-lg border border-tertiary/40 bg-tertiary-container/20 p-4 text-body-sm">
+                  You may submit the full {formatMoney(totalAmount)} claim. Under the current policy, the maximum payout for the whole claim is {formatMoney(cappedPayout)}.
+                </div>
+              )}
 
               {/* Refund due: the requestor spent less than the advance and owes
                   the balance back. Let them declare how they'll return it — the
@@ -681,125 +703,97 @@ export function SubmitClaim() {
               <CardContent>
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
                   <h4 className="font-headline-md text-on-surface">{DOCUMENT_TYPE_LABEL[documentType]}</h4>
-                  <div className="flex items-center gap-2">
-                    <Select value={documentType} onChange={(e) => setDocumentType(e.target.value as MomDocumentType)} className="w-auto" aria-label="Document type">
-                      <option value="MoM">Minutes of Meeting</option>
-                      <option value="LOA">Letter of Agreement</option>
-                    </Select>
-                    <Select value={momSource} onChange={(e) => setMomSource(e.target.value as MinutesSource)} className="w-auto">
-                      <option value={MinutesSource.TEMPLATE}>Fill Template</option>
-                      <option value={MinutesSource.UPLOADED}>Upload File</option>
-                    </Select>
-                  </div>
+                  <Select value={documentType} onChange={(e) => setDocumentType(e.target.value as MomDocumentType)} className="w-auto" aria-label="Document type">
+                    <option value="MoM">Minutes of Meeting</option>
+                    <option value="LOA">Letter of Agreement</option>
+                  </Select>
                 </div>
-                
-                {momSource === MinutesSource.UPLOADED ? (
-                  <div className="border-2 border-dashed border-outline-variant rounded-lg p-12 text-center flex flex-col items-center justify-center bg-surface-container-low">
-                    <input 
-                      type="file" 
-                      accept=".pdf,.doc,.docx,image/*" 
-                      className="hidden" 
-                      ref={momFileInputRef}
-                      onChange={handleFileUploadForMOM}
-                    />
-                    {momData.fileName ? (
-                      <div className="flex flex-col items-center">
-                        <span className="material-symbols-outlined text-[56px] text-primary mb-3">description</span>
-                        <p className="font-bold text-on-surface mb-1">{momData.fileName}</p>
-                        <p className="text-xs text-green-700 bg-green-100 px-3 py-1 rounded-full mb-4">File attached ready for submission</p>
-                        <Button variant="outline" size="sm" onClick={() => setMomData(p => ({...p, fileName: undefined, fileUrl: undefined}))}>Remove File</Button>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="material-symbols-outlined text-[48px] text-outline mb-4">cloud_upload</span>
-                        <p className="font-bold text-on-surface mb-2">Drag and drop MOM document</p>
-                        <p className="text-sm text-on-surface-variant mb-6">PDF, DOCX, or JPG up to 10MB</p>
-                        <Button variant="outline" onClick={() => momFileInputRef.current?.click()}>Browse Files</Button>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    {/* Core minutes fields. These are first-class columns on the
-                        server's MOM record, not admin-configurable extras, so
-                        they're rendered explicitly rather than via field defs. */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <Label required>Client / Company</Label>
-                          {companies.length > 0 && (
-                            <button
-                              type="button"
-                              className="text-[12px] text-primary font-semibold hover:underline mb-1"
-                              onClick={() => setClientMode(m => m === 'select' ? 'custom' : 'select')}
-                            >
-                              {clientMode === 'select' ? 'Type a new company' : 'Choose from directory'}
-                            </button>
-                          )}
-                        </div>
-                        {clientMode === 'select' && companies.length > 0 ? (
-                          <Select
-                            value={companies.some(c => c.name === momCore.client) ? momCore.client : ''}
-                            onChange={e => applyCompanyDefaults(e.target.value)}
-                          >
-                            <option value="">-- Select a company --</option>
-                            {companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                          </Select>
-                        ) : (
-                          <Input value={momCore.client} onChange={e => setMomCore(p => ({ ...p, client: e.target.value }))} placeholder="Who did you meet with?" />
-                        )}
-                      </div>
-                      <div>
-                        <Label required>Purpose of Meeting</Label>
-                        <Input value={momCore.purpose} onChange={e => setMomCore(p => ({ ...p, purpose: e.target.value }))} placeholder="Why did you meet?" />
-                      </div>
-                      <div>
-                        <Label>Location</Label>
-                        <Input value={momCore.location} onChange={e => setMomCore(p => ({ ...p, location: e.target.value }))} />
-                      </div>
-                      <div>
-                        <Label>Contact Person</Label>
-                        <Input value={momCore.contactPerson} onChange={e => setMomCore(p => ({ ...p, contactPerson: e.target.value }))} />
-                      </div>
-                      <div>
-                        <Label>Contact Email</Label>
-                        <Input type="email" value={momCore.contactPersonEmail} onChange={e => setMomCore(p => ({ ...p, contactPersonEmail: e.target.value }))} />
-                      </div>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <Label required>Date of Meeting</Label>
+                      <Input type="date" value={momCore.meetingDate} onChange={e => setMomCore(p => ({ ...p, meetingDate: e.target.value }))} />
                     </div>
                     <div>
-                      <Label>Discussion</Label>
+                      <Label>Time of Meeting</Label>
+                      <Input type="time" value={momCore.meetingTime} onChange={e => setMomCore(p => ({ ...p, meetingTime: e.target.value }))} />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <Label required>Client / Company</Label>
+                        {companies.length > 0 && (
+                          <button type="button" className="text-[12px] text-primary font-semibold hover:underline mb-1" onClick={() => setClientMode(m => m === 'select' ? 'custom' : 'select')}>
+                            {clientMode === 'select' ? 'Type a new company' : 'Choose from directory'}
+                          </button>
+                        )}
+                      </div>
+                      {clientMode === 'select' && companies.length > 0 ? (
+                        <Select value={companies.some(c => c.name === momCore.client) ? momCore.client : ''} onChange={e => applyCompanyDefaults(e.target.value)}>
+                          <option value="">-- Select a company --</option>
+                          {companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        </Select>
+                      ) : (
+                        <Input value={momCore.client} onChange={e => setMomCore(p => ({ ...p, client: e.target.value }))} placeholder="Who did you meet with?" />
+                      )}
+                    </div>
+                    <div>
+                      <Label>Contact Person</Label>
+                      <Input value={momCore.contactPerson} onChange={e => setMomCore(p => ({ ...p, contactPerson: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label required>Purpose of Meeting</Label>
+                      <Input value={momCore.purpose} onChange={e => setMomCore(p => ({ ...p, purpose: e.target.value }))} placeholder="Why did you meet?" />
+                    </div>
+                    <div>
+                      <Label required={momField('contact_person_designation')?.required}>Contact Person Designation</Label>
+                      <Input value={momData.contact_person_designation || ''} onChange={e => setMomData(p => ({ ...p, contact_person_designation: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label>Location of Meeting</Label>
+                      <Input value={momCore.location} onChange={e => setMomCore(p => ({ ...p, location: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label required={momField('type_of_account')?.required}>Type of Account</Label>
+                      <Select value={momData.type_of_account || ''} onChange={e => setMomData(p => ({ ...p, type_of_account: e.target.value }))}>
+                        <option value="">Select...</option>
+                        {momFieldOptions('type_of_account', ['Existing', 'New Client', 'Dormant']).map(option => <option key={option} value={option}>{option}</option>)}
+                      </Select>
+                    </div>
+                    <div>
+                      <Label required={momField('category')?.required}>Category</Label>
+                      <Select value={momData.category || ''} onChange={e => setMomData(p => ({ ...p, category: e.target.value }))}>
+                        <option value="">Select...</option>
+                        {momFieldOptions('category', ['Sales Call', 'Client Servicing', 'Business Review', 'Contract/Negotiation', 'Other']).map(option => <option key={option} value={option}>{option}</option>)}
+                        {momField('category')?.allow_other && !momFieldOptions('category', []).includes('Other') && <option value="Other">Other (Specify)</option>}
+                      </Select>
+                    </div>
+                  </div>
+                  {[
+                    ['Discussion', 'discussion'],
+                    ['Action Items', 'actionItems'],
+                  ].map(([label, key]) => (
+                    <div key={key}>
+                      <Label>{label}</Label>
                       <textarea
                         rows={3}
                         className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                        value={momCore.discussion}
-                        onChange={e => setMomCore(p => ({ ...p, discussion: e.target.value }))}
+                        value={momCore[key as 'discussion' | 'actionItems']}
+                        onChange={e => setMomCore(p => ({ ...p, [key]: e.target.value }))}
                       />
                     </div>
-                    <DynamicFieldRenderer entity="mom" values={momData} onChange={(key, value) => setMomData(p => ({ ...p, [key]: value }))} />
+                  ))}
+                  <div className="rounded-lg border border-outline-variant bg-surface-container-low p-5">
+                    <Label>Client Email</Label>
+                    <Input type="email" value={momCore.contactPersonEmail} onChange={e => setMomCore(p => ({ ...p, contactPersonEmail: e.target.value }))} placeholder="client@company.com" />
+                    <label className="mt-3 flex items-start gap-3 text-body-sm text-on-surface cursor-pointer">
+                      <input type="checkbox" checked={momCore.ccClient} onChange={e => setMomCore(p => ({ ...p, ccClient: e.target.checked }))} className="mt-0.5 h-4 w-4" />
+                      <span>CC the client when this MOM is sent to the approver.</span>
+                    </label>
                   </div>
-                )}
+                </div>
               </CardContent>
             </Card>
           </div>
-        )}
-        
-        {step === 3 && (
-          <Card className="max-w-2xl mx-auto">
-            <CardContent>
-              <h4 className="font-headline-md text-on-surface mb-6">Schedule Review Meeting</h4>
-              <p className="text-on-surface-variant mb-8">Select a time to review this claim with your approver ({approver?.name || 'Assigned Approver'}).</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <Label required>Date</Label>
-                  <Input type="date" value={meetingDate} onChange={e => setMeetingDate(e.target.value)} />
-                </div>
-                <div>
-                  <Label required>Time</Label>
-                  <Input type="time" value={meetingTime} onChange={e => setMeetingTime(e.target.value)} />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         )}
 
         {step === 4 && (
@@ -810,6 +804,10 @@ export function SubmitClaim() {
             <div className="bg-surface-container p-6 rounded-lg text-left inline-block w-full max-w-md">
               <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Type:</span><span className="font-bold">{claimType}</span></div>
               <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Total Amount:</span><span className="font-mono-data font-bold">{formatMoney(totalAmount)}</span></div>
+              {(claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && (
+                <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Reimbursable Amount:</span><span className="font-mono-data font-bold text-primary">{formatMoney(cappedPayout)}</span></div>
+              )}
+              <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Date Filed:</span><span className="font-bold">{new Date().toLocaleDateString()}</span></div>
               <div className="flex justify-between"><span className="text-on-surface-variant">Approver:</span><span className="font-bold">{approver?.name || 'Assigned Approver'}</span></div>
             </div>
           </Card>

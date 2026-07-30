@@ -2,7 +2,8 @@ export enum UserRole {
   REQUESTOR = 'Requestor',
   APPROVER = 'Approver',
   CUSTODIAN = 'Custodian',
-  ADMIN = 'Admin'
+  ADMIN = 'Admin',
+  FINANCE = 'Finance'
 }
 
 export enum ClaimStatus {
@@ -114,11 +115,11 @@ export interface FieldDefinition {
 }
 
 export interface NotificationPrefs {
-  submitted: { inApp: boolean; email: boolean };
-  approved: { inApp: boolean; email: boolean };
-  returned: { inApp: boolean; email: boolean };
-  ready: { inApp: boolean; email: boolean };
-  delegation: { inApp: boolean; email: boolean };
+  submitted: { inApp: boolean; teams: boolean; email?: boolean };
+  approved: { inApp: boolean; teams: boolean; email?: boolean };
+  returned: { inApp: boolean; teams: boolean; email?: boolean };
+  ready: { inApp: boolean; teams: boolean; email?: boolean };
+  delegation: { inApp: boolean; teams: boolean; email?: boolean };
 }
 
 export interface User {
@@ -146,6 +147,7 @@ export interface ExpenseLineItem {
   businessPurpose: string;
   receiptUrl?: string;
   receiptFileName?: string;
+  orNumber?: string;
 }
 
 export interface MOM {
@@ -166,6 +168,7 @@ export interface MOM {
   contactPerson?: string;
   contactPersonDesignation?: string;
   contactPersonEmail?: string;
+  ccClient?: boolean;
   description?: string;
   agreements?: string;
   actionItems?: string;
@@ -211,7 +214,7 @@ export interface StatusHistory {
   comment?: string;
 }
 
-export type ClaimType = 'Reimbursement' | 'Cash Advance' | 'Liquidation';
+export type ClaimType = 'Reimbursement' | 'Transport Reimbursement' | 'Cash Advance' | 'Liquidation';
 
 export interface Claim {
   id: string;
@@ -219,9 +222,11 @@ export interface Claim {
   requestorId: string;
   status: ClaimStatus;
   total: number;
+  reimbursableAmount?: number;
   submittedAt?: string;
   createdAt: string;
   type: ClaimType;
+  reimbursementType?: 'Standard' | 'Transport';
   purpose: string; // derived from MOM usually, but useful at top level
   
   // Custom flags
@@ -317,6 +322,8 @@ export interface SystemEmail {
   to: string;
   subject: string;
   body: string;
+  channel?: 'Email' | 'Teams';
+  deliveryStatus?: 'Logged' | 'Delivered' | 'Failed';
   read: boolean;
   timestamp: string;
 }

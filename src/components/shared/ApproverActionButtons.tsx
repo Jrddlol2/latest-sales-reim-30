@@ -20,10 +20,16 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
 
   const [activeModal, setActiveModal] = useState<'approve' | 'reject' | 'return' | null>(null);
   const [comment, setComment] = useState('');
+  const [scheduleReview, setScheduleReview] = useState(false);
+  const [reviewDate, setReviewDate] = useState('');
+  const [reviewTime, setReviewTime] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAction = (action: 'approve' | 'reject' | 'return') => {
     setComment('');
+    setScheduleReview(false);
+    setReviewDate('');
+    setReviewTime('');
     setActiveModal(action);
   };
 
@@ -53,7 +59,15 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
 
     setIsSubmitting(true);
     try {
-      await updateClaimStatus(claim.id, newStatus, currentUser.id, comment);
+      await updateClaimStatus(
+        claim.id,
+        newStatus,
+        currentUser.id,
+        comment,
+        activeModal === 'return' && scheduleReview
+          ? { reviewMeetingSchedule: { meetingDate: reviewDate, meetingTime: reviewTime } } as any
+          : undefined,
+      );
       addToast(toastMsg, toastType);
       setActiveModal(null);
     } catch (err: any) {
@@ -65,7 +79,9 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
     }
   };
 
-  const isConfirmDisabled = (activeModal === 'reject' || activeModal === 'return') && comment.trim() === '';
+  const isConfirmDisabled =
+    ((activeModal === 'reject' || activeModal === 'return') && comment.trim() === '') ||
+    (activeModal === 'return' && scheduleReview && (!reviewDate || !reviewTime));
 
   return (
     <>
@@ -128,6 +144,24 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
           />
           {isConfirmDisabled && (
             <p className="text-error text-body-sm mt-1">A reason is required to return a claim.</p>
+          )}
+        </div>
+        <div className="mt-5 rounded-lg border border-outline-variant bg-surface-container-low p-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={scheduleReview} onChange={e => setScheduleReview(e.target.checked)} />
+            <span className="font-label-md">Schedule an optional review meeting</span>
+          </label>
+          {scheduleReview && (
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <div>
+                <label className="block text-label-sm mb-1">Date</label>
+                <input type="date" className="w-full rounded-md border border-outline-variant bg-white px-3 py-2" value={reviewDate} onChange={e => setReviewDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-label-sm mb-1">Time</label>
+                <input type="time" className="w-full rounded-md border border-outline-variant bg-white px-3 py-2" value={reviewTime} onChange={e => setReviewTime(e.target.value)} />
+              </div>
+            </div>
           )}
         </div>
       </ConfirmModal>

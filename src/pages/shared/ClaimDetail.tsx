@@ -12,6 +12,7 @@ import { confirmReceipt, uploadUrl, resubmitClaimFlow, DraftLineItem } from '../
 import { UserRole, ClaimStatus, ExpenseLineItem } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDateTime } from '../../lib/date';
+import { isPurchaseOlderThan30Days } from '../../lib/reimbursement';
 
 export function ClaimDetail() {
   const { addToast } = useToast();
@@ -48,7 +49,8 @@ export function ClaimDetail() {
   // Returned is a Reimbursement-only status (PUT /api/claims/:id/resubmit is
   // specific to the `claims` table — Cash Advances/Liquidations use their own
   // ReturnedForRevision flow with different routes).
-  const canResubmit = currentUser.id === claim.requestorId && claim.status === ClaimStatus.RETURNED && claim.type === 'Reimbursement';
+  const canResubmit = currentUser.id === claim.requestorId && claim.status === ClaimStatus.RETURNED &&
+    (claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement');
 
   const openRevise = () => {
     setReviseLineItems(items.map(li => ({
@@ -58,6 +60,7 @@ export function ClaimDetail() {
       businessPurpose: li.businessPurpose,
       expenseDate: li.expenseDate,
       paymentMethod: li.paymentMethod,
+      orNumber: li.orNumber,
       receiptUrl: li.receiptUrl,
     })));
     setRevising(true);
@@ -68,13 +71,13 @@ export function ClaimDetail() {
       addToast('Add at least one expense line item.', 'error');
       return;
     }
-    if (!mom) {
+    if (!mom && claim.type !== 'Transport Reimbursement') {
       addToast('This claim has no Minutes of Meeting to resubmit against.', 'error');
       return;
     }
     setSubmittingRevision(true);
     try {
-      await resubmitClaimFlow({ claimId: claim.id, momId: mom.id, lineItems: reviseLineItems, remarks: claim.purpose });
+      await resubmitClaimFlow({ claimId: claim.id, momId: mom?.id, lineItems: reviseLineItems, remarks: claim.purpose });
       await refresh();
       addToast('Claim revised and resubmitted for approval.', 'success');
       setRevising(false);
@@ -119,6 +122,7 @@ export function ClaimDetail() {
              <h1 className="font-display text-display text-on-surface break-words">{claim.purpose}</h1>
              <StatusBadge status={claim.status} />
           </div>
+          <p className="text-body-sm text-outline mt-2">Date Filed: {formatDateTime(claim.submittedAt || claim.createdAt)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3 shrink-0">
           <Button variant="outline" className="gap-2" onClick={() => window.print()}>
@@ -182,7 +186,7 @@ export function ClaimDetail() {
                     <p className="font-body-lg text-on-surface">{mom.purposeOfMeeting || 'N/A'}</p>
                   </div>
                   <div>
-                    <p className="font-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Location</p>
+                    <p className="font-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Location of Meeting</p>
                     <div className="flex items-center gap-2">
                       <span className="material-symbols-outlined text-error text-[18px]">location_on</span>
                       <p className="font-body-lg text-on-surface">{mom.location || 'N/A'}</p>
@@ -225,14 +229,15 @@ export function ClaimDetail() {
             <CardHeader>
               <h3 className="font-headline-md text-on-surface">Expense Line Items</h3>
               <div className="bg-primary-fixed text-on-primary-fixed px-3 py-1 rounded-full font-label-md">
-                Total: {formatMoney(claim.total)}
+                Claimed: {formatMoney(claim.total)} · Reimbursable: {formatMoney(claim.reimbursableAmount ?? Math.min(claim.total, 1000))}
               </div>
             </CardHeader>
             <div className="overflow-x-auto hidden md:block">
               <table className="w-full text-left">
                 <thead className="bg-surface-container-low">
                   <tr>
-                    <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Date</th>
+                    <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Date of Purchase</th>
+                    <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">OR Number</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Category</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Vendor / Purpose</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Payment</th>
@@ -245,7 +250,13 @@ export function ClaimDetail() {
                     const hasReceipt = Boolean(item.receiptUrl);
                     return (
                       <tr key={item.id} className="hover:bg-primary/5 transition-colors">
-                        <td className="px-4 py-3 font-mono-data text-xs">{item.expenseDate}</td>
+                        <td className="px-4 py-3 font-mono-data text-xs">
+                          {item.expenseDate}
+                          {isPurchaseOlderThan30Days(item.expenseDate, new Date(claim.submittedAt || claim.createdAt)) && (
+                            <span className="block text-tertiary mt-1">Over 30 days old</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-mono-data text-xs">{item.orNumber || '—'}</td>
                         <td className="px-4 py-3">
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                             {item.category}
@@ -277,7 +288,7 @@ export function ClaimDetail() {
                   })}
                   {items.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-8 text-center text-on-surface-variant">
+                      <td colSpan={7} className="px-6 py-8 text-center text-on-surface-variant">
                         No line items found.
                       </td>
                     </tr>
@@ -456,7 +467,7 @@ export function ClaimDetail() {
 
               <p className="text-body-sm text-on-surface-variant">
                 Enter the release code provided by your custodian to confirm you received the
-                payout for <span className="font-semibold text-on-surface">{claim.ref}</span> ({formatMoney(claim.total)}).
+                payout for <span className="font-semibold text-on-surface">{claim.ref}</span> ({formatMoney(claim.reimbursableAmount ?? Math.min(claim.total, 1000))}).
                 This completes your reimbursement.
               </p>
 

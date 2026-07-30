@@ -10,12 +10,11 @@ import { formatDateTime, formatLongDate } from '../../lib/date';
 
 const DECISION_STATUSES: string[] = [ClaimStatus.APPROVED, ClaimStatus.REJECTED, ClaimStatus.RETURNED];
 const PENDING_STATUSES: string[] = [ClaimStatus.PENDING_APPROVAL, ClaimStatus.SUBMITTED];
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function ApproverDashboard() {
   const navigate = useNavigate();
   const { currentUser, claims, users, statusHistory, delegations } = useAppContext();
-  const [typeFilter, setTypeFilter] = useState<'All' | 'Reimbursement' | 'Cash Advance' | 'Liquidation'>('All');
+  const [typeFilter, setTypeFilter] = useState<'All' | 'Reimbursement' | 'Transport Reimbursement' | 'Cash Advance' | 'Liquidation'>('All');
 
   const nameOf = (id: string) => users.find(u => u.id === id)?.name || 'someone';
 
@@ -34,7 +33,9 @@ export function ApproverDashboard() {
   // Mirrors ApprovalQueue.tsx's own scoping: claims actually assigned to this
   // approver and still awaiting their decision.
   const myPending = useMemo(
-    () => claims.filter(c => c.approverId === currentUser.id && PENDING_STATUSES.includes(c.status)),
+    () => claims
+      .filter(c => c.approverId === currentUser.id && PENDING_STATUSES.includes(c.status))
+      .sort((a, b) => new Date(a.submittedAt || a.createdAt).getTime() - new Date(b.submittedAt || b.createdAt).getTime()),
     [claims, currentUser.id]
   );
 
@@ -54,36 +55,41 @@ export function ApproverDashboard() {
   );
 
   const decisionsThisWeek = useMemo(
-    () => myDecisions.filter(h => Date.now() - new Date(h.timestamp).getTime() <= ONE_WEEK_MS).length,
+    () => {
+      const now = new Date();
+      const mondayOffset = (now.getDay() + 6) % 7;
+      const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset).getTime();
+      return myDecisions.filter(h => new Date(h.timestamp).getTime() >= monday).length;
+    },
     [myDecisions]
   );
 
-  const approvalRate = useMemo(() => {
-    const approved = myDecisions.filter(h => h.newStatus === ClaimStatus.APPROVED).length;
-    const decided = myDecisions.filter(h => h.newStatus === ClaimStatus.APPROVED || h.newStatus === ClaimStatus.REJECTED).length;
-    return decided === 0 ? null : Math.round((approved / decided) * 100);
-  }, [myDecisions]);
-
-  // Average time between a claim entering this approver's queue and their
-  // decision on it, computed from the claim's own history entries.
-  const avgResponseHours = useMemo(() => {
-    const byClaim = new Map<string, typeof statusHistory>();
-    statusHistory.forEach(h => {
-      if (!byClaim.has(h.claimId)) byClaim.set(h.claimId, []);
-      byClaim.get(h.claimId)!.push(h);
-    });
-    const durationsMs: number[] = [];
-    myDecisions.forEach(decision => {
-      const entries = (byClaim.get(decision.claimId) || []).slice().sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      const submitted = entries.find(e => PENDING_STATUSES.includes(e.newStatus));
-      if (submitted) {
-        const ms = new Date(decision.timestamp).getTime() - new Date(submitted.timestamp).getTime();
-        if (ms > 0) durationsMs.push(ms);
-      }
-    });
-    if (durationsMs.length === 0) return null;
-    return durationsMs.reduce((a, b) => a + b, 0) / durationsMs.length / (1000 * 60 * 60);
-  }, [myDecisions, statusHistory]);
+  const weekStart = useMemo(() => {
+    const now = new Date();
+    const mondayOffset = (now.getDay() + 6) % 7;
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset).getTime();
+  }, []);
+  const teamMembers = useMemo(() => users.filter(u => u.reportsTo === currentUser.id), [users, currentUser.id]);
+  const teamMemberIds = useMemo(() => new Set(teamMembers.map(u => u.id)), [teamMembers]);
+  const completedThisWeekIds = useMemo(() => new Set(
+    statusHistory.filter(h => h.newStatus === ClaimStatus.COMPLETED && new Date(h.timestamp).getTime() >= weekStart).map(h => h.claimId)
+  ), [statusHistory, weekStart]);
+  const reimbursedThisWeek = useMemo(() => claims
+    .filter(c => teamMemberIds.has(c.requestorId) && completedThisWeekIds.has(c.id))
+    .reduce((sum, c) => sum + (c.reimbursableAmount ?? Math.min(c.total, 1000)), 0),
+    [claims, teamMemberIds, completedThisWeekIds]
+  );
+  const teamStats = useMemo(() => teamMembers.map(member => {
+    const memberClaims = claims.filter(c => c.requestorId === member.id);
+    return {
+      member,
+      totalClaims: memberClaims.length,
+      pending: memberClaims.filter(c => PENDING_STATUSES.includes(c.status)).length,
+      reimbursedThisWeek: memberClaims
+        .filter(c => completedThisWeekIds.has(c.id))
+        .reduce((sum, c) => sum + (c.reimbursableAmount ?? Math.min(c.total, 1000)), 0),
+    };
+  }), [teamMembers, claims, completedThisWeekIds]);
 
   const exportWorklist = () => {
     const rows = [
@@ -137,7 +143,7 @@ export function ApproverDashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-surface-container-lowest p-6 border border-outline-variant rounded-card shadow-sm">
           <p className="font-label-sm text-outline uppercase mb-2">Awaiting Approval</p>
           <p className="font-headline-lg text-on-surface">{myPending.length}</p>
@@ -147,12 +153,8 @@ export function ApproverDashboard() {
           <p className="font-headline-lg text-on-surface">{formatMoney(totalPendingAmount)}</p>
         </div>
         <div className="bg-surface-container-lowest p-6 border border-outline-variant rounded-card shadow-sm">
-          <p className="font-label-sm text-outline uppercase mb-2">Avg. Response Time</p>
-          <p className="font-headline-lg text-on-surface">{avgResponseHours === null ? '—' : `${avgResponseHours.toFixed(1)} hrs`}</p>
-        </div>
-        <div className="bg-surface-container-lowest p-6 border border-outline-variant rounded-card shadow-sm">
-          <p className="font-label-sm text-outline uppercase mb-2">Approval Rate</p>
-          <p className="font-headline-lg text-on-surface">{approvalRate === null ? '—' : `${approvalRate}%`}</p>
+          <p className="font-label-sm text-outline uppercase mb-2">Team Reimbursed This Week</p>
+          <p className="font-headline-lg text-on-surface">{formatMoney(reimbursedThisWeek)}</p>
         </div>
       </div>
 
@@ -160,13 +162,13 @@ export function ApproverDashboard() {
           gets clipped: setting overflow-x forces overflow-y to auto too,
           which crops any box-shadow that extends past the scroll box. */}
       <div className="flex flex-wrap items-center gap-3 py-2">
-        {(['All', 'Reimbursement', 'Cash Advance', 'Liquidation'] as const).map(t => (
+        {(['All', 'Reimbursement', 'Transport Reimbursement', 'Cash Advance', 'Liquidation'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTypeFilter(t)}
             className={`px-5 py-2 rounded-full font-label-md transition-colors focus:ring-2 focus:ring-primary outline-none whitespace-nowrap ${typeFilter === t ? 'bg-primary text-white shadow-md' : 'bg-surface-container-high text-on-surface-variant hover:bg-outline-variant'}`}
           >
-            {t === 'All' ? 'All Requests' : t === 'Reimbursement' ? 'Claims' : t === 'Cash Advance' ? 'Cash Advances' : 'Liquidations'}
+            {t === 'All' ? 'All Requests' : t}
           </button>
         ))}
       </div>
@@ -174,7 +176,10 @@ export function ApproverDashboard() {
       <Card>
         <CardHeader className="bg-surface-container-low/50">
           <h4 className="font-headline-md text-on-surface">Unified Worklist</h4>
-          <span className="font-label-sm text-outline">{displayedClaims.length} of {myPending.length}</span>
+          <div className="flex items-center gap-3">
+            <span className="font-label-sm text-outline">{displayedClaims.length} of {myPending.length}</span>
+            <Button size="sm" variant="outline" onClick={() => navigate('/approvals')}>View All</Button>
+          </div>
         </CardHeader>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -239,6 +244,26 @@ export function ApproverDashboard() {
         </div>
       </Card>
 
+      <Card className="p-6">
+        <div className="flex justify-between items-center mb-5">
+          <div>
+            <h4 className="font-headline-md text-on-surface">Team Analytics</h4>
+            <p className="text-body-sm text-outline">Direct reports and reimbursements completed Monday through today.</p>
+          </div>
+          <span className="material-symbols-outlined text-primary">groups</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {teamStats.map(({ member, totalClaims, pending, reimbursedThisWeek: memberReimbursed }) => (
+            <div key={member.id} className="rounded-lg border border-outline-variant bg-surface-container-low p-4">
+              <p className="font-label-md text-on-surface">{member.name}</p>
+              <p className="text-body-sm text-outline">{totalClaims} claims · {pending} pending</p>
+              <p className="font-mono-data font-bold text-primary mt-3">{formatMoney(memberReimbursed)} this week</p>
+            </div>
+          ))}
+          {teamStats.length === 0 && <p className="text-body-sm text-outline">No direct reports found.</p>}
+        </div>
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <Card className="lg:col-span-2 p-6">
           <div className="flex justify-between items-center mb-6">
@@ -272,15 +297,15 @@ export function ApproverDashboard() {
         <Card className="relative overflow-hidden p-6 flex flex-col justify-between">
           <div className="z-10 relative">
             <h4 className="font-headline-md text-on-surface mb-2">This Week</h4>
-            <p className="text-body-sm text-outline mb-6">Your activity over the last 7 days</p>
+            <p className="text-body-sm text-outline mb-6">Your activity from Monday through today</p>
             <div className="space-y-4">
               <div className="flex justify-between items-baseline">
                 <span className="font-label-sm text-on-surface-variant">Decisions Made</span>
                 <span className="font-headline-md text-primary">{decisionsThisWeek}</span>
               </div>
               <div className="flex justify-between items-baseline">
-                <span className="font-label-sm text-on-surface-variant">Approval Rate</span>
-                <span className="font-headline-md text-tertiary">{approvalRate === null ? '—' : `${approvalRate}%`}</span>
+                <span className="font-label-sm text-on-surface-variant">Team Reimbursed</span>
+                <span className="font-headline-md text-tertiary">{formatMoney(reimbursedThisWeek)}</span>
               </div>
             </div>
           </div>

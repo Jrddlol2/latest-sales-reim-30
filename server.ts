@@ -47,7 +47,8 @@ let systemSettings = {
   // Single source of truth for every payment-method picker (disbursement,
   // cash advance release, liquidation refund collection) so adding/removing
   // a method is a one-line admin change, not a hunt through JSX.
-  paymentMethods: ['Cash', 'GCash', 'Bank Transfer', 'Check'],
+  paymentMethods: ['Cash'],
+  reimbursementCap: 1000,
   // Company spending policy: the maximum amount allowed on a single expense line
   // item, per category. A category absent here (or set to 0) has no cap. Admins
   // edit this from the Company Policy screen; the claim/liquidation submit routes
@@ -66,14 +67,10 @@ let claimCounter = 123;
  * if every line is within policy. Shared by the reimbursement and liquidation
  * submit paths so the rule lives in exactly one place.
  */
-function checkCategoryLimits(items: Array<{ category?: string; amount?: number }>): string | null {
-  const limits = systemSettings.categoryLimits || {};
-  for (const item of items) {
-    const cap = item.category ? limits[item.category] : undefined;
-    if (cap && cap > 0 && Number(item.amount) > cap) {
-      return `Company policy caps ${item.category} at ${formatPHP(cap)} per item — one line is ${formatPHP(Number(item.amount))}. Adjust it or request an exception.`;
-    }
-  }
+function checkCategoryLimits(_items: Array<{ category?: string; amount?: number }>): string | null {
+  // Category limits are retained as legacy configuration for old demo data,
+  // but they no longer block a request. The approved policy allows any claimed
+  // amount and caps only the amount actually paid out.
   return null;
 }
 
@@ -205,7 +202,7 @@ const buildInitialFieldDefinitions = (): FieldDefinition[] => {
     {
       entity: 'mom', key: 'type_of_account', label: 'Type of Account', input_type: 'dropdown',
       required: false, active: true, display_order: 1,
-      options: ['Existing Client', 'Prospective Client / Lead', 'Partner / Distributor', 'Internal / Other'],
+      options: ['Existing', 'New Client', 'Dormant'],
     },
     {
       entity: 'mom', key: 'category', label: 'Category', input_type: 'dropdown',
@@ -223,18 +220,6 @@ const buildInitialFieldDefinitions = (): FieldDefinition[] => {
     // Company with a matching default pre-fills these (see the MOM forms'
     // company-select handler), but they stay user-editable dropdowns, since
     // Master Data has no formal parent/child linkage to filter options by.
-    {
-      entity: 'mom', key: 'department', label: 'Department', input_type: 'dropdown',
-      required: false, active: true, display_order: 4, master_data_entity: 'departments',
-    },
-    {
-      entity: 'mom', key: 'cost_center', label: 'Cost Center', input_type: 'dropdown',
-      required: false, active: true, display_order: 5, master_data_entity: 'costCenters',
-    },
-    {
-      entity: 'mom', key: 'project_code', label: 'Project Code', input_type: 'dropdown',
-      required: false, active: true, display_order: 6, master_data_entity: 'projectCodes',
-    },
   ];
   return defs.map(d => ({ ...d, id: uuidv4(), created_at: now, updated_at: now }));
 };
@@ -269,6 +254,7 @@ const buildDefaultUsers = (): User[] => [
   { id: 'u2', name: 'Bob Santos', email: 'bob@mgenesis.com', role: UserRole.APPROVER, department: 'Sales', job_title: 'Sales Director', reports_to: 'u9', avatar_url: '/avatars/corp_male_4.jpg' },
   { id: 'u3', name: 'Carol Ramos', email: 'carol@mgenesis.com', role: UserRole.CUSTODIAN, department: 'Finance', job_title: 'Reimbursement Processor', reports_to: null, avatar_url: '/avatars/corp_female_2.jpg' },
   { id: 'u4', name: 'Dave Lopez', email: 'dave@mgenesis.com', role: UserRole.ADMIN, department: 'IT', job_title: 'System Admin', reports_to: null, avatar_url: '/avatars/corp_male_1.jpg' },
+  { id: 'u22', name: 'Fiona Mercado', email: 'fiona@mgenesis.com', role: UserRole.FINANCE, department: 'Finance', job_title: 'Finance Analyst', reports_to: null, avatar_url: '/avatars/corp_female_1.jpg' },
   { id: 'u5', name: 'Eve Garcia', email: 'eve@mgenesis.com', role: UserRole.REQUESTOR, department: 'Sales', job_title: 'Sales Executive', reports_to: 'u2', avatar_url: '/avatars/corp_female_3.jpg' },
   { id: 'u6', name: 'Frank Mendoza', email: 'frank@mgenesis.com', role: UserRole.REQUESTOR, department: 'Sales', job_title: 'Sales Executive', reports_to: 'u2', avatar_url: '/avatars/corp_male_2.jpg' },
   { id: 'u7', name: 'Grace Navarro', email: 'grace@mgenesis.com', role: UserRole.APPROVER, department: 'Sales', job_title: 'Sales Director', reports_to: 'u9', avatar_url: '/avatars/corp_female_4.jpg' },
@@ -284,7 +270,9 @@ const buildDefaultUsers = (): User[] => [
   { id: 'u21', name: 'Marco Bernardo', email: 'marco@mgenesis.com', role: UserRole.REQUESTOR, department: 'Marketing', job_title: 'Content Strategist', reports_to: 'u14', avatar_url: '/avatars/corp_male_3.jpg' }
 ].map(withEntraFields);
 
-// Email Transport Mock
+// Prototype notification transport. Internal workflow messages are recorded as
+// Teams messages (and still drive in-app notifications); only a MOM explicitly
+// sent to an external client remains an email.
 // opts.plain sends an unstyled personal-message email (no SharePoint header/footer) -
 // used for the MOM email to an external client contact, which must read as a personal
 // message, not a system notification. Every other notification keeps the full
@@ -294,7 +282,8 @@ const sendEmail = (toOrId: string, subject: string, body: string, ccId?: string,
   const toEmail = recipient ? recipient.email : toOrId;
   const recipientId = recipient ? recipient.id : 'external';
   const recipientName = opts?.recipientName || (recipient ? recipient.name : toOrId.split('@')[0]);
-  const fromLine = opts?.plain ? (opts.fromLabel || 'system@reimbursement.local') : "SharePoint Online <no-reply@mgenesis.com>";
+  const channel: 'Email' | 'Teams' = opts?.plain ? 'Email' : 'Teams';
+  const fromLine = opts?.plain ? (opts.fromLabel || 'system@reimbursement.local') : 'Sales Reimbursement System';
 
   const emailTimestamp = opts?.timestamp || new Date().toISOString();
   const sentString = new Date(emailTimestamp).toLocaleString('en-US', { timeZone: 'Asia/Manila' });
@@ -304,31 +293,10 @@ const sendEmail = (toOrId: string, subject: string, body: string, ccId?: string,
 
 
 ${body}`
-    : `From:
-${fromLine}
+    : `${body}
 
-Sent:
-${sentString}
-
-To:
-${toEmail}${ccId ? `\nCC:\n${users.find(u => u.id === ccId)?.email || ccId}` : ''}
-
-Subject:
-${subject}
-
-
-Dear ${recipientName},
-
-
-${body}
-
-
-This is an automatically generated email.
-Please do not reply.
-
-
-Sales Reimbursement System
-Business Support Management Assistant`;
+Sent via Microsoft Teams (prototype log)
+${sentString}`;
 
   const email: Email = {
     id: uuidv4(),
@@ -337,6 +305,8 @@ Business Support Management Assistant`;
     to: toEmail,
     subject,
     body: finalBody,
+    channel,
+    delivery_status: 'Logged',
     read: false,
     timestamp: emailTimestamp
   };
@@ -344,23 +314,23 @@ Business Support Management Assistant`;
 
   if (ccId) {
     const ccRecipient = users.find(u => u.id === ccId);
-    if (ccRecipient) {
-      emails.push({
-        id: uuidv4(),
-        recipient_id: ccRecipient.id,
-        from: fromLine,
-        to: ccRecipient.email,
-        subject: `[CC] ${subject}`,
-        body: finalBody,
-        read: false,
-        timestamp: emailTimestamp
-      });
-    }
+    emails.push({
+      id: uuidv4(),
+      recipient_id: ccRecipient?.id || 'external',
+      from: fromLine,
+      to: ccRecipient?.email || ccId,
+      subject: `[CC] ${subject}`,
+      body: finalBody,
+      channel,
+      delivery_status: 'Logged',
+      read: false,
+      timestamp: emailTimestamp
+    });
   }
 
-  console.log(`\n--- MOCK EMAIL TRANSPORT ---`);
+  console.log(`\n--- MOCK ${channel.toUpperCase()} TRANSPORT ---`);
   console.log(`To: ${email.to}`);
-  if (ccId) console.log(`CC: ${users.find(u => u.id === ccId)?.email}`);
+  if (ccId) console.log(`CC: ${users.find(u => u.id === ccId)?.email || ccId}`);
   console.log(`Subject: ${email.subject}`);
   console.log(`Body:\n${email.body}`);
   console.log(`----------------------------\n`);
@@ -1198,7 +1168,10 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       relevantMoms = moms.filter(m => m.requestor_id === user.id);
     } else if (user.role === UserRole.APPROVER) {
       const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
-      relevantMoms = moms.filter(m => m.requestor_id === user.id || (m.requestor_id && reporteeIds.includes(m.requestor_id)));
+      relevantMoms = moms.filter(m =>
+        m.requestor_id === user.id ||
+        (!!m.claim_id && !!m.requestor_id && reporteeIds.includes(m.requestor_id))
+      );
     }
 
     // Enrich with requestor name
@@ -1234,7 +1207,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       hasAccess = mom.requestor_id === user.id;
     } else if (user.role === UserRole.APPROVER) {
       const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
-      hasAccess = mom.requestor_id === user.id || !!(mom.requestor_id && reporteeIds.includes(mom.requestor_id));
+      hasAccess = mom.requestor_id === user.id || !!(mom.claim_id && mom.requestor_id && reporteeIds.includes(mom.requestor_id));
     }
 
     if (!hasAccess) {
@@ -1257,7 +1230,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
   app.get('/api/receipts', (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    if (user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
+    if (![UserRole.ADMIN, UserRole.FINANCE].includes(user.role)) return res.status(403).json({ error: 'Forbidden' });
 
     const flatReceipts = [];
 
@@ -1326,6 +1299,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       client: req.body.client || '',
       contact_person: req.body.contact_person || '',
       contact_person_email: req.body.contact_person_email || '',
+      cc_client: Boolean(req.body.cc_client),
       meeting_date: req.body.meeting_date || new Date().toISOString().split('T')[0],
       meeting_time: req.body.meeting_time || '',
       location: req.body.location || '',
@@ -1381,6 +1355,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     getOrCreateCompany(mom.client);
     mom.contact_person = req.body.contact_person ?? mom.contact_person;
     mom.contact_person_email = req.body.contact_person_email ?? mom.contact_person_email;
+    mom.cc_client = req.body.cc_client ?? mom.cc_client;
     mom.meeting_date = req.body.meeting_date ?? mom.meeting_date;
     mom.meeting_time = req.body.meeting_time ?? mom.meeting_time;
     mom.location = req.body.location ?? mom.location;
@@ -1415,7 +1390,8 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
 
     mom.status = MomStatus.COMPLETED;
 
-    // Send MOM email - 1. MOM Email (To: Contact Person, CC: Approver)
+    // The approver is the internal recipient. The external client is copied
+    // only when the requestor explicitly checked "CC client".
     const approverId = user.reports_to || '';
     const subject = `Meeting Summary - ${mom.client || 'Client'}`;
     const body = `Thank you for meeting with us on ${mom.meeting_date} regarding ${mom.purpose || 'our business discussion'}.
@@ -1433,11 +1409,11 @@ Best regards,
 ${user.name}`;
 
     sendEmail(
-      mom.contact_person_email || 'client@mgenesis.com',
+      approverId,
       subject,
       body,
-      approverId || undefined,
-      { plain: true, recipientName: mom.contact_person || 'Valued Client', fromLabel: `${user.name} <${user.email}>` }
+      mom.cc_client && mom.contact_person_email ? mom.contact_person_email : undefined,
+      { plain: true, recipientName: users.find(u => u.id === approverId)?.name || 'Approver', fromLabel: `${user.name} <${user.email}>` }
     );
 
     res.json(mom);
@@ -1459,7 +1435,7 @@ ${user.name}`;
       // it reaches PROCESSING, and the review-before-processing step in
       // ProcessingQueue.tsx would never be reachable in practice.
       filtered = claims.filter(c => [ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(c.status) || c.requestor_id === user.id);
-    } else if (user.role === UserRole.ADMIN) {
+    } else if (user.role === UserRole.ADMIN || user.role === UserRole.FINANCE) {
       filtered = claims; // Admin sees all
     }
 
@@ -1517,7 +1493,7 @@ ${user.name}`;
     // was correctly scoped but this single-record lookup was not, allowing any
     // authenticated user to read any claim by id.
     let hasAccess = false;
-    if (user.role === UserRole.ADMIN) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.FINANCE) {
       hasAccess = true;
     } else if (user.role === UserRole.REQUESTOR) {
       hasAccess = claim.requestor_id === user.id;
@@ -1550,21 +1526,18 @@ ${user.name}`;
     const user = getUser(req);
     if (!user || !user.reports_to) return res.status(403).json({ error: 'Forbidden: You must have a designated manager (reports_to) to submit.' });
     
-    const { mom_id, expense_category, total_amount, receipt_url, or_number, remarks, supporting_documents, line_items, meeting_date, meeting_time, is_draft } = req.body;
+    const { mom_id, expense_category, total_amount, receipt_url, or_number, remarks, supporting_documents, line_items, is_draft, reimbursement_type } = req.body;
+    const isTransport = reimbursement_type === 'Transport';
 
-    if (!is_draft && !mom_id) return res.status(400).json({ error: 'Minutes of Meeting (MOM) is required.' });
-    const mom = moms.find(m => m.id === mom_id);
-    if (!mom) return res.status(400).json({ error: 'Minutes of Meeting (MOM) not found.' });
+    if (!is_draft && !mom_id && !isTransport) return res.status(400).json({ error: 'Minutes of Meeting (MOM) is required.' });
+    const mom = mom_id ? moms.find(m => m.id === mom_id) : undefined;
+    if (mom_id && !mom) return res.status(400).json({ error: 'Minutes of Meeting (MOM) not found.' });
 
-    if (!is_draft && mom.status !== MomStatus.COMPLETED) {
+    if (!is_draft && mom && mom.status !== MomStatus.COMPLETED) {
       return res.status(400).json({ error: 'Cannot attach an incomplete or draft Minutes of Meeting.' });
     }
-    if (mom.claim_id) {
+    if (mom?.claim_id) {
       return res.status(400).json({ error: 'This Minutes of Meeting is already linked to another claim and cannot be reused.' });
-    }
-
-    if (!is_draft && (!meeting_date || !meeting_time)) {
-      return res.status(400).json({ error: 'A Review Meeting date and time must be scheduled with your Approver.' });
     }
 
     let itemsToCreate: any[] = [];
@@ -1589,7 +1562,7 @@ ${user.name}`;
           vendor: item.vendor,
           expense_date: item.expense_date,
           payment_method: item.payment_method,
-          business_purpose: item.business_purpose || remarks || `Sales reimbursement for meeting with ${mom.client}`
+          business_purpose: item.business_purpose || remarks || (isTransport ? 'Transport reimbursement' : `Sales reimbursement for meeting with ${mom?.client || 'client'}`)
         });
         claimTotal += numericAmount;
       }
@@ -1614,7 +1587,7 @@ ${user.name}`;
         amount: numericAmount,
         receipt_url: receipt_url,
         or_number: or_number,
-        business_purpose: remarks || `Sales reimbursement for meeting with ${mom.client}`
+        business_purpose: remarks || (isTransport ? 'Transport reimbursement' : `Sales reimbursement for meeting with ${mom?.client || 'client'}`)
       });
       claimTotal = numericAmount;
       mainCategory = expense_category;
@@ -1640,8 +1613,8 @@ ${user.name}`;
       expenses.push({
         id: uuidv4(),
         claim_id: claimId,
-        expense_date: item.expense_date || mom.meeting_date,
-        vendor: item.vendor || mom.client || 'Client Meeting',
+        expense_date: item.expense_date || mom?.meeting_date || new Date().toISOString().split('T')[0],
+        vendor: item.vendor || mom?.client || (isTransport ? 'Transport Provider' : 'Client Meeting'),
         category: item.category,
         amount: item.amount,
         payment_method: item.payment_method || 'Cash',
@@ -1662,16 +1635,6 @@ ${user.name}`;
       }
     }
 
-    const hasConflict = reviewMeetings.some(rm =>
-      rm.approver_id === currentApproverId &&
-      [ReviewMeetingStatus.PENDING_CONFIRMATION, ReviewMeetingStatus.CONFIRMED].includes(rm.status) &&
-      rm.meeting_date === meeting_date &&
-      rm.meeting_time === meeting_time
-    );
-    if (hasConflict) {
-      return res.status(409).json({ error: 'Your Approver already has a Review Meeting scheduled at that date and time. Please choose another slot.' });
-    }
-
     const claim: Claim = {
       id: claimId,
       claim_number: claimNumber,
@@ -1679,8 +1642,10 @@ ${user.name}`;
       current_approver_id: currentApproverId,
       original_approver_id: originalApproverId,
       mom_id: mom_id,
+      reimbursement_type: isTransport ? 'Transport' : 'Standard',
       status: ClaimStatus.PENDING_APPROVAL,
       total_amount: claimTotal,
+      reimbursable_amount: Math.min(claimTotal, systemSettings.reimbursementCap),
       expense_category: mainCategory,
       receipt_url: mainReceipt,
       remarks,
@@ -1691,20 +1656,15 @@ ${user.name}`;
     };
 
     claims.push(claim);
-    mom.claim_id = claimId; // link MOM to claim
+    if (mom) mom.claim_id = claimId;
 
-    reviewMeetings.push({
-      id: uuidv4(),
-      claim_id: claim.id,
-      requestor_id: user.id,
-      approver_id: currentApproverId,
-      meeting_date,
-      meeting_time,
-      status: ReviewMeetingStatus.PENDING_CONFIRMATION,
-      created_at: new Date().toISOString()
-    });
-
-    addHistory(claim.id, ClaimStatus.DRAFT, ClaimStatus.PENDING_APPROVAL, user.id);
+    addHistory(
+      claim.id,
+      ClaimStatus.DRAFT,
+      ClaimStatus.PENDING_APPROVAL,
+      user.id,
+      `Claim filed; reimbursable amount ${formatPHP(claim.reimbursable_amount || 0)}`
+    );
     
     if (originalApproverId && currentApproverId !== originalApproverId) {
       const origName = users.find(u => u.id === originalApproverId)?.name || originalApproverId;
@@ -1926,14 +1886,15 @@ Please log in to the system and confirm or decline this new time.`
     }
 
     const { mom_id, expense_category, total_amount, receipt_url, or_number, remarks, supporting_documents, line_items } = req.body;
+    const isTransport = claim.reimbursement_type === 'Transport';
 
-    if (!mom_id) return res.status(400).json({ error: 'Minutes of Meeting (MOM) is required.' });
-    const mom = moms.find(m => m.id === mom_id);
-    if (!mom) return res.status(400).json({ error: 'Minutes of Meeting (MOM) not found.' });
-    if (mom.status !== MomStatus.COMPLETED) {
+    if (!mom_id && !isTransport) return res.status(400).json({ error: 'Minutes of Meeting (MOM) is required.' });
+    const mom = mom_id ? moms.find(m => m.id === mom_id) : undefined;
+    if (mom_id && !mom) return res.status(400).json({ error: 'Minutes of Meeting (MOM) not found.' });
+    if (mom && mom.status !== MomStatus.COMPLETED) {
       return res.status(400).json({ error: 'Cannot attach an incomplete or draft Minutes of Meeting.' });
     }
-    if (mom.claim_id && mom.claim_id !== claim.id) {
+    if (mom?.claim_id && mom.claim_id !== claim.id) {
       const linkedClaim = claims.find(c => c.id === mom.claim_id);
       const linkedNumber = linkedClaim?.claim_number || (mom.claim_id ? `REIM-${mom.claim_id.substring(0, 6)}` : 'another claim');
       return res.status(400).json({ error: `This MOM is already linked to claim ${linkedNumber}.` });
@@ -1961,7 +1922,7 @@ Please log in to the system and confirm or decline this new time.`
           vendor: item.vendor,
           expense_date: item.expense_date,
           payment_method: item.payment_method,
-          business_purpose: item.business_purpose || remarks || `Sales reimbursement for meeting with ${mom.client}`
+          business_purpose: item.business_purpose || remarks || (isTransport ? 'Transport reimbursement' : `Sales reimbursement for meeting with ${mom?.client || 'client'}`)
         });
         claimTotal += numericAmount;
       }
@@ -1986,7 +1947,7 @@ Please log in to the system and confirm or decline this new time.`
         amount: numericAmount,
         receipt_url: receipt_url,
         or_number: or_number,
-        business_purpose: remarks || `Sales reimbursement for meeting with ${mom.client}`
+        business_purpose: remarks || (isTransport ? 'Transport reimbursement' : `Sales reimbursement for meeting with ${mom?.client || 'client'}`)
       });
       claimTotal = numericAmount;
       mainCategory = expense_category;
@@ -1998,11 +1959,11 @@ Please log in to the system and confirm or decline this new time.`
     if (policyError) return res.status(400).json({ error: policyError });
 
     // Re-link the MOM if the requestor swapped it out for a different one.
-    if (claim.mom_id !== mom_id) {
+    if (mom && claim.mom_id !== mom_id) {
       const oldMom = moms.find(m => m.id === claim.mom_id);
       if (oldMom) oldMom.claim_id = undefined;
     }
-    mom.claim_id = claim.id;
+    if (mom) mom.claim_id = claim.id;
 
     // Remove old expenses and add new ones
     for (let i = expenses.length - 1; i >= 0; i--) {
@@ -2014,8 +1975,8 @@ Please log in to the system and confirm or decline this new time.`
       expenses.push({
         id: uuidv4(),
         claim_id: claim.id,
-        expense_date: item.expense_date || mom.meeting_date,
-        vendor: item.vendor || mom.client || 'Client Meeting',
+        expense_date: item.expense_date || mom?.meeting_date || new Date().toISOString().split('T')[0],
+        vendor: item.vendor || mom?.client || (isTransport ? 'Transport Provider' : 'Client Meeting'),
         category: item.category,
         amount: item.amount,
         payment_method: item.payment_method || 'Cash',
@@ -2029,6 +1990,7 @@ Please log in to the system and confirm or decline this new time.`
     claim.mom_id = mom_id;
     claim.expense_category = mainCategory;
     claim.total_amount = claimTotal;
+    claim.reimbursable_amount = Math.min(claimTotal, systemSettings.reimbursementCap);
     claim.receipt_url = mainReceipt;
     claim.remarks = remarks;
     claim.supporting_documents = supporting_documents;
@@ -2129,7 +2091,7 @@ You'll receive another email as soon as ${approverName} makes a decision.`
       return res.status(403).json({ error: 'Not your direct report' });
     }
     
-    const { decision, comment } = req.body; // Approved, Rejected, Returned
+    const { decision, comment, review_meeting } = req.body; // Approved, Rejected, Returned
     if (!['Approved', 'Rejected', 'Returned'].includes(decision)) return res.status(400).json({ error: 'Invalid decision' });
     if ((decision === 'Rejected' || decision === 'Returned') && !comment) {
       return res.status(400).json({ error: 'Comment required' });
@@ -2156,6 +2118,39 @@ You'll receive another email as soon as ${approverName} makes a decision.`
     });
     
     addHistory(claim.id, oldStatus, newStatus, user.id, comment || undefined);
+
+    if (decision === 'Returned' && review_meeting?.meeting_date && review_meeting?.meeting_time) {
+      const hasConflict = reviewMeetings.some(rm =>
+        rm.approver_id === user.id &&
+        [ReviewMeetingStatus.PENDING_CONFIRMATION, ReviewMeetingStatus.CONFIRMED].includes(rm.status) &&
+        rm.meeting_date === review_meeting.meeting_date &&
+        rm.meeting_time === review_meeting.meeting_time
+      );
+      if (hasConflict) {
+        claim.status = oldStatus;
+        claim.updated_at = new Date().toISOString();
+        approvals.pop();
+        statusHistories.pop();
+        return res.status(409).json({ error: 'You already have a review meeting at that date and time.' });
+      }
+      reviewMeetings.push({
+        id: uuidv4(),
+        claim_id: claim.id,
+        requestor_id: claim.requestor_id,
+        approver_id: user.id,
+        meeting_date: review_meeting.meeting_date,
+        meeting_time: review_meeting.meeting_time,
+        status: ReviewMeetingStatus.CONFIRMED,
+        created_at: new Date().toISOString()
+      });
+      addHistory(
+        claim.id,
+        newStatus,
+        newStatus,
+        user.id,
+        `Optional review meeting scheduled for ${review_meeting.meeting_date} at ${review_meeting.meeting_time}`
+      );
+    }
     
     const claimNumber = claim.claim_number || `REIM-${claim.id.substring(0,6)}`;
 
@@ -2198,6 +2193,38 @@ Required Action:
 ${actionText}`;
       sendEmail(claim.requestor_id, emailSubject, emailBody);
     }
+
+    res.json(claim);
+  });
+
+  app.post('/api/claims/:id/custodian-decision', (req, res) => {
+    const user = getUser(req);
+    if (!user || user.role !== UserRole.CUSTODIAN) return res.status(403).json({ error: 'Forbidden' });
+
+    const claim = claims.find(c => c.id === req.params.id);
+    if (!claim) return res.status(404).json({ error: 'Claim not found' });
+    if (![ClaimStatus.APPROVED, ClaimStatus.PROCESSING].includes(claim.status)) {
+      return res.status(400).json({ error: 'Only a claim in the custodian queue can be returned or rejected.' });
+    }
+
+    const { decision, comment } = req.body;
+    if (!['Returned', 'Rejected'].includes(decision) || !String(comment || '').trim()) {
+      return res.status(400).json({ error: 'A valid decision and reason are required.' });
+    }
+
+    const oldStatus = claim.status;
+    claim.status = decision === 'Returned' ? ClaimStatus.RETURNED : ClaimStatus.REJECTED;
+    claim.updated_at = new Date().toISOString();
+    addHistory(claim.id, oldStatus, claim.status, user.id, `Custodian: ${comment}`);
+
+    const claimNumber = claim.claim_number || `REIM-${claim.id.substring(0, 6)}`;
+    sendEmail(
+      claim.requestor_id,
+      `Reimbursement ${decision} by Finance - ${claimNumber}`,
+      decision === 'Returned'
+        ? `Finance returned ${claimNumber} for correction.\n\nReason:\n${comment}\n\nRevise and resubmit it; it will go through approver review again.`
+        : `Finance permanently rejected ${claimNumber}.\n\nReason:\n${comment}`
+    );
 
     res.json(claim);
   });
@@ -2379,14 +2406,14 @@ BSM Assistant | BSD - IT Security Business`;
       sendEmail(
         claim.processed_by,
         `Reimbursement Completed - ${claimNumber}`,
-        `${user.name} has confirmed receipt of the payout for ${claimNumber} (PHP ${claim.total_amount}). The claim is now complete — no further action is required.`
+        `${user.name} has confirmed receipt of the payout for ${claimNumber} (${formatPHP(claim.reimbursable_amount ?? Math.min(claim.total_amount, systemSettings.reimbursementCap))}). The claim is now complete — no further action is required.`
       );
     }
     // Confirmation copy to the requestor, matching every other step's pattern.
     sendEmail(
       claim.requestor_id,
       `Reimbursement Completed - ${claimNumber}`,
-      `You've confirmed receipt of your reimbursement ${claimNumber} (PHP ${claim.total_amount}). This claim is now complete.`
+      `You've confirmed receipt of your reimbursement ${claimNumber} (${formatPHP(claim.reimbursable_amount ?? Math.min(claim.total_amount, systemSettings.reimbursementCap))}). This claim is now complete.`
     );
 
     res.json(claim);
@@ -2397,7 +2424,7 @@ BSM Assistant | BSD - IT Security Business`;
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-    const base = user.role === UserRole.ADMIN ? emails : emails.filter(e => e.recipient_id === user.id);
+    const base = [UserRole.ADMIN, UserRole.FINANCE].includes(user.role) ? emails : emails.filter(e => e.recipient_id === user.id);
     const sorted = [...base].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     const { page, pageSize, search } = req.query;
@@ -2519,7 +2546,7 @@ BSM Assistant | BSD - IT Security Business`;
   // All history for admin
   app.get('/api/history', (req, res) => {
     const user = getUser(req);
-    if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
+    if (!user || ![UserRole.ADMIN, UserRole.FINANCE].includes(user.role)) return res.status(403).json({ error: 'Forbidden' });
 
     const enriched = statusHistories.map(h => {
       const claim = claims.find(c => c.id === h.claim_id);
@@ -3763,7 +3790,7 @@ You'll receive another email as soon as a decision is made.`
         remarks: `Reimbursement for sales meeting with ${opts.mom.client} team.`,
         supporting_documents: 'Proposal_Draft_v1.pdf',
         release_code: isReleaseStage ? (opts.releaseCode || Math.random().toString(36).substring(2, 8).toUpperCase()) : undefined,
-        payment_method: isReleaseStage ? (opts.paymentMethod || 'GCash') : undefined,
+        payment_method: isReleaseStage ? 'Cash' : undefined,
         processed_by: isReleaseStage ? 'u3' : undefined,
         processing_date: isReleaseStage ? processedAt : undefined,
         approved_at: decision === 'Approved' ? approvedAt : undefined,
@@ -3926,7 +3953,7 @@ You'll receive another email as soon as a decision is made.`
                 sendEmail(
                   opts.requestorId,
                   `Reimbursement Completed - ${claimNumber}`,
-                  `Your reimbursement of PHP ${opts.amount} has been successfully paid out via ${claim.payment_method || 'GCash'}.`,
+                  `Your reimbursement of PHP ${Math.min(opts.amount, systemSettings.reimbursementCap)} has been successfully paid out via Cash.`,
                   undefined,
                   { timestamp: processedAt }
                 );
@@ -4062,7 +4089,7 @@ You'll receive another email as soon as a decision is made.`
       approvedDaysAgo: 8,
       processedDaysAgo: 7,
       releaseCode: 'PAID777',
-      paymentMethod: 'Bank Transfer'
+      paymentMethod: 'Cash'
     });
 
     // 8. Claim 8: Rejected - Alice Reyes
@@ -4716,7 +4743,9 @@ You'll receive another email as soon as a decision is made.`
           const vendor = ds.vendors[Math.floor(Math.random() * ds.vendors.length)];
           const client = ds.clients[Math.floor(Math.random() * ds.clients.length)];
 
-          let amount = 1000 + Math.floor(Math.random() * 15000);
+          // Cluster demo reimbursements around the current PHP 1,000 payout
+          // cap so the UI visibly includes claims just below and above it.
+          let amount = 700 + Math.floor(Math.random() * 701);
           if (category.includes('Hosting') || category.includes('Materials') || category.includes('Repair')) {
             amount += 10000 + Math.floor(Math.random() * 20000);
           }
@@ -4740,7 +4769,7 @@ You'll receive another email as soon as a decision is made.`
               approvedDaysAgo: isCompleted || status === ClaimStatus.REJECTED ? approvedDaysAgo : undefined,
               processedDaysAgo: isCompleted ? processedDaysAgo : undefined,
               releaseCode: isCompleted ? Math.random().toString(36).substring(2, 8).toUpperCase() : undefined,
-              paymentMethod: isCompleted ? (Math.random() < 0.5 ? 'GCash' : 'Bank Transfer') : undefined,
+              paymentMethod: isCompleted ? 'Cash' : undefined,
               approvalComment: status === ClaimStatus.REJECTED ? 'Rejected: Budget exceeds departmental quota for this category.' : undefined
             });
           } else {

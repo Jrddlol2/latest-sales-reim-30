@@ -6,7 +6,7 @@ import { formatMoney } from '../../lib/money';
 import { ConfirmModal } from './ConfirmModal';
 import { useAppContext } from '../AppContext';
 import { useToast } from './ToastContext';
-import { generateClaimCode } from '../../lib/api';
+import { custodianDecideOnClaim, generateClaimCode } from '../../lib/api';
 
 interface CustodianActionButtonsProps {
   claim: Claim;
@@ -21,23 +21,25 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   const { lineItems, currentUser, updateClaimStatus, refresh, paymentMethods } = useAppContext();
   const { addToast } = useToast();
 
-  const [activeModal, setActiveModal] = useState<'markReady' | 'release' | 'closeLiq' | null>(null);
+  const [activeModal, setActiveModal] = useState<'markReady' | 'release' | 'closeLiq' | 'return' | 'reject' | null>(null);
   const [generatingCode, setGeneratingCode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('');
   const [paymentRef, setPaymentRef] = useState('');
   const [refundMethod, setRefundMethod] = useState('');
   const [refundRef, setRefundRef] = useState('');
   const [error, setError] = useState('');
+  const [decisionReason, setDecisionReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAction = (action: 'markReady' | 'release' | 'closeLiq') => {
-    setPaymentMethod('');
+  const handleAction = (action: 'markReady' | 'release' | 'closeLiq' | 'return' | 'reject') => {
+    setPaymentMethod(paymentMethods[0] || 'Cash');
     setPaymentRef('');
     // Prefill the refund method with whatever the requestor declared at
     // submission (mapped onto claim.paymentMethod) — the custodian confirms it.
-    setRefundMethod(action === 'closeLiq' ? (claim.paymentMethod || '') : '');
+    setRefundMethod(action === 'closeLiq' ? (claim.paymentMethod || paymentMethods[0] || 'Cash') : '');
     setRefundRef('');
     setError('');
+    setDecisionReason('');
     setActiveModal(action);
   };
 
@@ -65,6 +67,25 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
 
   const handleConfirm = async () => {
     if (!activeModal) return;
+
+    if (activeModal === 'return' || activeModal === 'reject') {
+      if (!decisionReason.trim()) {
+        setError('A reason is required.');
+        return;
+      }
+      setIsSubmitting(true);
+      try {
+        await custodianDecideOnClaim(claim.id, activeModal === 'return' ? 'Returned' : 'Rejected', decisionReason);
+        await refresh();
+        addToast(activeModal === 'return' ? 'Claim returned to the requestor.' : 'Claim permanently rejected.', activeModal === 'return' ? 'info' : 'error');
+        setActiveModal(null);
+      } catch (err: any) {
+        setError(err?.message || 'The server rejected this action.');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
 
     // A claim code must be generated (and handed to the requestor) before the
     // claim can be released — it's the code the requestor quotes back to confirm
@@ -126,13 +147,20 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
-        {claim.type === 'Reimbursement' && claim.status === ClaimStatus.APPROVED && (
+        {(claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement') && claim.status === ClaimStatus.APPROVED && (
           <span className="text-body-sm text-outline italic self-center pr-2">Awaiting processing</span>
         )}
-        {claim.type === 'Reimbursement' && claim.status === ClaimStatus.PROCESSING && (
+        {(claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement') && claim.status === ClaimStatus.PROCESSING && (
           <Button size={size} className="gap-1.5" onClick={() => handleAction('markReady')}>
             <span className="material-symbols-outlined text-[16px]">fact_check</span> Review
           </Button>
+        )}
+        {(claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement') &&
+          (claim.status === ClaimStatus.APPROVED || claim.status === ClaimStatus.PROCESSING) && (
+          <>
+            <Button size={size} variant="outline" className="text-tertiary border-tertiary" onClick={() => handleAction('return')}>Return</Button>
+            <Button size={size} variant="outline" className="text-error border-error" onClick={() => handleAction('reject')}>Reject</Button>
+          </>
         )}
         {claim.type === 'Cash Advance' && claim.status === ClaimStatus.APPROVED && (
           <Button size={size} onClick={() => handleAction('release')}>Release Funds</Button>
@@ -205,6 +233,10 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
                 <span className="font-label-md text-on-surface-variant">Claim Total</span>
                 <span className="font-mono-data font-bold text-on-surface">{formatMoney(claim.total)}</span>
               </div>
+              <div className="flex justify-between items-center rounded-lg bg-primary-container/30 p-3">
+                <span className="font-label-md text-on-surface">Cash to Release</span>
+                <span className="font-mono-data font-bold text-primary">{formatMoney(claim.reimbursableAmount ?? Math.min(claim.total, 1000))}</span>
+              </div>
               <div>
                 <label className="block text-label-md text-on-surface mb-1">Payment Method <span className="text-error">*</span></label>
                 <Select value={paymentMethod} onChange={e => { setPaymentMethod(e.target.value); setError(''); }} disabled={isSubmitting}>
@@ -247,6 +279,25 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
             </div>
           );
         })()}
+      </ConfirmModal>
+
+      <ConfirmModal
+        isOpen={activeModal === 'return' || activeModal === 'reject'}
+        onClose={() => setActiveModal(null)}
+        onConfirm={handleConfirm}
+        title={activeModal === 'return' ? 'Return to Requestor' : 'Permanently Reject Claim'}
+        confirmLabel={isSubmitting ? 'Submitting…' : activeModal === 'return' ? 'Return Claim' : 'Reject Claim'}
+        variant={activeModal === 'return' ? 'warning' : 'error'}
+        disabled={isSubmitting || !decisionReason.trim()}
+      >
+        <p className="text-body-sm text-on-surface-variant mb-4">
+          {activeModal === 'return'
+            ? 'The requestor can correct and resubmit this claim. It will require approver approval again.'
+            : 'This decision is final and the claim cannot be resubmitted.'}
+        </p>
+        <label className="block text-label-md mb-1">Reason <span className="text-error">*</span></label>
+        <textarea rows={4} className="w-full rounded-lg border border-outline-variant bg-surface p-3" value={decisionReason} onChange={e => { setDecisionReason(e.target.value); setError(''); }} />
+        {error && <p className="text-error text-body-sm mt-2">{error}</p>}
       </ConfirmModal>
 
       <ConfirmModal

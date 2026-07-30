@@ -3,6 +3,7 @@ export enum UserRole {
   APPROVER = 'Approver',
   CUSTODIAN = 'Custodian',
   ADMIN = 'Admin',
+  FINANCE = 'Finance',
 }
 
 export interface User {
@@ -21,7 +22,7 @@ export interface User {
   // departures so their pending approvals get escalated the same as a demotion).
   employment_status?: 'Active' | 'Inactive';
   can_approve_reimbursements?: boolean;
-  notification_prefs?: Record<string, { inApp: boolean; email: boolean }>;
+  notification_prefs?: Record<string, { inApp: boolean; teams: boolean; email?: boolean }>;
   avatar_url?: string;
 
   // Phase 3 (O365/Entra ID) prep — see docs/PROTOTYPE-AUDIT.md, "Target
@@ -77,6 +78,7 @@ export interface Mom {
   client?: string;
   contact_person?: string;
   contact_person_email?: string;
+  cc_client?: boolean;
   meeting_date: string;
   meeting_time?: string;
   location?: string;
@@ -194,9 +196,11 @@ export interface Claim {
   requestor_id: string;
   current_approver_id: string;
   original_approver_id?: string;
-  mom_id: string;
+  mom_id?: string;
+  reimbursement_type?: 'Standard' | 'Transport';
   status: ClaimStatus;
   total_amount: number;
+  reimbursable_amount?: number;
   expense_category?: string;
   receipt_url?: string;
   remarks?: string;
@@ -296,6 +300,8 @@ export interface Email {
   to: string;
   subject: string;
   body: string;
+  channel?: 'Email' | 'Teams';
+  delivery_status?: 'Logged' | 'Delivered' | 'Failed';
   read: boolean;
   timestamp: string;
 }

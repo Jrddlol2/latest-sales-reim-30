@@ -23,7 +23,7 @@ export function Payouts() {
   const [historyPage, setHistoryPage] = useState(1);
 
   const readyClaims = claims.filter(c => c.requestorId === currentUser.id && c.status === ClaimStatus.READY_FOR_CLAIM);
-  const totalWaiting = readyClaims.reduce((acc, c) => acc + c.total, 0);
+  const totalWaiting = readyClaims.reduce((acc, c) => acc + (c.reimbursableAmount ?? Math.min(c.total, 1000)), 0);
 
   // Completion date comes from the claim's own history — the COMPLETED entry
   // is when the requestor confirmed receipt — falling back to the processing
@@ -45,11 +45,11 @@ export function Payouts() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [claims, statusHistory, currentUser.id]);
 
-  const totalReceived = completedPayouts.reduce((acc, p) => acc + p.claim.total, 0);
+  const totalReceived = completedPayouts.reduce((acc, p) => acc + (p.claim.reimbursableAmount ?? Math.min(p.claim.total, 1000)), 0);
   const thisYear = new Date().getFullYear();
   const totalThisYear = completedPayouts
     .filter(p => p.date && new Date(p.date).getFullYear() === thisYear)
-    .reduce((acc, p) => acc + p.claim.total, 0);
+    .reduce((acc, p) => acc + (p.claim.reimbursableAmount ?? Math.min(p.claim.total, 1000)), 0);
 
   const historyTotalPages = Math.max(1, Math.ceil(completedPayouts.length / PAYOUT_HISTORY_PAGE_SIZE));
   const paginatedPayouts = completedPayouts.slice(
@@ -127,7 +127,7 @@ export function Payouts() {
                 </span>
               </div>
               <div className="flex items-baseline justify-between">
-                <span className="font-mono-data font-bold text-2xl text-on-surface">{formatMoney(claim.total)}</span>
+                <span className="font-mono-data font-bold text-2xl text-on-surface">{formatMoney(claim.reimbursableAmount ?? Math.min(claim.total, 1000))}</span>
                 {claim.paymentMethod && (
                   <span className="text-body-sm text-outline">via {claim.paymentMethod}</span>
                 )}
@@ -193,7 +193,7 @@ export function Payouts() {
                       <tr key={claim.id} className="hover:bg-surface-container-low/50 transition-colors">
                         <td className="px-5 py-3 font-mono-data text-primary font-bold whitespace-nowrap">{claim.ref}</td>
                         <td className="px-5 py-3 text-body-sm text-on-surface max-w-[220px] truncate" title={claim.purpose}>{claim.purpose}</td>
-                        <td className="px-5 py-3 font-mono-data font-bold text-on-surface text-right whitespace-nowrap">{formatMoney(claim.total)}</td>
+                        <td className="px-5 py-3 font-mono-data font-bold text-on-surface text-right whitespace-nowrap">{formatMoney(claim.reimbursableAmount ?? Math.min(claim.total, 1000))}</td>
                         <td className="px-5 py-3 text-body-sm text-on-surface-variant whitespace-nowrap">{claim.paymentMethod || '—'}</td>
                         <td className="px-5 py-3 font-mono-data text-body-sm text-on-surface-variant whitespace-nowrap">{claim.releaseCode || '—'}</td>
                         <td className="px-5 py-3 text-body-sm text-on-surface-variant whitespace-nowrap">{date ? formatDate(date) : '—'}</td>

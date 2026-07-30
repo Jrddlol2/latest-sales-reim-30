@@ -59,7 +59,7 @@ export function RequestorDashboard() {
             <span className="material-symbols-outlined text-[20px]">add_card</span>
             Request Cash Advance
           </Button>
-          <Button className="gap-2" onClick={() => navigate('/claims/new?type=reimbursement')}>
+          <Button className="gap-2" onClick={() => navigate('/claims/new?choose=reimbursement')}>
             <span className="material-symbols-outlined text-[20px]">receipt_long</span>
             New Reimbursement
           </Button>

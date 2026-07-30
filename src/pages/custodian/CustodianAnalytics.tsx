@@ -12,6 +12,7 @@ const COLOR_TERTIARY = '#943700';
 
 const TYPE_COLOR: Record<ClaimType, string> = {
   'Reimbursement': COLOR_PRIMARY,
+  'Transport Reimbursement': '#0891b2',
   'Cash Advance': COLOR_PRIMARY_CONTAINER,
   'Liquidation': COLOR_TERTIARY,
 };
