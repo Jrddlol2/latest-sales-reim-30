@@ -9,6 +9,12 @@ import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { UserRole, ClaimStatus, SupportRequestStatus } from '../../types';
 import { fetchAuditHistory, runFallbackCheck, reassignApprover } from '../../lib/api';
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
+
+// Distinct per-slice palette so every status reads as its own colour in the
+// donut (the reporting page's semantic map intentionally repeats colours,
+// which would blur adjacent slices here).
+const DONUT_COLORS = ['#004ac6', '#2563eb', '#0ea5e9', '#7c3aed', '#f59e0b', '#943700', '#ba1a1a', '#16a34a', '#64748b', '#db2777'];
 
 interface AuditEntry {
   id: string;
@@ -80,8 +86,14 @@ export function AdminDashboard() {
   const statusBreakdown = useMemo(() => {
     const counts: Record<string, number> = {};
     claims.forEach(c => { counts[c.status] = (counts[c.status] || 0) + 1; });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [claims]);
+
+  const statusTotal = useMemo(() => statusBreakdown.reduce((acc, [, n]) => acc + n, 0), [statusBreakdown]);
+  const statusChartData = useMemo(
+    () => statusBreakdown.map(([status, count]) => ({ name: status, value: count })),
+    [statusBreakdown]
+  );
 
   // Org-change fallback (docs/hierarchy-sync-design.md §5): a claim whose
   // approver went stale and nobody transferred it within the fallback window
@@ -180,13 +192,53 @@ export function AdminDashboard() {
           {statusBreakdown.length === 0 ? (
             <p className="text-body-sm text-outline">No claims in the system yet.</p>
           ) : (
-            <div className="space-y-3">
-              {statusBreakdown.map(([status, count]) => (
-                <div key={status} className="flex items-center justify-between">
-                  <span className="font-body-md text-outline">{status}</span>
-                  <span className="font-label-md text-on-surface">{count}</span>
+            <div className="flex flex-col sm:flex-row items-center gap-6">
+              {/* Donut with the total in the middle */}
+              <div className="relative w-[180px] h-[180px] flex-shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={statusChartData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={58}
+                      outerRadius={85}
+                      paddingAngle={2}
+                      stroke="none"
+                    >
+                      {statusChartData.map((entry, i) => (
+                        <Cell key={entry.name} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number, name: string) => [`${value} (${Math.round((value / statusTotal) * 100)}%)`, name]}
+                      contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                  <span className="font-headline-md text-on-surface leading-none">{statusTotal}</span>
+                  <span className="text-[11px] text-outline uppercase tracking-wider mt-1">Total</span>
                 </div>
-              ))}
+              </div>
+
+              {/* Readable legend/list: colour dot, status, count and share */}
+              <div className="flex-1 w-full space-y-2 min-w-0">
+                {statusBreakdown.map(([status, count], i) => (
+                  <div key={status} className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
+                      <span className="font-body-md text-on-surface-variant truncate">{status}</span>
+                    </div>
+                    <div className="flex items-baseline gap-2 flex-shrink-0">
+                      <span className="font-label-md text-on-surface">{count}</span>
+                      <span className="text-[12px] text-outline w-9 text-right">{Math.round((count / statusTotal) * 100)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </Card>

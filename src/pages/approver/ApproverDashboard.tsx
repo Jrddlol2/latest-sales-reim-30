@@ -4,7 +4,7 @@ import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { useAppContext } from '../../components/AppContext';
-import { ClaimStatus } from '../../types';
+import { ClaimStatus, DelegationStatus } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDateTime, formatLongDate } from '../../lib/date';
 
@@ -14,8 +14,22 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function ApproverDashboard() {
   const navigate = useNavigate();
-  const { currentUser, claims, users, statusHistory } = useAppContext();
+  const { currentUser, claims, users, statusHistory, delegations } = useAppContext();
   const [typeFilter, setTypeFilter] = useState<'All' | 'Reimbursement' | 'Cash Advance' | 'Liquidation'>('All');
+
+  const nameOf = (id: string) => users.find(u => u.id === id)?.name || 'someone';
+
+  // Active delegations touching this approver, in both directions:
+  //  - outgoing: I've handed my approvals to someone while I'm out
+  //  - covering: someone handed theirs to me
+  const outgoingDelegation = useMemo(
+    () => delegations.find(d => d.approver_id === currentUser.id && d.status === DelegationStatus.ACTIVE),
+    [delegations, currentUser.id]
+  );
+  const coveringDelegations = useMemo(
+    () => delegations.filter(d => d.delegate_id === currentUser.id && d.status === DelegationStatus.ACTIVE),
+    [delegations, currentUser.id]
+  );
 
   // Mirrors ApprovalQueue.tsx's own scoping: claims actually assigned to this
   // approver and still awaiting their decision.
@@ -98,6 +112,30 @@ export function ApproverDashboard() {
           <p className="font-label-md text-label-md">{formatLongDate(new Date())}</p>
         </div>
       </div>
+
+      {/* Delegation status — surfaces active hand-offs in both directions so an
+          approver always knows their approvals are being routed elsewhere (or
+          that they're currently receiving someone else's). */}
+      {outgoingDelegation && (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-card border border-tertiary/40 bg-tertiary-container/30">
+          <span className="material-symbols-outlined text-tertiary flex-shrink-0">forward_to_inbox</span>
+          <p className="flex-1 font-label-md text-on-surface">
+            You're delegating your approvals to <strong>{nameOf(outgoingDelegation.delegate_id)}</strong>
+            {' '}until <strong>{outgoingDelegation.end_date}</strong>. New claims route to them automatically.
+          </p>
+          <Button size="sm" variant="outline" className="flex-shrink-0" onClick={() => navigate('/settings?tab=delegation')}>Manage</Button>
+        </div>
+      )}
+      {coveringDelegations.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-card border border-primary/30 bg-primary-container/20">
+          <span className="material-symbols-outlined text-primary flex-shrink-0">supervisor_account</span>
+          <p className="flex-1 font-label-md text-on-surface">
+            You're currently covering approvals for{' '}
+            <strong>{coveringDelegations.map(d => nameOf(d.approver_id)).join(', ')}</strong>. Their claims appear in your queue.
+          </p>
+          <Button size="sm" variant="outline" className="flex-shrink-0" onClick={() => navigate('/settings?tab=delegation')}>Manage</Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-surface-container-lowest p-6 border border-outline-variant rounded-card shadow-sm">

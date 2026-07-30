@@ -95,7 +95,16 @@ export function Topbar({ onMenuClick, isCollapsed = false }: TopbarProps) {
                     <p className="p-4 text-center text-sm text-on-surface-variant">No notifications.</p>
                   ) : (
                     userNotifications.map(notif => (
-                      <div key={notif.id} className={`p-3 text-sm rounded cursor-pointer ${notif.read ? 'bg-transparent hover:bg-surface-container' : 'bg-primary-container/20 font-medium'}`} onClick={() => { if (!notif.read) markEmailsRead([notif.id]); }}>
+                      <div
+                        key={notif.id}
+                        className={`p-3 text-sm rounded cursor-pointer ${notif.read ? 'bg-transparent hover:bg-surface-container' : 'bg-primary-container/20 font-medium'}`}
+                        onClick={() => {
+                          if (!notif.read) markEmailsRead([notif.id]);
+                          setShowNotifications(false);
+                          // Open the full message on the Notifications page, preselected.
+                          navigate(`/notifications?id=${notif.id}`);
+                        }}
+                      >
                         <p className="text-on-surface">{notif.subject || notif.body}</p>
                         <p className="text-xs text-on-surface-variant mt-1">{formatDateTime(notif.timestamp)}</p>
                       </div>

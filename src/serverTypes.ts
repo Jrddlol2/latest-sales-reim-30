@@ -346,6 +346,10 @@ export interface Liquidation {
   varianceType: LiquidationVarianceType;
   status: LiquidationStatus;
   createdAt: string;
+  /** For a refund-due variance: how the requestor said they'd return the balance
+   *  (declared at submission), then the actual method the custodian recorded on
+   *  collection. Surfaced to the custodian's Close Liquidation step. */
+  refundMethod?: string;
 }
 
 export enum SupportRequestPriority {

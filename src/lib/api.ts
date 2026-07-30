@@ -950,6 +950,8 @@ export async function submitCashAdvanceFlow(input: SubmitCashAdvanceInput) {
 export interface SubmitLiquidationInput {
   cashAdvanceId: string;
   lineItems: DraftLineItem[];
+  /** How the requestor will return an over-advance (only when a refund is due). */
+  refundMethod?: string;
   isDraft?: boolean;
 }
 
@@ -990,7 +992,10 @@ export async function submitLiquidationFlow(input: SubmitLiquidationInput) {
   }
 
   if (input.isDraft) return liquidation;
-  return apiFetch(`/api/liquidations/${liquidation.id}/submit`, { method: 'POST' });
+  return apiFetch(`/api/liquidations/${liquidation.id}/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ refundMethod: input.refundMethod }),
+  });
 }
 
 /**

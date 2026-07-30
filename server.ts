@@ -3094,6 +3094,14 @@ You'll receive another email as soon as a decision is made.`
 
     recalculateLiquidation(l.id);
 
+    // The requestor can declare how they'll return an over-advance up front;
+    // the custodian confirms/records the actual method later when collecting.
+    // Only meaningful for a refund-due variance.
+    const { refundMethod } = req.body || {};
+    if (refundMethod && l.varianceType === LiquidationVarianceType.REFUND_DUE) {
+      l.refundMethod = refundMethod;
+    }
+
     const oldStatus = l.status;
     l.status = LiquidationStatus.SUBMITTED;
     addLiqHistory(l.id, oldStatus, LiquidationStatus.SUBMITTED, user.id, 'Liquidation Submitted for Review');

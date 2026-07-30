@@ -22,7 +22,7 @@ const TYPE_PARAM_MAP: Record<string, 'Reimbursement' | 'Cash Advance' | 'Liquida
 
 export function SubmitClaim() {
   const navigate = useNavigate();
-  const { currentUser, fieldDefinitions, users, claims, companies, masterData, highValueThreshold, categoryLimits, refresh } = useAppContext();
+  const { currentUser, fieldDefinitions, users, claims, companies, masterData, highValueThreshold, categoryLimits, paymentMethods, refresh } = useAppContext();
   const { addToast } = useToast();
   const [searchParams] = useSearchParams();
   const typeFromQuery = TYPE_PARAM_MAP[searchParams.get('type') ?? ''];
@@ -50,6 +50,9 @@ export function SubmitClaim() {
   const [cashAdvanceId, setCashAdvanceId] = useState<string>('');
   const [cashAdvanceAmount, setCashAdvanceAmount] = useState<number>(0);
   const [cashAdvancePurpose, setCashAdvancePurpose] = useState('');
+  // How the requestor intends to return an over-advance (refund due). Only
+  // relevant to a Liquidation whose actual spend came in under the advance.
+  const [refundMethod, setRefundMethod] = useState('');
   const [momSource, setMomSource] = useState<MinutesSource>(MinutesSource.TEMPLATE);
   const [momData, setMomData] = useState<Record<string, any>>({});
   const [claimCustomFields, setClaimCustomFields] = useState<Record<string, string>>({});
@@ -101,6 +104,10 @@ export function SubmitClaim() {
       }
       if (lineItemsLocal.length === 0) {
         addToast('Please add at least one expense line item', 'error');
+        return;
+      }
+      if (varianceType === 'RefundDue' && !refundMethod) {
+        addToast('Choose how you\'ll return the refund before continuing.', 'error');
         return;
       }
     }
@@ -325,6 +332,7 @@ export function SubmitClaim() {
         await submitLiquidationFlow({
           cashAdvanceId,
           lineItems: lineItemsLocal,
+          refundMethod: varianceType === 'RefundDue' ? refundMethod : undefined,
           isDraft,
         });
       } else {
@@ -599,6 +607,32 @@ export function SubmitClaim() {
                   <p className="text-[28px] font-bold leading-none mt-1">{formatMoney(claimType === 'Liquidation' ? Math.abs(varianceAmount) : totalAmount)}</p>
                 </div>
               </div>
+
+              {/* Refund due: the requestor spent less than the advance and owes
+                  the balance back. Let them declare how they'll return it — the
+                  custodian confirms this method when they collect. */}
+              {claimType === 'Liquidation' && varianceType === 'RefundDue' && (
+                <div className="mt-4 p-5 rounded-lg border border-tertiary/40 bg-tertiary-container/20">
+                  <div className="flex items-start gap-3">
+                    <span className="material-symbols-outlined text-tertiary mt-0.5">undo</span>
+                    <div className="flex-1">
+                      <p className="font-label-md text-on-surface">
+                        You need to return {formatMoney(Math.abs(varianceAmount))} to the company.
+                      </p>
+                      <p className="text-body-sm text-outline mt-0.5 mb-3">
+                        How will you pay this refund back? The custodian confirms it when they collect.
+                      </p>
+                      <div className="max-w-xs">
+                        <label className="block text-label-sm text-on-surface mb-1">Refund Method <span className="text-error">*</span></label>
+                        <Select value={refundMethod} onChange={e => setRefundMethod(e.target.value)}>
+                          <option value="">Select how you'll refund…</option>
+                          {paymentMethods.map(m => <option key={m} value={m}>{m}</option>)}
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

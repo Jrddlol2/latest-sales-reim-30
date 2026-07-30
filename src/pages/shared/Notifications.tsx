@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { Input } from '../../components/ui/Input';
+import { Input, Select } from '../../components/ui/Input';
 import { useAppContext } from '../../components/AppContext';
 import { EmptyState } from '../../components/shared/states';
 import { formatDateShort, formatFullDateTime } from '../../lib/date';
@@ -52,7 +53,8 @@ const FILTERS: { id: string; label: string; match: (m: { subject: string; read: 
  *  see server.ts's sendEmail). No need to re-derive structure; just render it. */
 export function Notifications() {
   const { emails, currentUser, markEmailsRead } = useAppContext();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('id'));
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
 
@@ -61,6 +63,20 @@ export function Notifications() {
       .filter(e => e.recipientId === currentUser.id)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, [emails, currentUser.id]);
+
+  // Deep link from the bell dropdown (/notifications?id=…): open that message,
+  // mark it read, then drop the param so a later manual navigation isn't stuck
+  // reopening it.
+  useEffect(() => {
+    const id = searchParams.get('id');
+    if (!id) return;
+    setSelectedId(id);
+    const msg = emails.find(e => e.id === id);
+    if (msg && !msg.read) markEmailsRead([id]);
+    searchParams.delete('id');
+    setSearchParams(searchParams, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, emails]);
 
   const filterCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -112,9 +128,10 @@ export function Notifications() {
         </Card>
       ) : (
         <Card className="flex-1 overflow-hidden flex flex-col md:flex-row bg-surface-container-lowest !p-0">
-          {/* Left List */}
-          <div className="w-full md:w-[320px] lg:w-[400px] border-b md:border-b-0 md:border-r border-brand-border flex flex-col h-1/2 md:h-full">
-            <div className="p-4 border-b border-brand-border space-y-3 bg-surface-container-lowest">
+          {/* Left List — wider, with the filter tucked into a compact dropdown
+              so it never wraps into a tall chip block. */}
+          <div className="w-full md:w-[360px] lg:w-[440px] border-b md:border-b-0 md:border-r border-brand-border flex flex-col h-1/2 md:h-full">
+            <div className="p-5 border-b border-brand-border space-y-3 bg-surface-container-lowest">
               <div className="relative">
                 <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
                 <Input
@@ -124,23 +141,25 @@ export function Notifications() {
                   className="pl-9"
                 />
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {FILTERS.map(f => (
-                  <button
-                    key={f.id}
-                    onClick={() => setActiveFilter(f.id)}
-                    className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors whitespace-nowrap ${
-                      activeFilter === f.id
-                        ? 'bg-primary text-white'
-                        : 'bg-surface-container-high text-on-surface-variant hover:bg-outline-variant'
-                    }`}
-                  >
-                    {f.label}{filterCounts[f.id] > 0 ? ` (${filterCounts[f.id]})` : ''}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-outline text-[18px]">filter_list</span>
+                <Select
+                  value={activeFilter}
+                  onChange={(e) => setActiveFilter(e.target.value)}
+                  className="flex-1"
+                  aria-label="Filter notifications"
+                >
+                  {FILTERS.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}{filterCounts[f.id] > 0 ? ` (${filterCounts[f.id]})` : ''}
+                    </option>
+                  ))}
+                </Select>
               </div>
-              <div className="flex justify-between items-center px-1">
-                <span className="text-label-sm text-outline font-medium uppercase tracking-wider">Inbox</span>
+              <div className="flex justify-between items-center px-0.5">
+                <span className="text-label-sm text-outline font-medium uppercase tracking-wider">
+                  Inbox · {filteredMessages.length}
+                </span>
                 <Button variant="ghost" size="sm" onClick={handleMarkAllRead} className="text-[12px] h-auto py-1 px-2 text-primary hover:bg-primary/10">
                   Mark all read
                 </Button>
@@ -159,28 +178,28 @@ export function Notifications() {
                   {filteredMessages.map(msg => {
                     const dateStr = formatDateShort(msg.timestamp);
                     const isSelected = selectedMessage?.id === msg.id;
+                    const iconConfig = getIconForSubject(msg.subject);
 
                     return (
                       <li
                         key={msg.id}
                         onClick={() => handleSelectMessage(msg.id)}
-                        className={`p-4 cursor-pointer hover:bg-brand-row-hover transition-colors flex gap-3 ${isSelected ? 'bg-primary/5' : 'bg-surface-container-lowest'} ${!msg.read ? 'opacity-100' : 'opacity-70 hover:opacity-100'}`}
+                        className={`px-5 py-4 cursor-pointer transition-colors flex gap-3 border-l-[3px] ${isSelected ? 'bg-primary/5 border-primary' : 'border-transparent hover:bg-brand-row-hover'}`}
                       >
-                        <div className="pt-1.5 flex-shrink-0">
-                          {msg.read ? (
-                            <div className="w-2 h-2 rounded-full bg-transparent" />
-                          ) : (
-                            <div className="w-2 h-2 rounded-full bg-primary" />
-                          )}
+                        <div className={`mt-0.5 flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${iconConfig.bg} ${iconConfig.color}`}>
+                          <span className="material-symbols-outlined text-[20px]">{iconConfig.icon}</span>
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex justify-between items-baseline mb-1">
-                            <h4 className={`text-label-md truncate pr-2 ${!msg.read ? 'font-semibold text-brand-slate' : 'font-medium text-on-surface-variant'}`}>
+                          <div className="flex justify-between items-baseline gap-2 mb-0.5">
+                            <h4 className={`text-body-base truncate ${!msg.read ? 'font-semibold text-brand-slate' : 'font-medium text-on-surface-variant'}`}>
                               {msg.subject}
                             </h4>
-                            <span className="text-[12px] text-outline whitespace-nowrap">{dateStr}</span>
+                            <span className="text-[12px] text-outline whitespace-nowrap flex items-center gap-1.5">
+                              {!msg.read && <span className="w-2 h-2 rounded-full bg-primary" />}
+                              {dateStr}
+                            </span>
                           </div>
-                          <p className="text-body-sm text-outline truncate">{msg.body.replace(/\s+/g, ' ').trim()}</p>
+                          <p className="text-body-sm text-outline line-clamp-2 leading-relaxed">{msg.body.replace(/\s+/g, ' ').trim()}</p>
                         </div>
                       </li>
                     );

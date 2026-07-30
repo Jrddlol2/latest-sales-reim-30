@@ -33,7 +33,9 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   const handleAction = (action: 'markReady' | 'release' | 'closeLiq') => {
     setPaymentMethod('');
     setPaymentRef('');
-    setRefundMethod('');
+    // Prefill the refund method with whatever the requestor declared at
+    // submission (mapped onto claim.paymentMethod) — the custodian confirms it.
+    setRefundMethod(action === 'closeLiq' ? (claim.paymentMethod || '') : '');
     setRefundRef('');
     setError('');
     setActiveModal(action);
@@ -282,6 +284,12 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
       >
         <p className="mb-4 text-body-md text-on-surface-variant">Confirm the refund of {formatMoney(Math.abs(claim.varianceAmount || 0))} has been physically collected from the requestor, then close this liquidation.</p>
         <div className="space-y-4">
+          {claim.paymentMethod && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary-container/20 border border-primary/20 text-body-sm text-on-surface">
+              <span className="material-symbols-outlined text-[18px] text-primary">info</span>
+              Requestor said they'd refund via <strong>{claim.paymentMethod}</strong>. Confirm or change below.
+            </div>
+          )}
           <div>
             <label className="block text-label-md text-on-surface mb-1">Refund Method <span className="text-error">*</span></label>
             <Select value={refundMethod} onChange={e => { setRefundMethod(e.target.value); setError(''); }} disabled={isSubmitting}>

@@ -1,24 +1,65 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { Pagination } from '../../components/ui/Pagination';
 import { formatMoney } from '../../lib/money';
+import { formatDate } from '../../lib/date';
 import { ConfirmModal } from '../../components/shared/ConfirmModal';
 import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { confirmReceipt } from '../../lib/api';
 import { ClaimStatus, Claim } from '../../types';
 
+const PAYOUT_HISTORY_PAGE_SIZE = 10;
+
 export function Payouts() {
-  const { currentUser, claims, refresh } = useAppContext();
+  const { currentUser, claims, statusHistory, refresh } = useAppContext();
   const { addToast } = useToast();
 
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
 
   const readyClaims = claims.filter(c => c.requestorId === currentUser.id && c.status === ClaimStatus.READY_FOR_CLAIM);
   const totalWaiting = readyClaims.reduce((acc, c) => acc + c.total, 0);
+
+  // Completion date comes from the claim's own history — the COMPLETED entry
+  // is when the requestor confirmed receipt — falling back to the processing
+  // date if (somehow) no history row exists.
+  const completedOn = (claim: Claim): string | undefined => {
+    const entry = statusHistory
+      .filter(h => h.claimId === claim.id && h.newStatus === ClaimStatus.COMPLETED)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+    return entry?.timestamp || claim.processingDate;
+  };
+
+  // Everything this requestor has already claimed — the record of where money
+  // went, newest first.
+  const completedPayouts = useMemo(() => {
+    return claims
+      .filter(c => c.requestorId === currentUser.id && c.status === ClaimStatus.COMPLETED)
+      .map(c => ({ claim: c, date: completedOn(c) }))
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claims, statusHistory, currentUser.id]);
+
+  const totalReceived = completedPayouts.reduce((acc, p) => acc + p.claim.total, 0);
+  const thisYear = new Date().getFullYear();
+  const totalThisYear = completedPayouts
+    .filter(p => p.date && new Date(p.date).getFullYear() === thisYear)
+    .reduce((acc, p) => acc + p.claim.total, 0);
+
+  const historyTotalPages = Math.max(1, Math.ceil(completedPayouts.length / PAYOUT_HISTORY_PAGE_SIZE));
+  const paginatedPayouts = completedPayouts.slice(
+    (historyPage - 1) * PAYOUT_HISTORY_PAGE_SIZE,
+    historyPage * PAYOUT_HISTORY_PAGE_SIZE
+  );
+
+  // Reset to page 1 whenever the underlying set of payouts changes (e.g. a
+  // new claim completes), so the page number never points past the end.
+  useEffect(() => { setHistoryPage(1); }, [completedPayouts.length]);
 
   const openModal = (claim: Claim) => {
     setSelectedClaim(claim);
@@ -103,6 +144,69 @@ export function Payouts() {
           ))}
         </div>
       )}
+
+      {/* Payout history — a record of what's already been claimed, so a
+          completed payout isn't just gone from the page with no trace. */}
+      <div className="pt-2">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-headline-md text-on-surface">Payout History</h2>
+          <span className="text-body-sm text-outline">{completedPayouts.length} completed</span>
+        </div>
+
+        {completedPayouts.length === 0 ? (
+          <Card className="p-8 text-center text-outline">
+            <span className="material-symbols-outlined text-[36px] mb-2">receipt_long</span>
+            <p className="text-body-sm">No completed payouts yet. Confirmed claims will show up here.</p>
+          </Card>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+              <Card className="p-4">
+                <p className="font-label-sm text-outline uppercase tracking-wider mb-1">Total Received</p>
+                <p className="font-mono-data font-bold text-2xl text-on-surface">{formatMoney(totalReceived)}</p>
+              </Card>
+              <Card className="p-4">
+                <p className="font-label-sm text-outline uppercase tracking-wider mb-1">Received in {thisYear}</p>
+                <p className="font-mono-data font-bold text-2xl text-on-surface">{formatMoney(totalThisYear)}</p>
+              </Card>
+              <Card className="p-4">
+                <p className="font-label-sm text-outline uppercase tracking-wider mb-1">Payouts Completed</p>
+                <p className="font-mono-data font-bold text-2xl text-on-surface">{completedPayouts.length}</p>
+              </Card>
+            </div>
+
+            <Card className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-surface-container-low text-outline font-label-sm uppercase tracking-wider">
+                    <tr>
+                      <th className="px-5 py-3">Reference</th>
+                      <th className="px-5 py-3">Purpose</th>
+                      <th className="px-5 py-3 text-right">Amount</th>
+                      <th className="px-5 py-3">Method</th>
+                      <th className="px-5 py-3">Release Code</th>
+                      <th className="px-5 py-3">Date Completed</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-outline-variant">
+                    {paginatedPayouts.map(({ claim, date }) => (
+                      <tr key={claim.id} className="hover:bg-surface-container-low/50 transition-colors">
+                        <td className="px-5 py-3 font-mono-data text-primary font-bold whitespace-nowrap">{claim.ref}</td>
+                        <td className="px-5 py-3 text-body-sm text-on-surface max-w-[220px] truncate" title={claim.purpose}>{claim.purpose}</td>
+                        <td className="px-5 py-3 font-mono-data font-bold text-on-surface text-right whitespace-nowrap">{formatMoney(claim.total)}</td>
+                        <td className="px-5 py-3 text-body-sm text-on-surface-variant whitespace-nowrap">{claim.paymentMethod || '—'}</td>
+                        <td className="px-5 py-3 font-mono-data text-body-sm text-on-surface-variant whitespace-nowrap">{claim.releaseCode || '—'}</td>
+                        <td className="px-5 py-3 text-body-sm text-on-surface-variant whitespace-nowrap">{date ? formatDate(date) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination currentPage={historyPage} totalPages={historyTotalPages} onPageChange={setHistoryPage} />
+            </Card>
+          </>
+        )}
+      </div>
 
       <ConfirmModal
         isOpen={!!selectedClaim}
