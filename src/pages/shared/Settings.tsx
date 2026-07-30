@@ -44,11 +44,18 @@ function DelegationPanel() {
 
   const nameOf = (id: string) => users.find(u => u.id === id)?.name || id;
 
+  // My team — everyone whose claims route to me for approval. This is the
+  // scope a delegation hands off, so it's shown right here alongside it.
+  const directReports = users
+    .filter(u => u.reportsTo === currentUser.id)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   // I requested this — I'm covered by someone else while I'm out.
   const asApprover = delegations.filter(d => d.approver_id === currentUser.id);
   // Someone asked me to cover for them.
   const asDelegate = delegations.filter(d => d.delegate_id === currentUser.id);
   const pendingOnMe = asDelegate.filter(d => d.status === DelegationStatus.PENDING);
+  const activeOutgoing = asApprover.find(d => d.status === DelegationStatus.ACTIVE);
 
   const requestedTotalPages = Math.max(1, Math.ceil(asApprover.length / DELEGATION_PAGE_SIZE));
   const pagedRequested = asApprover.slice((requestedPage - 1) * DELEGATION_PAGE_SIZE, requestedPage * DELEGATION_PAGE_SIZE);
@@ -132,6 +139,38 @@ function DelegationPanel() {
           ))}
         </div>
       )}
+
+      <div>
+        <h4 className="font-headline-sm text-on-surface mb-1">Your team — who routes to you</h4>
+        <p className="text-sm text-outline mb-3">
+          Claims and requests from these people come to you for approval
+          {activeOutgoing
+            ? <> — and are currently being routed to <strong>{nameOf(activeOutgoing.delegate_id)}</strong> while your delegation is active.</>
+            : '.'}
+        </p>
+        {directReports.length === 0 ? (
+          <p className="text-sm text-outline">No one currently reports to you.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {directReports.map(r => (
+              <div key={r.id} className="flex items-center gap-3 p-3 bg-surface-container-low rounded-lg">
+                {r.avatarUrl ? (
+                  <img src={r.avatarUrl} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0" loading="lazy" width="36" height="36" />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-secondary-container flex items-center justify-center font-bold text-on-secondary-container text-sm flex-shrink-0">
+                    {r.name.split(' ').map(n => n[0]).join('')}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="font-label-md text-on-surface truncate">{r.name}</p>
+                  <p className="text-body-sm text-outline truncate">{r.jobTitle} · {r.department}</p>
+                </div>
+                <span className="ml-auto text-[11px] uppercase tracking-wider font-medium text-outline flex-shrink-0">{r.role}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div>
         <h4 className="font-headline-sm text-on-surface mb-3">Request coverage while you're out</h4>
