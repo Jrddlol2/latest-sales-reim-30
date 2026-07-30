@@ -49,6 +49,16 @@ export enum MinutesSource {
   UPLOADED = 'Uploaded'
 }
 
+/** The kind of meeting document anchoring a claim: minutes of a meeting, or a
+ *  letter of agreement. Same record shape, different intent and labelling. */
+export type MomDocumentType = 'MoM' | 'LOA';
+
+/** Human labels for a document type — used in headings, badges and pickers. */
+export const DOCUMENT_TYPE_LABEL: Record<MomDocumentType, string> = {
+  MoM: 'Minutes of Meeting',
+  LOA: 'Letter of Agreement',
+};
+
 export interface ApproverDelegation {
   id: string;
   approver_id: string;
@@ -142,6 +152,7 @@ export interface MOM {
   id: string;
   claimId: string;
   requestorId?: string;
+  documentType?: MomDocumentType;
   meetingDate?: string;
   status?: string;
   source?: MinutesSource;

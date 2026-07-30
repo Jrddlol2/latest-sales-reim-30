@@ -72,6 +72,8 @@ export interface Mom {
   id: string;
   claim_id?: string;
   requestor_id?: string;
+  /** 'MoM' (minutes of meeting) or 'LOA' (letter of agreement). Defaults to MoM. */
+  document_type?: 'MoM' | 'LOA';
   client?: string;
   contact_person?: string;
   contact_person_email?: string;

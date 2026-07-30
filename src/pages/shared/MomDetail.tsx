@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/Button';
 import { useAppContext } from '../../components/AppContext';
 import { uploadUrl } from '../../lib/api';
 import { formatDateTime } from '../../lib/date';
+import { DOCUMENT_TYPE_LABEL, MomDocumentType } from '../../types';
 
 export function MomDetail() {
   const { id } = useParams();
@@ -16,7 +17,7 @@ export function MomDetail() {
     return (
       <div className="space-y-6 animate-in fade-in duration-500">
         <nav className="flex gap-2 text-on-surface-variant font-label-sm">
-          <span className="cursor-pointer hover:text-primary" onClick={() => navigate('/moms')}>Minutes of Meeting</span>
+          <span className="cursor-pointer hover:text-primary" onClick={() => navigate('/moms')}>Minutes &amp; Agreements</span>
         </nav>
         <Card className="p-12 text-center text-outline">
           <span className="material-symbols-outlined text-[48px] mb-3">meeting_room</span>
@@ -28,6 +29,7 @@ export function MomDetail() {
   }
 
   const dateStr = mom.meetingDate ? formatDateTime(mom.meetingDate) : 'No date specified';
+  const docType: MomDocumentType = mom.documentType === 'LOA' ? 'LOA' : 'MoM';
   const linkedClaim = mom.claimId ? claims.find(c => c.id === mom.claimId) : undefined;
   const fileUrl = uploadUrl(mom.fileUrl);
 
@@ -37,7 +39,7 @@ export function MomDetail() {
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <nav className="flex gap-2 text-on-surface-variant font-label-sm">
-        <span className="cursor-pointer hover:text-primary" onClick={() => navigate('/moms')}>Minutes of Meeting</span>
+        <span className="cursor-pointer hover:text-primary" onClick={() => navigate('/moms')}>Minutes &amp; Agreements</span>
         <span>/</span>
         <span className="text-on-surface font-semibold">{mom.companyName || 'Untitled meeting'}</span>
       </nav>
@@ -53,6 +55,13 @@ export function MomDetail() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <span
+              title={DOCUMENT_TYPE_LABEL[docType]}
+              className={`inline-flex items-center gap-1 px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider ${docType === 'LOA' ? 'bg-tertiary-container/50 text-tertiary' : 'bg-primary-container/40 text-on-primary-container'}`}
+            >
+              <span className="material-symbols-outlined text-[15px]">{docType === 'LOA' ? 'handshake' : 'description'}</span>
+              {DOCUMENT_TYPE_LABEL[docType]}
+            </span>
             <span className="inline-flex items-center px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider bg-surface-container-highest text-on-surface-variant">
               {mom.status || 'Draft'}
             </span>

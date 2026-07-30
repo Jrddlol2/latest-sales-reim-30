@@ -216,6 +216,7 @@ export function fromServerMom(m: any): MOM | null {
     id: m.id,
     claimId: m.claim_id || '',
     requestorId: m.requestor_id || undefined,
+    documentType: m.document_type === 'LOA' ? 'LOA' : 'MoM',
     meetingDate: m.meeting_date || undefined,
     status: m.status || undefined,
     source: m.minutes_source === 'Uploaded' ? MinutesSource.UPLOADED : MinutesSource.TEMPLATE,
@@ -772,6 +773,7 @@ export interface SubmitClaimInput {
     meetingDate?: string;
     meetingTime?: string;
     source: MinutesSource;
+    documentType?: 'MoM' | 'LOA';
     file?: File;
   };
   /** Admin-defined dynamic fields, keyed by FieldDefinition.key. */
@@ -833,6 +835,7 @@ export async function submitClaimFlow(input: SubmitClaimInput) {
       meeting_date: mom.meetingDate || meetingDate || new Date().toISOString().split('T')[0],
       meeting_time: mom.meetingTime || meetingTime || '',
       minutes_source: mom.source,
+      document_type: mom.documentType || 'MoM',
       file_url: momFileUrl,
       file_name: momFileName,
       status: isDraft ? 'Draft' : 'Completed',

@@ -8,7 +8,7 @@ import { cn } from '../../components/ui/Button';
 import { useAppContext } from '../../components/AppContext';
 import { DynamicFieldRenderer } from '../../components/shared/DynamicFieldRenderer';
 import { useToast } from '../../components/shared/ToastContext';
-import { MinutesSource, ClaimStatus } from '../../types';
+import { MinutesSource, ClaimStatus, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
 import { submitClaimFlow, submitCashAdvanceFlow, submitLiquidationFlow, DraftLineItem } from '../../lib/api';
 import { formatMoney } from '../../lib/money';
 import { EXPENSE_CATEGORIES } from '../../lib/expenseCategories';
@@ -54,6 +54,9 @@ export function SubmitClaim() {
   // relevant to a Liquidation whose actual spend came in under the advance.
   const [refundMethod, setRefundMethod] = useState('');
   const [momSource, setMomSource] = useState<MinutesSource>(MinutesSource.TEMPLATE);
+  // Whether this claim is anchored to Minutes of Meeting or a Letter of
+  // Agreement — same record, different intent/labelling.
+  const [documentType, setDocumentType] = useState<MomDocumentType>('MoM');
   const [momData, setMomData] = useState<Record<string, any>>({});
   const [claimCustomFields, setClaimCustomFields] = useState<Record<string, string>>({});
   const [meetingDate, setMeetingDate] = useState('');
@@ -63,7 +66,7 @@ export function SubmitClaim() {
   // Details & Items) — the stepper dots and the "Step X of Y" label below
   // both read off this array's order, not the numeric `num`.
   const steps = [
-    { num: 2, title: 'Minutes of Meeting' },
+    { num: 2, title: DOCUMENT_TYPE_LABEL[documentType] },
     { num: 1, title: 'Details & Items' },
     { num: 3, title: 'Schedule Review' },
     { num: 4, title: 'Review & Submit' }
@@ -343,6 +346,7 @@ export function SubmitClaim() {
             meetingDate,
             meetingTime,
             source: momSource,
+            documentType,
             file: momFile,
           },
           customFields: { ...momData, ...claimCustomFields },
@@ -664,12 +668,18 @@ export function SubmitClaim() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <Card className="lg:col-span-12">
               <CardContent>
-                <div className="flex justify-between items-center mb-6">
-                  <h4 className="font-headline-md text-on-surface">Minutes of Meeting</h4>
-                  <Select value={momSource} onChange={(e) => setMomSource(e.target.value as MinutesSource)} className="w-auto">
-                    <option value={MinutesSource.TEMPLATE}>Fill Template</option>
-                    <option value={MinutesSource.UPLOADED}>Upload File</option>
-                  </Select>
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
+                  <h4 className="font-headline-md text-on-surface">{DOCUMENT_TYPE_LABEL[documentType]}</h4>
+                  <div className="flex items-center gap-2">
+                    <Select value={documentType} onChange={(e) => setDocumentType(e.target.value as MomDocumentType)} className="w-auto" aria-label="Document type">
+                      <option value="MoM">Minutes of Meeting</option>
+                      <option value="LOA">Letter of Agreement</option>
+                    </Select>
+                    <Select value={momSource} onChange={(e) => setMomSource(e.target.value as MinutesSource)} className="w-auto">
+                      <option value={MinutesSource.TEMPLATE}>Fill Template</option>
+                      <option value={MinutesSource.UPLOADED}>Upload File</option>
+                    </Select>
+                  </div>
                 </div>
                 
                 {momSource === MinutesSource.UPLOADED ? (

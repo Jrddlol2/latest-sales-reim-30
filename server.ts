@@ -1322,6 +1322,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     const mom: Mom = {
       id: uuidv4(),
       requestor_id: user.id,
+      document_type: req.body.document_type === 'LOA' ? 'LOA' : 'MoM',
       client: req.body.client || '',
       contact_person: req.body.contact_person || '',
       contact_person_email: req.body.contact_person_email || '',
@@ -3639,10 +3640,14 @@ You'll receive another email as soon as a decision is made.`
       // than filled in via the template form - the real distribution the
       // requestor-facing MOM step supports.
       const isUploaded = momCursor % 3 === 0;
+      // Roughly 1 in 4 records are Letters of Agreement rather than plain
+      // meeting minutes, so the Minutes & Agreements tab shows both types.
+      const isLOA = momCursor % 4 === 0;
       const internalParticipants = Array.from(new Set([reqUser?.name, INTERNAL_PARTICIPANT_POOL[idx]].filter((n): n is string => !!n))).join(', ');
       const mom: Mom = {
         id: uuidv4(),
         requestor_id: requestorId,
+        document_type: isLOA ? 'LOA' : 'MoM',
         client: actualClient,
         contact_person: contact,
         contact_person_email: `${first.toLowerCase()}.${last.toLowerCase()}@${actualClient.replace(/[^a-zA-Z]/g, '').toLowerCase()}.com`,
