@@ -10,7 +10,7 @@ holds all state in memory and auto-seeds a year of realistic demo data on every 
 > authentication is a mock `X-User-Id` header — good enough to demo every workflow
 > end-to-end, not yet safe for real employee or finance data. See
 > [Production readiness](#production-readiness) below and
-> [`docs/PROTOTYPE-AUDIT.md`](docs/PROTOTYPE-AUDIT.md) for the current, authoritative
+> [`docs/CURRENT-SYSTEM-AUDIT.md`](docs/CURRENT-SYSTEM-AUDIT.md) for the current, authoritative
 > gap list.
 >
 > **Looking for how to *use* the app?** See [`docs/USER-MANUAL.md`](docs/USER-MANUAL.md) —
@@ -189,10 +189,11 @@ app/
 └─ docs/
    ├─ USER-MANUAL.md             ← how to use the app, by role
    ├─ PROJECT-CONTEXT.md         ← orientation & gotchas for a fresh dev session — read first
-   ├─ PROTOTYPE-AUDIT.md         ← current, authoritative findings + prioritized backlog
+   ├─ CURRENT-SYSTEM-AUDIT.md    ← current audit, requirement status, and handoff priorities
+   ├─ PROTOTYPE-AUDIT.md         ← historical prototype audit; status claims may be stale
    ├─ DATABASE-MIGRATION.md      ← persistent-DB migration status (schema done, wiring pending)
    ├─ AUDIT.md / PRODUCTION-PASS.md / ROADMAP.md   ← earlier-session docs, partially superseded
-   │                                                  (see PROTOTYPE-AUDIT.md's "Doc hygiene" note)
+   │                                                  (see CURRENT-SYSTEM-AUDIT.md before relying on them)
    └─ hierarchy-sync-design.md   ← the org-change / stale-approver design
 ```
 
@@ -292,7 +293,9 @@ finance data.
 |---|---|
 | [`docs/USER-MANUAL.md`](docs/USER-MANUAL.md) | How to use the app, written per role — start here if you're not a developer. |
 | [`docs/PROJECT-CONTEXT.md`](docs/PROJECT-CONTEXT.md) | Orientation for a fresh dev session — architecture, gotchas, where things live. |
-| [`docs/PROTOTYPE-AUDIT.md`](docs/PROTOTYPE-AUDIT.md) | Current, authoritative findings and the prioritized backlog (supersedes the three below). |
+| [`docs/CURRENT-SYSTEM-AUDIT.md`](docs/CURRENT-SYSTEM-AUDIT.md) | Current audit for the reviewed GitHub commit, including requirement status, verified checks, risks, and Claude Code handoff priorities. |
+| [`docs/CHANGELOG-AND-FUTURE-WORK.md`](docs/CHANGELOG-AND-FUTURE-WORK.md) | Delivered stakeholder changes, known gaps, product decisions, and planned follow-up work. |
+| [`docs/PROTOTYPE-AUDIT.md`](docs/PROTOTYPE-AUDIT.md) | Historical prototype audit; several scores and status claims are now stale. |
 | [`docs/DATABASE-MIGRATION.md`](docs/DATABASE-MIGRATION.md) | Persistent-database status: what's built, what's left, in what order. |
 | [`docs/hierarchy-sync-design.md`](docs/hierarchy-sync-design.md) | How the org-change / stale-approver simulation works. |
-| `docs/AUDIT.md`, `docs/PRODUCTION-PASS.md`, `docs/ROADMAP.md` | Earlier-session docs — partially stale; see PROTOTYPE-AUDIT.md's doc-hygiene note before trusting a checkbox in these. |
+| `docs/AUDIT.md`, `docs/PRODUCTION-PASS.md`, `docs/ROADMAP.md` | Earlier-session documents retained for historical context; do not treat their checkboxes as current status. |
