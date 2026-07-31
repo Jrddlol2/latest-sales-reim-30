@@ -51,8 +51,6 @@ export function Receipts() {
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptRecord | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [currentPage, setCurrentPage] = useState(1);
-  const [teamMemberFilter, setTeamMemberFilter] = useState('');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const itemsPerPage = 12;
 
   // Approvers manage their own submissions plus whatever's routed through

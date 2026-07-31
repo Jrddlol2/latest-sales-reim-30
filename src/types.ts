@@ -115,11 +115,11 @@ export interface FieldDefinition {
 }
 
 export interface NotificationPrefs {
-  submitted: { inApp: boolean; teams: boolean; email?: boolean };
-  approved: { inApp: boolean; teams: boolean; email?: boolean };
-  returned: { inApp: boolean; teams: boolean; email?: boolean };
-  ready: { inApp: boolean; teams: boolean; email?: boolean };
-  delegation: { inApp: boolean; teams: boolean; email?: boolean };
+  submitted: { inApp: boolean; email: boolean };
+  approved: { inApp: boolean; email: boolean };
+  returned: { inApp: boolean; email: boolean };
+  ready: { inApp: boolean; email: boolean };
+  delegation: { inApp: boolean; email: boolean };
 }
 
 export interface User {
@@ -234,7 +234,6 @@ export interface Claim {
   completedAt?: string;
   createdAt: string;
   type: ClaimType;
-  reimbursementType?: 'Standard' | 'Transport';
   purpose: string; // derived from MOM usually, but useful at top level
   client?: string;
   location?: string;
@@ -332,8 +331,6 @@ export interface SystemEmail {
   to: string;
   subject: string;
   body: string;
-  channel?: 'Email' | 'Teams';
-  deliveryStatus?: 'Logged' | 'Delivered' | 'Failed';
   read: boolean;
   timestamp: string;
   channel?: 'Email' | 'Teams';

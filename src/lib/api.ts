@@ -63,7 +63,6 @@ const ROLE_DEEP_LINK: Record<string, string> = {
   custodian: 'u3', // Carol Ramos
   finance: 'u22',  // Sofia Lim
   admin: 'u4',     // Dave Lopez
-  finance: 'u22',  // Fiona Mercado
 };
 
 /**
@@ -418,8 +417,6 @@ export function fromServerEmail(e: any): SystemEmail {
     to: e.to || '',
     subject: e.subject || '',
     body: e.body || '',
-    channel: e.channel || 'Email',
-    deliveryStatus: e.delivery_status || 'Logged',
     read: Boolean(e.read),
     timestamp: e.timestamp,
     channel: e.channel === 'Teams' ? 'Teams' : 'Email',
@@ -624,7 +621,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
     emails: (rawOutbox || []).map(fromServerEmail),
     supportRequests: (rawSupport || []).map(fromServerSupport),
     delegations: (rawDelegations || []).map(fromServerDelegation),
-    paymentMethods: rawSettings?.paymentMethods || ['Cash'],
+    paymentMethods: rawSettings?.paymentMethods || ['Cash', 'GCash', 'Bank Transfer', 'Check'],
     highValueThreshold: Number(rawSettings?.highValueThreshold) || 15000,
     categoryLimits: (rawSettings?.categoryLimits && typeof rawSettings.categoryLimits === 'object') ? rawSettings.categoryLimits : {},
   };
@@ -848,40 +845,6 @@ export const cancelDelegation = (id: string) => apiFetch(`/api/delegations/${id}
 export const updateNotificationPrefs = (prefs: NotificationPrefs) =>
   apiFetch('/api/me/notification-prefs', { method: 'PUT', body: JSON.stringify(prefs) });
 
-export const createStandaloneMom = (input: {
-  meetingDate: string;
-  client: string;
-  purpose: string;
-  location?: string;
-  contactPerson?: string;
-  contactPersonEmail?: string;
-  discussion?: string;
-  actionItems?: string;
-  typeOfAccount?: string;
-  category?: string;
-  contactPersonDesignation?: string;
-}) =>
-  apiFetch('/api/moms', {
-    method: 'POST',
-    body: JSON.stringify({
-      meeting_date: input.meetingDate,
-      client: input.client,
-      purpose: input.purpose,
-      location: input.location,
-      contact_person: input.contactPerson,
-      contact_person_email: input.contactPersonEmail,
-      discussion: input.discussion,
-      action_items: input.actionItems,
-      custom_fields: {
-        type_of_account: input.typeOfAccount || '',
-        category: input.category || '',
-        contact_person_designation: input.contactPersonDesignation || '',
-      },
-      minutes_source: 'Template',
-      status: 'Completed',
-    }),
-  });
-
 // --- outbound mutations ---------------------------------------------------
 
 /**
@@ -916,16 +879,6 @@ export async function decideOnClaim(
     }),
   });
 }
-
-export const custodianDecideOnClaim = (
-  claimId: string,
-  decision: 'Returned' | 'Rejected',
-  comment: string,
-) =>
-  apiFetch(`/api/claims/${claimId}/custodian-decision`, {
-    method: 'POST',
-    body: JSON.stringify({ decision, comment }),
-  });
 
 /**
  * Approver (or Admin): hand a claim off to another approver after an
@@ -1036,7 +989,6 @@ export interface DraftLineItem {
 export interface SubmitClaimInput {
   claimType: 'Reimbursement' | 'Transport Reimbursement';
   lineItems: DraftLineItem[];
-  reimbursementType?: 'Standard' | 'Transport';
   /** Core MOM columns the server models as first-class fields. */
   mom?: {
     client?: string;

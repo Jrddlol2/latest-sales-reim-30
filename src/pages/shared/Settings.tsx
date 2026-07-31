@@ -373,12 +373,12 @@ function DemoDataPanel() {
   );
 }
 
-const DEFAULT_NOTIFY_PREFS: Record<string, { inApp: boolean, teams: boolean }> = {
-  submitted: { inApp: true, teams: true },
-  approved: { inApp: true, teams: true },
-  returned: { inApp: true, teams: true },
-  ready: { inApp: true, teams: true },
-  delegation: { inApp: true, teams: true },
+const DEFAULT_NOTIFY_PREFS: Record<string, { inApp: boolean, email: boolean }> = {
+  submitted: { inApp: true, email: true },
+  approved: { inApp: true, email: true },
+  returned: { inApp: true, email: true },
+  ready: { inApp: true, email: false },
+  delegation: { inApp: true, email: true },
 };
 
 export function Settings() {
@@ -388,11 +388,11 @@ export function Settings() {
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'profile');
   const [savingPrefs, setSavingPrefs] = useState(false);
 
-  const [notifyPrefs, setNotifyPrefs] = useState<Record<string, { inApp: boolean, teams: boolean }>>(
+  const [notifyPrefs, setNotifyPrefs] = useState<Record<string, { inApp: boolean, email: boolean }>>(
     (currentUser.notificationPrefs as any) || DEFAULT_NOTIFY_PREFS
   );
 
-  const handleNotifyChange = (key: string, type: 'inApp' | 'teams', value: boolean) => {
+  const handleNotifyChange = (key: string, type: 'inApp' | 'email', value: boolean) => {
     setNotifyPrefs(prev => ({
       ...prev,
       [key]: { ...prev[key], [type]: value }
@@ -499,7 +499,7 @@ export function Settings() {
                         <tr>
                           <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-outline uppercase tracking-wider">Event Type</th>
                           <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-outline uppercase tracking-wider">In-App</th>
-                          <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-outline uppercase tracking-wider">Teams</th>
+                          <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-outline uppercase tracking-wider">Email</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-brand-border bg-surface-container-lowest">
@@ -520,8 +520,8 @@ export function Settings() {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-center">
                               <Toggle 
-                                checked={notifyPrefs[event.id].teams}
-                                onChange={(c) => handleNotifyChange(event.id, 'teams', c)}
+                                checked={notifyPrefs[event.id].email} 
+                                onChange={(c) => handleNotifyChange(event.id, 'email', c)} 
                               />
                             </td>
                           </tr>

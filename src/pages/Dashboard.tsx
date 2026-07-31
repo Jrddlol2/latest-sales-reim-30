@@ -20,8 +20,6 @@ export function Dashboard() {
       return <FinanceDashboard />;
     case UserRole.ADMIN:
       return <AdminDashboard />;
-    case UserRole.FINANCE:
-      return <AdminReporting />;
     default:
       return <div>Unknown Role</div>;
   }

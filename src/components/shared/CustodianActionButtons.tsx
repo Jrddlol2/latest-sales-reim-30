@@ -37,11 +37,10 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
     setPaymentRef('');
     // Prefill the refund method with whatever the requestor declared at
     // submission (mapped onto claim.paymentMethod) — the custodian confirms it.
-    setRefundMethod(action === 'closeLiq' ? (claim.paymentMethod || paymentMethods[0] || 'Cash') : '');
+    setRefundMethod(action === 'closeLiq' ? (claim.paymentMethod || '') : '');
     setRefundRef('');
     setCorrectionComment('');
     setError('');
-    setDecisionReason('');
     setActiveModal(action);
   };
 
@@ -97,25 +96,6 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
 
   const handleConfirm = async () => {
     if (!activeModal) return;
-
-    if (activeModal === 'return' || activeModal === 'reject') {
-      if (!decisionReason.trim()) {
-        setError('A reason is required.');
-        return;
-      }
-      setIsSubmitting(true);
-      try {
-        await custodianDecideOnClaim(claim.id, activeModal === 'return' ? 'Returned' : 'Rejected', decisionReason);
-        await refresh();
-        addToast(activeModal === 'return' ? 'Claim returned to the requestor.' : 'Claim permanently rejected.', activeModal === 'return' ? 'info' : 'error');
-        setActiveModal(null);
-      } catch (err: any) {
-        setError(err?.message || 'The server rejected this action.');
-      } finally {
-        setIsSubmitting(false);
-      }
-      return;
-    }
 
     // A claim code must be generated (and handed to the requestor) before the
     // claim can be released — it's the code the requestor quotes back to confirm
@@ -184,13 +164,6 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
           <Button size={size} className="gap-1.5" onClick={() => handleAction('markReady')}>
             <span className="material-symbols-outlined text-[16px]">fact_check</span> Review
           </Button>
-        )}
-        {(claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement') &&
-          (claim.status === ClaimStatus.APPROVED || claim.status === ClaimStatus.PROCESSING) && (
-          <>
-            <Button size={size} variant="outline" className="text-tertiary border-tertiary" onClick={() => handleAction('return')}>Return</Button>
-            <Button size={size} variant="outline" className="text-error border-error" onClick={() => handleAction('reject')}>Reject</Button>
-          </>
         )}
         {claim.type === 'Cash Advance' && claim.status === ClaimStatus.APPROVED && (
           <Button size={size} onClick={() => handleAction('release')}>Release Funds</Button>
@@ -377,25 +350,6 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
             </div>
           );
         })()}
-      </ConfirmModal>
-
-      <ConfirmModal
-        isOpen={activeModal === 'return' || activeModal === 'reject'}
-        onClose={() => setActiveModal(null)}
-        onConfirm={handleConfirm}
-        title={activeModal === 'return' ? 'Return to Requestor' : 'Permanently Reject Claim'}
-        confirmLabel={isSubmitting ? 'Submitting…' : activeModal === 'return' ? 'Return Claim' : 'Reject Claim'}
-        variant={activeModal === 'return' ? 'warning' : 'error'}
-        disabled={isSubmitting || !decisionReason.trim()}
-      >
-        <p className="text-body-sm text-on-surface-variant mb-4">
-          {activeModal === 'return'
-            ? 'The requestor can correct and resubmit this claim. It will require approver approval again.'
-            : 'This decision is final and the claim cannot be resubmitted.'}
-        </p>
-        <label className="block text-label-md mb-1">Reason <span className="text-error">*</span></label>
-        <textarea rows={4} className="w-full rounded-lg border border-outline-variant bg-surface p-3" value={decisionReason} onChange={e => { setDecisionReason(e.target.value); setError(''); }} />
-        {error && <p className="text-error text-body-sm mt-2">{error}</p>}
       </ConfirmModal>
 
       <ConfirmModal

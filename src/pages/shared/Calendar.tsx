@@ -66,9 +66,7 @@ export function Calendar() {
     return { year: c.year + Math.floor(m / 12), month: ((m % 12) + 12) % 12 };
   });
 
-  const totalThisMonth =
-    Object.keys(byDay).reduce((n, key) => n + byDay[key].length, 0) +
-    Object.keys(momsByDay).reduce((n, key) => n + momsByDay[key].length, 0);
+  const totalThisMonth = Object.keys(byDay).reduce((n, key) => n + byDay[key].length, 0);
 
   // Selected always reflects the latest server data (after a refresh, the
   // object reference changes — look it up by id instead of trusting the stale one).
@@ -180,7 +178,6 @@ export function Calendar() {
 
             {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
               const events = byDay[`${year}-${month}-${day}`] || [];
-              const momEvents = momsByDay[`${year}-${month}-${day}`] || [];
               const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
               return (
                 <div key={day} className={`min-h-[100px] p-2 border rounded-lg transition-colors group ${isToday ? 'border-primary ring-1 ring-primary/30' : 'border-outline-variant hover:border-primary'}`}>
@@ -205,16 +202,6 @@ export function Calendar() {
                         {event.mom.companyName || 'Client meeting'}
                       </button>
                     ))}
-                    {momEvents.map(mom => (
-                      <button
-                        key={mom.id}
-                        onClick={() => navigate(`/moms/${mom.id}`)}
-                        title={`Client meeting · ${mom.companyName || 'Untitled'}`}
-                        className="w-full text-left text-[12px] px-2 py-1 rounded truncate bg-secondary-container text-on-secondary-container"
-                      >
-                        MOM · {mom.companyName || 'Client meeting'}
-                      </button>
-                    ))}
                   </div>
                 </div>
               );
@@ -226,7 +213,6 @@ export function Calendar() {
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-primary-container"></span> Confirmed</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-tertiary-container"></span> Pending confirmation</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-error-container"></span> Reschedule requested</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-secondary-container"></span> Client MOM meeting</span>
           </div>
         </div>
       </Card>

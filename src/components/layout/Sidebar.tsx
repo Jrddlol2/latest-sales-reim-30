@@ -89,18 +89,6 @@ const getNavItems = (role: UserRole): NavItem[] => {
     ];
   }
 
-  if (role === UserRole.FINANCE) {
-    return [
-      ...common,
-      { label: 'Company Reporting', icon: 'bar_chart', path: '/admin/reports' },
-      { label: 'Receipt Archive', icon: 'receipt_long', path: '/receipts' },
-      { label: 'All Claims', icon: 'description', path: '/claims' },
-      { label: 'System Activity', icon: 'manage_search', path: '/admin/audit' },
-      { label: 'Notifications', icon: 'notifications', path: '/notifications', badgeKey: 'notifications' },
-      { label: 'Settings', icon: 'settings', path: '/settings' },
-    ];
-  }
-
   return common;
 };
 
