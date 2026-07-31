@@ -68,6 +68,7 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
                 { role: 'custodian', label: 'Custodian', icon: 'payments' },
                 { role: 'finance', label: 'Finance', icon: 'account_balance' },
                 { role: 'admin', label: 'Admin', icon: 'admin_panel_settings' },
+                { role: 'finance', label: 'Finance', icon: 'query_stats' },
               ].map(r => (
                 <a
                   key={r.role}

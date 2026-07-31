@@ -20,6 +20,7 @@ import {
   validateReimbursementPurchaseDate,
 } from '../../lib/reimbursementPolicy';
 import { FieldDefinition, FieldDefinitionEntity } from '../../types';
+import { reimbursableAmount, REIMBURSEMENT_CAP, isPurchaseOlderThan30Days } from '../../lib/reimbursement';
 
 const TYPE_PARAM_MAP: Record<string, ClaimType> = {
   reimbursement: 'Reimbursement',
@@ -142,7 +143,7 @@ export function SubmitClaim() {
       // field the renderer hides leaves the user blocked by an invisible input.
       const activeClaimFields = fieldDefinitions.filter(fd =>
         fd.entity === 'claim' && fd.active &&
-        (!fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType))
+        (!fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType === 'Transport Reimbursement' ? 'Reimbursement' : claimType))
       );
       const missingRequired = activeClaimFields.find(fd => fd.required && (!claimCustomFields[fd.key] || claimCustomFields[fd.key].trim() === ''));
       if (missingRequired) {
@@ -242,7 +243,7 @@ export function SubmitClaim() {
     const out: Record<string, string> = {};
     fieldDefinitions
       .filter(fd => fd.entity === entity && fd.active)
-      .filter(fd => entity !== 'claim' || !fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType))
+      .filter(fd => entity !== 'claim' || !fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType === 'Transport Reimbursement' ? 'Reimbursement' : claimType))
       .forEach(fd => {
         if (fd.required || fd.default_value) {
           const v = sampleFieldValue(fd);
@@ -315,6 +316,8 @@ export function SubmitClaim() {
         }
         setMomCore(p => ({
           ...p,
+          meetingDate: p.meetingDate || today(),
+          meetingTime: p.meetingTime || '10:00',
           purpose: p.purpose || 'Quarterly account review',
           location: p.location || 'Makati City, Philippines',
           contactPerson: p.contactPerson || 'Jane Dela Cruz',
@@ -618,7 +621,7 @@ export function SubmitClaim() {
               <div className="mb-6">
                 <DynamicFieldRenderer
                   entity="claim"
-                  claimType={claimType}
+                  claimType={claimType === 'Transport Reimbursement' ? 'Reimbursement' : claimType}
                   values={claimCustomFields}
                   onChange={(key, value) => setClaimCustomFields(p => ({ ...p, [key]: value }))}
                 />
@@ -757,6 +760,11 @@ export function SubmitClaim() {
                 </div>
               </div>
               )}
+              {(claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && totalAmount > REIMBURSEMENT_CAP && (
+                <div className="mt-4 rounded-lg border border-tertiary/40 bg-tertiary-container/20 p-4 text-body-sm">
+                  You may submit the full {formatMoney(totalAmount)} claim. Under the current policy, the maximum payout for the whole claim is {formatMoney(cappedPayout)}.
+                </div>
+              )}
 
               {/* Refund due: the requestor spent less than the advance and owes
                   the balance back. Let them declare how they'll return it — the
@@ -883,12 +891,70 @@ export function SubmitClaim() {
                         <p className="text-body-sm text-outline mt-1">Capture the discussion first, followed by clear owners and next steps.</p>
                       </div>
                     <div>
-                      <Label>Discussion</Label>
+                      <Label>Time of Meeting</Label>
+                      <Input type="time" value={momCore.meetingTime} onChange={e => setMomCore(p => ({ ...p, meetingTime: e.target.value }))} />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <Label required>Client / Company</Label>
+                        {companies.length > 0 && (
+                          <button type="button" className="text-[12px] text-primary font-semibold hover:underline mb-1" onClick={() => setClientMode(m => m === 'select' ? 'custom' : 'select')}>
+                            {clientMode === 'select' ? 'Type a new company' : 'Choose from directory'}
+                          </button>
+                        )}
+                      </div>
+                      {clientMode === 'select' && companies.length > 0 ? (
+                        <Select value={companies.some(c => c.name === momCore.client) ? momCore.client : ''} onChange={e => applyCompanyDefaults(e.target.value)}>
+                          <option value="">-- Select a company --</option>
+                          {companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        </Select>
+                      ) : (
+                        <Input value={momCore.client} onChange={e => setMomCore(p => ({ ...p, client: e.target.value }))} placeholder="Who did you meet with?" />
+                      )}
+                    </div>
+                    <div>
+                      <Label>Contact Person</Label>
+                      <Input value={momCore.contactPerson} onChange={e => setMomCore(p => ({ ...p, contactPerson: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label required>Purpose of Meeting</Label>
+                      <Input value={momCore.purpose} onChange={e => setMomCore(p => ({ ...p, purpose: e.target.value }))} placeholder="Why did you meet?" />
+                    </div>
+                    <div>
+                      <Label required={momField('contact_person_designation')?.required}>Contact Person Designation</Label>
+                      <Input value={momData.contact_person_designation || ''} onChange={e => setMomData(p => ({ ...p, contact_person_designation: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label>Location of Meeting</Label>
+                      <Input value={momCore.location} onChange={e => setMomCore(p => ({ ...p, location: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label required={momField('type_of_account')?.required}>Type of Account</Label>
+                      <Select value={momData.type_of_account || ''} onChange={e => setMomData(p => ({ ...p, type_of_account: e.target.value }))}>
+                        <option value="">Select...</option>
+                        {momFieldOptions('type_of_account', ['Existing', 'New Client', 'Dormant']).map(option => <option key={option} value={option}>{option}</option>)}
+                      </Select>
+                    </div>
+                    <div>
+                      <Label required={momField('category')?.required}>Category</Label>
+                      <Select value={momData.category || ''} onChange={e => setMomData(p => ({ ...p, category: e.target.value }))}>
+                        <option value="">Select...</option>
+                        {momFieldOptions('category', ['Sales Call', 'Client Servicing', 'Business Review', 'Contract/Negotiation', 'Other']).map(option => <option key={option} value={option}>{option}</option>)}
+                        {momField('category')?.allow_other && !momFieldOptions('category', []).includes('Other') && <option value="Other">Other (Specify)</option>}
+                      </Select>
+                    </div>
+                  </div>
+                  {[
+                    ['Discussion', 'discussion'],
+                    ['Action Items', 'actionItems'],
+                  ].map(([label, key]) => (
+                    <div key={key}>
+                      <Label>{label}</Label>
                       <textarea
                         rows={6}
                         className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                        value={momCore.discussion}
-                        onChange={e => setMomCore(p => ({ ...p, discussion: e.target.value }))}
+                        value={momCore[key as 'discussion' | 'actionItems']}
+                        onChange={e => setMomCore(p => ({ ...p, [key]: e.target.value }))}
                       />
                     </div>
                     <div>

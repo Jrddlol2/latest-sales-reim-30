@@ -12,6 +12,7 @@ import { Button } from '../../components/ui/Button';
 import { Input, Label, Select } from '../../components/ui/Input';
 
 const ITEMS_PER_PAGE = 15;
+const ageInDays = (date: string) => Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 86400000));
 
 export function ProcessingQueue() {
   const navigate = useNavigate();

@@ -60,6 +60,7 @@ export function ClaimDetail() {
       businessPurpose: li.businessPurpose,
       expenseDate: li.expenseDate,
       paymentMethod: li.paymentMethod,
+      orNumber: li.orNumber,
       receiptUrl: li.receiptUrl,
       orNumber: li.orNumber,
     })));
@@ -128,6 +129,7 @@ export function ClaimDetail() {
              <h1 className="font-display text-display text-on-surface break-words">{claim.purpose}</h1>
              <StatusBadge status={claim.status} />
           </div>
+          <p className="text-body-sm text-outline mt-2">Date Filed: {formatDateTime(claim.submittedAt || claim.createdAt)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3 shrink-0">
           <Button variant="outline" className="gap-2" onClick={() => window.print()}>
@@ -226,7 +228,7 @@ export function ClaimDetail() {
             <CardHeader>
               <h3 className="font-headline-md text-on-surface">Expense Line Items</h3>
               <div className="bg-primary-fixed text-on-primary-fixed px-3 py-1 rounded-full font-label-md">
-                Total: {formatMoney(claim.total)}
+                Claimed: {formatMoney(claim.total)} · Reimbursable: {formatMoney(claim.reimbursableAmount ?? Math.min(claim.total, 1000))}
               </div>
             </CardHeader>
             <div className="overflow-x-auto hidden md:block">

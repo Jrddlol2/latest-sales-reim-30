@@ -63,6 +63,24 @@ export function MOMs() {
     setStatusFilter('');
   };
 
+  const saveStandaloneMom = async () => {
+    if (!draft.meetingDate || !draft.client.trim() || !draft.purpose.trim()) {
+      addToast('Date of Meeting, Client / Company, and Purpose are required.', 'error');
+      return;
+    }
+    setSaving(true);
+    try {
+      await createStandaloneMom(draft);
+      await refresh();
+      setShowCreate(false);
+      addToast('Private standalone MOM created.', 'success');
+    } catch (error: any) {
+      addToast(error?.message || 'Could not create the MOM.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex justify-between items-end">
@@ -228,6 +246,47 @@ export function MOMs() {
           onPageChange={setCurrentPage} 
         />
       </Card>
+
+      {showCreate && (
+        <div className="fixed inset-0 z-50 bg-black/45 p-4 overflow-y-auto" onMouseDown={() => setShowCreate(false)}>
+          <div className="max-w-3xl mx-auto my-8 rounded-xl bg-surface shadow-2xl" onMouseDown={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between border-b border-outline-variant p-6">
+              <div>
+                <h2 className="font-headline-md">Create Standalone MOM</h2>
+                <p className="text-body-sm text-outline mt-1">Private to you unless it is later attached to a reimbursement.</p>
+              </div>
+              <button onClick={() => setShowCreate(false)} aria-label="Close"><span className="material-symbols-outlined">close</span></button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div><Label required>Date of Meeting</Label><Input type="date" value={draft.meetingDate} onChange={e => setDraft(p => ({ ...p, meetingDate: e.target.value }))} /></div>
+                <div />
+                <div><Label required>Client / Company</Label><Input value={draft.client} onChange={e => setDraft(p => ({ ...p, client: e.target.value }))} /></div>
+                <div><Label>Contact Person</Label><Input value={draft.contactPerson} onChange={e => setDraft(p => ({ ...p, contactPerson: e.target.value }))} /></div>
+                <div><Label required>Purpose of Meeting</Label><Input value={draft.purpose} onChange={e => setDraft(p => ({ ...p, purpose: e.target.value }))} /></div>
+                <div><Label>Contact Person Designation</Label><Input value={draft.contactPersonDesignation} onChange={e => setDraft(p => ({ ...p, contactPersonDesignation: e.target.value }))} /></div>
+                <div><Label>Location of Meeting</Label><Input value={draft.location} onChange={e => setDraft(p => ({ ...p, location: e.target.value }))} /></div>
+                <div><Label>Type of Account</Label><Select value={draft.typeOfAccount} onChange={e => setDraft(p => ({ ...p, typeOfAccount: e.target.value }))}><option>Existing</option><option>New Client</option><option>Dormant</option></Select></div>
+                <div><Label>Category</Label><Select value={draft.category} onChange={e => setDraft(p => ({ ...p, category: e.target.value }))}><option value="">Select...</option><option>Sales Call</option><option>Client Servicing</option><option>Business Review</option><option>Contract/Negotiation</option><option>Other</option></Select></div>
+              </div>
+              {[
+                ['Discussion', 'discussion'],
+                ['Action Items', 'actionItems'],
+              ].map(([label, key]) => (
+                <div key={key}>
+                  <Label>{label}</Label>
+                  <textarea rows={3} className="w-full rounded-md border border-outline-variant bg-white px-4 py-3" value={draft[key as 'discussion' | 'actionItems']} onChange={e => setDraft(p => ({ ...p, [key]: e.target.value }))} />
+                </div>
+              ))}
+              <div><Label>Client Email</Label><Input type="email" value={draft.contactPersonEmail} onChange={e => setDraft(p => ({ ...p, contactPersonEmail: e.target.value }))} /></div>
+            </div>
+            <div className="flex justify-end gap-3 border-t border-outline-variant p-6">
+              <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
+              <Button onClick={saveStandaloneMom} disabled={saving}>{saving ? 'Saving…' : 'Create MOM'}</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

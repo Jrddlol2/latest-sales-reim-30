@@ -394,3 +394,88 @@ describe('core reimbursement loop (submit -> approve -> process -> ready -> comp
     expect(liquidationAnalytics.body.dimensions.types).toContain('Liquidation');
   });
 });
+
+describe('approved post-meeting reimbursement rules', () => {
+  it('accepts a receipt-backed transport claim without a MOM and caps the whole-claim payout', async () => {
+    const submit = await api('/api/claims', REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({
+        reimbursement_type: 'Transport',
+        remarks: 'Client transport',
+        line_items: [
+          {
+            category: 'Transportation',
+            amount: 750,
+            expense_date: '2026-07-01',
+            vendor: 'Taxi',
+            receipt_url: '/receipt_taxi.png',
+            or_number: 'OR-TAXI-1',
+          },
+          {
+            category: 'Transportation',
+            amount: 700,
+            expense_date: '2026-07-01',
+            vendor: 'Parking',
+            receipt_url: '/receipt_parking.png',
+            or_number: 'OR-PARK-1',
+          },
+        ],
+      }),
+    });
+
+    expect(submit.status).toBe(200);
+    expect(submit.body.reimbursement_type).toBe('Transport');
+    expect(submit.body.mom_id).toBeUndefined();
+    expect(submit.body.total_amount).toBe(1450);
+    expect(submit.body.reimbursable_amount).toBe(1000);
+  });
+
+  it('still requires a MOM for a standard reimbursement', async () => {
+    const submit = await api('/api/claims', REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({
+        reimbursement_type: 'Standard',
+        expense_category: 'Client Meals',
+        total_amount: 900,
+        receipt_url: '/receipt_meal.png',
+      }),
+    });
+
+    expect(submit.status).toBe(400);
+    expect(submit.body.error).toContain('Minutes of Meeting');
+  });
+
+  it('lets an approver optionally schedule a review meeting when returning a claim', async () => {
+    const transport = await api('/api/claims', REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({
+        reimbursement_type: 'Transport',
+        line_items: [{
+          category: 'Transportation',
+          amount: 850,
+          expense_date: '2026-07-02',
+          vendor: 'Ride share',
+          receipt_url: '/receipt_ride.png',
+        }],
+      }),
+    });
+
+    const returned = await api(`/api/claims/${transport.body.id}/approve`, APPROVER_ID, {
+      method: 'POST',
+      body: JSON.stringify({
+        decision: 'Returned',
+        comment: 'Please clarify the route.',
+        review_meeting: { meeting_date: '2026-08-03', meeting_time: '14:00' },
+      }),
+    });
+    expect(returned.status).toBe(200);
+    expect(returned.body.status).toBe('Returned');
+
+    const meetings = await api('/api/review-meetings', REQUESTOR_ID);
+    expect(meetings.body.some((meeting: any) =>
+      meeting.claim_id === transport.body.id &&
+      meeting.meeting_date === '2026-08-03' &&
+      meeting.meeting_time === '14:00'
+    )).toBe(true);
+  });
+});

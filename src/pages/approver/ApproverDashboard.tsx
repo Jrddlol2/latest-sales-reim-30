@@ -12,7 +12,6 @@ import { TeamMemberSpending } from '../../components/shared/TeamAnalytics';
 
 const DECISION_STATUSES: string[] = [ClaimStatus.APPROVED, ClaimStatus.REJECTED, ClaimStatus.RETURNED];
 const PENDING_STATUSES: string[] = [ClaimStatus.PENDING_APPROVAL, ClaimStatus.SUBMITTED];
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function ApproverDashboard() {
   const navigate = useNavigate();
@@ -145,13 +144,13 @@ export function ApproverDashboard() {
           gets clipped: setting overflow-x forces overflow-y to auto too,
           which crops any box-shadow that extends past the scroll box. */}
       <div className="flex flex-wrap items-center gap-3 py-2">
-        {(['All', 'Reimbursement', 'Cash Advance', 'Liquidation'] as const).map(t => (
+        {(['All', 'Reimbursement', 'Transport Reimbursement', 'Cash Advance', 'Liquidation'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTypeFilter(t)}
             className={`px-5 py-2 rounded-full font-label-md transition-colors focus:ring-2 focus:ring-primary outline-none whitespace-nowrap ${typeFilter === t ? 'bg-primary text-white shadow-md' : 'bg-surface-container-high text-on-surface-variant hover:bg-outline-variant'}`}
           >
-            {t === 'All' ? 'All Requests' : t === 'Reimbursement' ? 'Claims' : t === 'Cash Advance' ? 'Cash Advances' : 'Liquidations'}
+            {t === 'All' ? 'All Requests' : t}
           </button>
         ))}
       </div>

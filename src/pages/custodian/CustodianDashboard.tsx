@@ -63,7 +63,10 @@ export function CustodianDashboard() {
               ['Ref', 'Requestor', 'Type', 'Amount', 'Status'],
               ...processingClaims.map(c => {
                 const req = users.find(u => u.id === c.requestorId);
-                return [c.ref, req?.name || '', c.type, c.total.toFixed(2), c.status];
+                const payout = c.type === 'Reimbursement' || c.type === 'Transport Reimbursement'
+                  ? (c.reimbursableAmount ?? Math.min(c.total, 1000))
+                  : c.total;
+                return [c.ref, req?.name || '', c.type, payout.toFixed(2), c.status];
               }),
             ];
             const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
