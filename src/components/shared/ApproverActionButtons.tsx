@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Button } from '../ui/Button';
+import { Input } from '../ui/Input';
 import { ClaimStatus, Claim } from '../../types';
 import { ConfirmModal } from './ConfirmModal';
 import { useAppContext } from '../AppContext';
@@ -20,15 +21,23 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
 
   const [activeModal, setActiveModal] = useState<'approve' | 'reject' | 'return' | null>(null);
   const [comment, setComment] = useState('');
+  const [reviewMeetingDate, setReviewMeetingDate] = useState('');
+  const [reviewMeetingTime, setReviewMeetingTime] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAction = (action: 'approve' | 'reject' | 'return') => {
     setComment('');
+    setReviewMeetingDate('');
+    setReviewMeetingTime('');
     setActiveModal(action);
   };
 
   const handleConfirm = async () => {
     if (!activeModal) return;
+    if ((reviewMeetingDate && !reviewMeetingTime) || (!reviewMeetingDate && reviewMeetingTime)) {
+      addToast('Choose both a review meeting date and time, or leave both blank.', 'error');
+      return;
+    }
 
     let newStatus: ClaimStatus;
     let toastMsg = '';
@@ -53,7 +62,10 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
 
     setIsSubmitting(true);
     try {
-      await updateClaimStatus(claim.id, newStatus, currentUser.id, comment);
+      await updateClaimStatus(claim.id, newStatus, currentUser.id, comment, {
+        reviewMeetingDate: reviewMeetingDate || undefined,
+        reviewMeetingTime: reviewMeetingTime || undefined,
+      });
       addToast(toastMsg, toastType);
       setActiveModal(null);
     } catch (err: any) {
@@ -66,6 +78,22 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
   };
 
   const isConfirmDisabled = (activeModal === 'reject' || activeModal === 'return') && comment.trim() === '';
+  const reviewMeetingFields = (
+    <div className="mt-4 pt-4 border-t border-outline-variant">
+      <p className="font-label-md text-on-surface mb-1">Optional Review Meeting</p>
+      <p className="text-body-sm text-outline mb-3">Schedule time with the requestor to discuss this decision.</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-label-sm text-on-surface mb-1">Date</label>
+          <Input type="date" value={reviewMeetingDate} onChange={event => setReviewMeetingDate(event.target.value)} disabled={isSubmitting} />
+        </div>
+        <div>
+          <label className="block text-label-sm text-on-surface mb-1">Time</label>
+          <Input type="time" value={reviewMeetingTime} onChange={event => setReviewMeetingTime(event.target.value)} disabled={isSubmitting} />
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <>
@@ -130,6 +158,7 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
             <p className="text-error text-body-sm mt-1">A reason is required to return a claim.</p>
           )}
         </div>
+        {reviewMeetingFields}
       </ConfirmModal>
 
       <ConfirmModal
@@ -156,6 +185,7 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
             <p className="text-error text-body-sm mt-1">A reason is required to reject a claim.</p>
           )}
         </div>
+        {reviewMeetingFields}
       </ConfirmModal>
     </>
   );

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { KPICard } from '../../components/ui/KPICard';
 import { Button } from '../../components/ui/Button';
-import { Card, CardHeader } from '../../components/ui/Card';
+import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { LiquidationProgressCard } from '../../components/shared/LiquidationProgressCard';
 import { ClaimProgressTracker } from '../../components/shared/ClaimProgressTracker';
@@ -15,13 +15,13 @@ const ACTIVE_STATUSES = [ClaimStatus.DRAFT, ClaimStatus.PENDING_APPROVAL, ClaimS
 const LIQUIDATION_DEADLINE_DAYS = 7; // mirrors server.ts's LIQUIDATION_DEADLINE_DAYS
 
 export function RequestorDashboard() {
-  const { currentUser, claims, users } = useAppContext();
+  const { currentUser, claims, users, statusHistory } = useAppContext();
   const navigate = useNavigate();
 
   const myClaims = claims.filter(c => c.requestorId === currentUser.id);
   const activeClaimsCount = myClaims.filter(c => ACTIVE_STATUSES.includes(c.status)).length;
   const completedClaims = myClaims.filter(c => c.status === ClaimStatus.COMPLETED);
-  const totalReimbursed = completedClaims.reduce((acc, c) => acc + c.total, 0);
+  const totalReimbursed = completedClaims.reduce((acc, c) => acc + c.paidAmount, 0);
 
   const openAdvances = useMemo(
     () => myClaims.filter(c => c.type === 'Cash Advance' && c.status === ClaimStatus.RELEASED),
@@ -47,7 +47,7 @@ export function RequestorDashboard() {
   }, [myClaims]);
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="flex flex-col gap-8 animate-in fade-in duration-500">
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
@@ -55,13 +55,9 @@ export function RequestorDashboard() {
           <p className="font-body-lg text-body-lg text-on-surface-variant mt-1">Today is {formatLongDate(new Date())}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline" className="gap-2" onClick={() => navigate('/claims/new?type=advance')}>
-            <span className="material-symbols-outlined text-[20px]">add_card</span>
-            Request Cash Advance
-          </Button>
-          <Button className="gap-2" onClick={() => navigate('/claims/new?type=reimbursement')}>
-            <span className="material-symbols-outlined text-[20px]">receipt_long</span>
-            New Reimbursement
+          <Button className="gap-2 px-6" onClick={() => navigate('/claims/new')}>
+            <span className="material-symbols-outlined text-[20px]">note_add</span>
+            New Claim
           </Button>
         </div>
       </div>
@@ -114,7 +110,7 @@ export function RequestorDashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="order-1 grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Recent Requests Table */}
         <Card className="lg:col-span-2 flex flex-col">
           <CardHeader>
@@ -183,7 +179,7 @@ export function RequestorDashboard() {
         {/* Side Panel */}
         <div className="flex flex-col gap-4">
           <LiquidationProgressCard claims={myClaims} />
-          <ClaimProgressTracker claim={mostRecentClaim} users={users} />
+          <ClaimProgressTracker claim={mostRecentClaim} users={users} statusHistory={statusHistory} />
         </div>
       </div>
     </div>

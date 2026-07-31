@@ -13,7 +13,13 @@ interface AppContextType {
   claims: Claim[];
   statusHistory: StatusHistory[];
   /** Resolves once the server has applied the transition and state has reloaded. */
-  updateClaimStatus: (claimId: string, newStatus: ClaimStatus, changedBy: string, comment?: string, updates?: Partial<Claim>) => Promise<void>;
+  updateClaimStatus: (
+    claimId: string,
+    newStatus: ClaimStatus,
+    changedBy: string,
+    comment?: string,
+    updates?: Partial<Claim> & { reviewMeetingDate?: string; reviewMeetingTime?: string }
+  ) => Promise<void>;
   /** Re-pull the whole workspace from the server. */
   refresh: () => Promise<void>;
   lineItems: ExpenseLineItem[];
@@ -207,7 +213,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     newStatus: ClaimStatus,
     _changedBy: string,
     comment?: string,
-    updates?: Partial<Claim>,
+    updates?: Partial<Claim> & { reviewMeetingDate?: string; reviewMeetingTime?: string },
   ) => {
     const claim = claims.find(c => c.id === claimId);
     if (!claim) throw new Error(`Unknown claim ${claimId}`);
@@ -217,10 +223,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await decideOnClaim(claim, 'Approved', comment || '');
         break;
       case ClaimStatus.REJECTED:
-        await decideOnClaim(claim, 'Rejected', comment || '');
+        await decideOnClaim(claim, 'Rejected', comment || '', updates);
         break;
       case ClaimStatus.RETURNED:
-        await decideOnClaim(claim, 'Returned', comment || '');
+        await decideOnClaim(claim, 'Returned', comment || '', updates);
         break;
       case ClaimStatus.READY_FOR_CLAIM:
         await markReadyForClaim(claimId, updates?.paymentMethod);

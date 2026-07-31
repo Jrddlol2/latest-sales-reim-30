@@ -1,31 +1,50 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader } from '../../components/ui/Card';
-import { Input } from '../../components/ui/Input';
+import { Button } from '../../components/ui/Button';
+import { Input, Select } from '../../components/ui/Input';
 import { useAppContext } from '../../components/AppContext';
 import { Pagination } from '../../components/ui/Pagination';
 import { formatDate } from '../../lib/date';
-import { DOCUMENT_TYPE_LABEL, MomDocumentType } from '../../types';
+import { DOCUMENT_TYPE_LABEL, MomDocumentType, UserRole } from '../../types';
 
 export function MOMs() {
   const navigate = useNavigate();
-  const { moms, claims } = useAppContext();
+  const { moms, claims, currentUser, users } = useAppContext();
   const [query, setQuery] = useState('');
+  const [scope, setScope] = useState<'mine' | 'team'>('mine');
+  const [linkFilter, setLinkFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
   
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
+  const isApprover = currentUser.role === UserRole.APPROVER;
+  const reporteeIds = useMemo(
+    () => new Set(users.filter(u => u.reportsTo === currentUser.id).map(u => u.id)),
+    [users, currentUser.id]
+  );
+  const showPreparedBy = isApprover && scope === 'team';
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const sorted = [...moms].sort((a, b) =>
+    const scoped = !isApprover
+      ? moms
+      : moms.filter(m => scope === 'mine' ? m.requestorId === currentUser.id : !!m.requestorId && reporteeIds.has(m.requestorId));
+    const sorted = [...scoped].filter(m => {
+      if (linkFilter === 'linked' && !m.claimId) return false;
+      if (linkFilter === 'unlinked' && m.claimId) return false;
+      if (statusFilter && m.status !== statusFilter) return false;
+      return true;
+    }).sort((a, b) =>
       new Date(b.meetingDate || 0).getTime() - new Date(a.meetingDate || 0).getTime()
     );
     if (!q) return sorted;
     return sorted.filter(m =>
-      [m.purposeOfMeeting, m.companyName, m.contactPerson, m.preparedBy]
+      [m.purposeOfMeeting, m.companyName, m.location, m.contactPerson, m.preparedBy]
         .some(v => (v || '').toLowerCase().includes(q))
     );
-  }, [moms, query]);
+  }, [moms, query, isApprover, scope, currentUser.id, reporteeIds, linkFilter, statusFilter]);
 
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
   const paginatedMOMs = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -33,10 +52,16 @@ export function MOMs() {
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [query]);
+  }, [query, scope, linkFilter, statusFilter]);
 
   const claimRefFor = (claimId?: string) =>
     claimId ? claims.find(c => c.id === claimId)?.ref : undefined;
+  const hasFilters = Boolean(linkFilter !== 'all' || statusFilter);
+  const clearFilters = () => {
+    setQuery('');
+    setLinkFilter('all');
+    setStatusFilter('');
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -45,23 +70,78 @@ export function MOMs() {
           <h1 className="font-display text-display text-on-surface">Minutes &amp; Agreements</h1>
           <p className="text-body-md text-outline mt-1">Track the meeting minutes and letters of agreement attached to claims.</p>
         </div>
+        <Button className="gap-2" onClick={() => navigate('/moms/new')}>
+          <span className="material-symbols-outlined text-[18px]">add</span>
+          Create MOM
+        </Button>
       </div>
+
+      {isApprover && (
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => setScope('mine')}
+            className={`px-5 py-2 rounded-full font-label-md transition-colors ${scope === 'mine' ? 'bg-primary text-white shadow-sm' : 'bg-surface-container-high text-on-surface-variant'}`}
+          >
+            My Documents
+          </button>
+          <button
+            onClick={() => setScope('team')}
+            className={`px-5 py-2 rounded-full font-label-md transition-colors ${scope === 'team' ? 'bg-primary text-white shadow-sm' : 'bg-surface-container-high text-on-surface-variant'}`}
+          >
+            Team Documents
+          </button>
+        </div>
+      )}
 
       <Card>
         <CardHeader className="bg-surface-container-low">
-          <div className="flex justify-between items-center w-full gap-4">
-            <h3 className="font-label-md uppercase tracking-wider text-on-surface whitespace-nowrap">Records</h3>
-            <div className="flex items-center gap-3">
-              <div className="w-64 max-w-full">
-                <Input
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  placeholder="Search purpose, client, contact..."
-                  className="py-1.5 text-sm"
-                />
+          <div className="w-full">
+            <div className="flex flex-wrap justify-between items-center gap-3">
+              <h3 className="font-label-md uppercase tracking-wider text-on-surface whitespace-nowrap">Records</h3>
+              <div className="flex flex-wrap items-center justify-end gap-3 flex-1">
+                <div className="min-w-[240px] flex-1 max-w-md">
+                  <Input
+                    value={query}
+                    onChange={e => setQuery(e.target.value)}
+                    placeholder="Search minutes and agreements..."
+                    className="py-1.5 text-sm"
+                    aria-label="Search minutes and agreements"
+                  />
+                </div>
+                <Button size="sm" variant="outline" className="gap-2" onClick={() => setShowFilters(open => !open)} aria-expanded={showFilters}>
+                  <span className="material-symbols-outlined text-[18px]">filter_list</span>
+                  Filters{hasFilters ? ' (active)' : ''}
+                </Button>
+                {(query || hasFilters) && <button className="text-xs font-semibold text-primary hover:underline" onClick={clearFilters}>Clear all</button>}
+                <span className="font-label-sm text-outline whitespace-nowrap">{filtered.length} of {moms.length}</span>
               </div>
-              <span className="font-label-sm text-outline whitespace-nowrap">{filtered.length} of {moms.length}</span>
             </div>
+            {showFilters && (
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-outline-variant pt-4">
+                <div>
+                  <label className="block text-label-sm text-on-surface mb-1">Claim linkage</label>
+                  <Select value={linkFilter} onChange={e => setLinkFilter(e.target.value as typeof linkFilter)}>
+                    <option value="all">All linkages</option>
+                    <option value="linked">Linked to claim</option>
+                    <option value="unlinked">Unlinked</option>
+                  </Select>
+                </div>
+                <div>
+                  <label className="block text-label-sm text-on-surface mb-1">Document status</label>
+                  <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                    <option value="">All statuses</option>
+                    <option value="Draft">Draft</option>
+                    <option value="Completed">Finalized</option>
+                  </Select>
+                </div>
+              </div>
+            )}
+            {hasFilters && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {linkFilter !== 'all' && <button onClick={() => setLinkFilter('all')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{linkFilter === 'linked' ? 'Linked to claim' : 'Unlinked'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+                {statusFilter && <button onClick={() => setStatusFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{statusFilter === 'Completed' ? 'Finalized' : statusFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+              </div>
+            )}
           </div>
         </CardHeader>
         <div className="overflow-x-auto">
@@ -71,8 +151,9 @@ export function MOMs() {
                 <th className="px-6 py-4">Type</th>
                 <th className="px-6 py-4">Purpose</th>
                 <th className="px-6 py-4">Client</th>
-                <th className="px-6 py-4">Date</th>
-                <th className="px-6 py-4">Prepared By</th>
+                <th className="px-6 py-4">Location of Meeting</th>
+                <th className="px-6 py-4">Date of Meeting</th>
+                {showPreparedBy && <th className="px-6 py-4">Prepared By</th>}
                 <th className="px-6 py-4">Claim</th>
                 <th className="px-6 py-4 text-center">Status</th>
               </tr>
@@ -80,7 +161,7 @@ export function MOMs() {
             <tbody className="divide-y divide-outline-variant">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-outline">
+                  <td colSpan={showPreparedBy ? 8 : 7} className="px-6 py-12 text-center text-outline">
                     <span className="material-symbols-outlined text-4xl mb-2 opacity-50">description</span>
                     <p className="font-label-md">{moms.length === 0 ? 'No minutes or agreements found.' : 'No records match your search.'}</p>
                   </td>
@@ -109,13 +190,13 @@ export function MOMs() {
                     </td>
                     <td className="px-6 py-5">
                       <p className="font-bold text-on-surface">{mom.purposeOfMeeting || 'Untitled meeting'}</p>
-                      {mom.location && <p className="text-body-sm text-outline mt-0.5">{mom.location}</p>}
                     </td>
                     <td className="px-6 py-5 text-on-surface-variant text-sm">{mom.companyName || '—'}</td>
+                    <td className="px-6 py-5 text-on-surface-variant text-sm">{mom.location || '—'}</td>
                     <td className="px-6 py-5 font-mono-data text-on-surface-variant text-sm">
                       {mom.meetingDate ? formatDate(mom.meetingDate) : '—'}
                     </td>
-                    <td className="px-6 py-5 text-on-surface-variant text-sm">{mom.preparedBy || '—'}</td>
+                    {showPreparedBy && <td className="px-6 py-5 text-on-surface-variant text-sm">{mom.preparedBy || '—'}</td>}
                     <td className="px-6 py-5 text-sm">
                       {ref ? (
                         <button
@@ -132,7 +213,7 @@ export function MOMs() {
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         mom.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
                       }`}>
-                        {mom.status || 'Draft'}
+                        {mom.status === 'Completed' ? 'Finalized' : (mom.status || 'Draft')}
                       </span>
                     </td>
                   </tr>

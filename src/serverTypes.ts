@@ -2,6 +2,7 @@ export enum UserRole {
   REQUESTOR = 'Requestor',
   APPROVER = 'Approver',
   CUSTODIAN = 'Custodian',
+  FINANCE = 'Finance',
   ADMIN = 'Admin',
 }
 
@@ -77,6 +78,7 @@ export interface Mom {
   client?: string;
   contact_person?: string;
   contact_person_email?: string;
+  cc_client?: boolean;
   meeting_date: string;
   meeting_time?: string;
   location?: string;
@@ -124,7 +126,7 @@ export interface FieldDefinition {
   // new UI relies on it, and applicableClaimTypes narrows a claim field to
   // specific types (empty/undefined = all).
   entity: 'mom' | 'claim';
-  applicableClaimTypes?: ('Reimbursement' | 'Cash Advance' | 'Liquidation')[];
+  applicableClaimTypes?: ('Reimbursement' | 'Transport Reimbursement' | 'Cash Advance' | 'Liquidation')[];
   key: string;
   label: string;
   input_type: FieldInputType;
@@ -194,9 +196,12 @@ export interface Claim {
   requestor_id: string;
   current_approver_id: string;
   original_approver_id?: string;
-  mom_id: string;
+  mom_id?: string;
+  claim_type?: 'Reimbursement' | 'Transport Reimbursement';
   status: ClaimStatus;
   total_amount: number;
+  approved_amount?: number;
+  paid_amount?: number;
   expense_category?: string;
   receipt_url?: string;
   remarks?: string;
@@ -206,6 +211,7 @@ export interface Claim {
   release_code?: string;
   flagged_high_value?: boolean;
   approved_at?: string;
+  paid_at?: string;
   processed_by?: string;
   processing_date?: string;
   sourceLiquidationId?: string;
@@ -298,6 +304,7 @@ export interface Email {
   body: string;
   read: boolean;
   timestamp: string;
+  channel?: 'Email' | 'Teams';
 }
 
 export enum CashAdvanceStatus {
@@ -316,6 +323,8 @@ export interface CashAdvance {
   purpose: string;
   momId?: string;
   approverId: string;
+  approvedAt?: string;
+  paidAmount?: number;
   releasedBy?: string;
   releaseDate?: string;
   releaseReference?: string;

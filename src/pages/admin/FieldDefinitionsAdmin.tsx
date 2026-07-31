@@ -31,7 +31,7 @@ function generateUniqueKey(label: string, existingKeys: string[]): string {
   return key;
 }
 
-const CLAIM_TYPES: ClaimType[] = ['Reimbursement', 'Cash Advance', 'Liquidation'];
+const CLAIM_TYPES: ClaimType[] = ['Reimbursement', 'Transport Reimbursement', 'Cash Advance', 'Liquidation'];
 
 function ClaimTypeCheckboxes({ editForm, setEditForm }: { editForm: Partial<FieldDefinition>, setEditForm: any }) {
   const toggleType = (type: ClaimType) => {

@@ -87,7 +87,7 @@ export function Topbar({ onMenuClick, isCollapsed = false }: TopbarProps) {
                 <div className="p-3 border-b border-outline-variant flex justify-between items-center bg-surface-container-low">
                   <span className="font-semibold text-on-surface text-sm cursor-pointer hover:text-primary" onClick={() => { setShowNotifications(false); navigate('/notifications'); }}>Notifications</span>
                   {currentUser.role === 'Admin' && (
-                    <button onClick={() => navigate('/admin/emails')} className="text-xs text-primary hover:underline">System Emails</button>
+                    <button onClick={() => navigate('/admin/activity?tab=messages')} className="text-xs text-primary hover:underline">System Activity</button>
                   )}
                 </div>
                 <div className="overflow-y-auto flex-1 p-2 space-y-1">

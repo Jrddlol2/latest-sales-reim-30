@@ -1,5 +1,5 @@
 import React from "react";
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
 import { Input, Select, Label } from '../../components/ui/Input';
@@ -8,59 +8,66 @@ import { cn } from '../../components/ui/Button';
 import { useAppContext } from '../../components/AppContext';
 import { DynamicFieldRenderer } from '../../components/shared/DynamicFieldRenderer';
 import { useToast } from '../../components/shared/ToastContext';
-import { MinutesSource, ClaimStatus, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
+import { ClaimStatus, ClaimType, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
 import { submitClaimFlow, submitCashAdvanceFlow, submitLiquidationFlow, DraftLineItem } from '../../lib/api';
 import { formatMoney } from '../../lib/money';
 import { EXPENSE_CATEGORIES } from '../../lib/expenseCategories';
+import {
+  getReimbursementDateError,
+  getTodayIsoDate,
+  REIMBURSEMENT_FILING_WINDOW_DAYS,
+  shiftIsoDate,
+  validateReimbursementPurchaseDate,
+} from '../../lib/reimbursementPolicy';
 import { FieldDefinition, FieldDefinitionEntity } from '../../types';
 
-const TYPE_PARAM_MAP: Record<string, 'Reimbursement' | 'Cash Advance' | 'Liquidation'> = {
+const TYPE_PARAM_MAP: Record<string, ClaimType> = {
   reimbursement: 'Reimbursement',
+  transport: 'Transport Reimbursement',
   advance: 'Cash Advance',
   liquidation: 'Liquidation',
 };
+const REIMBURSEMENT_CAP = 1000;
 
 export function SubmitClaim() {
   const navigate = useNavigate();
-  const { currentUser, fieldDefinitions, users, claims, companies, masterData, highValueThreshold, categoryLimits, paymentMethods, refresh } = useAppContext();
+  const { currentUser, fieldDefinitions, users, claims, companies, masterData, paymentMethods, refresh } = useAppContext();
   const { addToast } = useToast();
   const [searchParams] = useSearchParams();
   const typeFromQuery = TYPE_PARAM_MAP[searchParams.get('type') ?? ''];
+  const reimbursementIntent = searchParams.get('intent') === 'reimbursement';
 
-  const [claimType, setClaimType] = useState<'Reimbursement' | 'Cash Advance' | 'Liquidation'>(typeFromQuery ?? 'Reimbursement');
+  const [claimType, setClaimType] = useState<ClaimType>(typeFromQuery ?? 'Reimbursement');
   // Step 0 is Type Selection. A Reimbursement now opens on the Minutes of
   // Meeting step (2) rather than Details & Items (1) — see stepFlow below.
   const [step, setStep] = useState(typeFromQuery ? (typeFromQuery === 'Reimbursement' ? 2 : 1) : 0);
   const [loading, setLoading] = useState(false);
-  const momFileInputRef = useRef<HTMLInputElement>(null);
 
   // Form State. Holds the real File alongside the preview URL â€” the server
   // needs the bytes, and an object URL can't be re-read after a reload.
   const [lineItemsLocal, setLineItemsLocal] = useState<DraftLineItem[]>([
-    { expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }
+    { expenseDate: '', amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }
   ]);
+  const [dateValidationAttempted, setDateValidationAttempted] = useState(false);
   const [momCore, setMomCore] = useState({
-    client: '', purpose: '', location: '', contactPerson: '', contactPersonEmail: '', discussion: '',
+    client: '', purpose: '', meetingDate: '', location: '', contactPerson: '', contactPersonEmail: '',
+    discussion: '', actionItems: '', ccClient: false,
   });
   // A known Company Directory entry can pre-fill the meeting details below
   // (mirrors the original system's "Company Auto-Fill" MOM behavior). Default
   // to the picker when companies exist; fall back to free text otherwise.
   const [clientMode, setClientMode] = useState<'select' | 'custom'>('select');
-  const [momFile, setMomFile] = useState<File | undefined>();
   const [cashAdvanceId, setCashAdvanceId] = useState<string>('');
   const [cashAdvanceAmount, setCashAdvanceAmount] = useState<number>(0);
   const [cashAdvancePurpose, setCashAdvancePurpose] = useState('');
   // How the requestor intends to return an over-advance (refund due). Only
   // relevant to a Liquidation whose actual spend came in under the advance.
   const [refundMethod, setRefundMethod] = useState('');
-  const [momSource, setMomSource] = useState<MinutesSource>(MinutesSource.TEMPLATE);
   // Whether this claim is anchored to Minutes of Meeting or a Letter of
   // Agreement — same record, different intent/labelling.
   const [documentType, setDocumentType] = useState<MomDocumentType>('MoM');
   const [momData, setMomData] = useState<Record<string, any>>({});
   const [claimCustomFields, setClaimCustomFields] = useState<Record<string, string>>({});
-  const [meetingDate, setMeetingDate] = useState('');
-  const [meetingTime, setMeetingTime] = useState('');
 
   // Declared in the order a Reimbursement actually visits them (MOM before
   // Details & Items) — the stepper dots and the "Step X of Y" label below
@@ -68,7 +75,6 @@ export function SubmitClaim() {
   const steps = [
     { num: 2, title: DOCUMENT_TYPE_LABEL[documentType] },
     { num: 1, title: 'Details & Items' },
-    { num: 3, title: 'Schedule Review' },
     { num: 4, title: 'Review & Submit' }
   ];
 
@@ -77,19 +83,36 @@ export function SubmitClaim() {
   // Review & Submit. A Reimbursement captures the Minutes of Meeting first,
   // then the expense details/items, so the approver's context (who, why) is
   // already on record before line items are entered.
-  const stepFlow = claimType === 'Reimbursement' ? [2, 1, 3, 4] : [1, 4];
+  const stepFlow = claimType === 'Reimbursement' ? [2, 1, 4] : [1, 4];
   const flowPosition = stepFlow.indexOf(step);
+  const isReimbursement = claimType === 'Reimbursement' || claimType === 'Transport Reimbursement';
+  const filingDate = getTodayIsoDate();
+  const earliestEligiblePurchaseDate = shiftIsoDate(filingDate, -REIMBURSEMENT_FILING_WINDOW_DAYS);
+  const invalidReimbursementDateIndex = isReimbursement
+    ? lineItemsLocal.findIndex(item => !validateReimbursementPurchaseDate(item.expenseDate, filingDate).valid)
+    : -1;
+  const hasInvalidReimbursementDate = invalidReimbursementDateIndex !== -1;
+
+  const showReimbursementDateError = () => {
+    if (!hasInvalidReimbursementDate) return false;
+    setDateValidationAttempted(true);
+    const message = getReimbursementDateError(
+      lineItemsLocal[invalidReimbursementDateIndex]?.expenseDate,
+      filingDate,
+    );
+    addToast(`Cannot proceed — expense row ${invalidReimbursementDateIndex + 1}: ${message}`, 'error');
+    return true;
+  };
 
   const handleNext = () => {
-    if (step === 1 && claimType === 'Reimbursement' && lineItemsLocal.length === 0) {
+    if (step === 1 && (claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && lineItemsLocal.length === 0) {
       addToast('Please add at least one line item', 'error');
       return;
     }
-    // Company spending policy — block advancing past Details with an over-cap line.
-    if (step === 1 && claimType !== 'Cash Advance' && firstOverLimit) {
-      addToast(`${firstOverLimit.category} is capped at ${formatMoney(limitFor(firstOverLimit.category))} per item by company policy.`, 'error');
+    if (step === 1 && isReimbursement && showReimbursementDateError()) {
       return;
     }
+    // Company spending policy — block advancing past Details with an over-cap line.
     if (step === 1 && claimType === 'Cash Advance') {
       if (!cashAdvanceAmount || cashAdvanceAmount <= 0) {
         addToast('Please enter the amount you\'re requesting', 'error');
@@ -114,7 +137,7 @@ export function SubmitClaim() {
         return;
       }
     }
-    if (step === 1 && claimType === 'Reimbursement') {
+    if (step === 1 && (claimType === 'Reimbursement' || claimType === 'Transport Reimbursement')) {
       // Must mirror DynamicFieldRenderer's own filter exactly â€” validating a
       // field the renderer hides leaves the user blocked by an invisible input.
       const activeClaimFields = fieldDefinitions.filter(fd =>
@@ -127,7 +150,11 @@ export function SubmitClaim() {
         return;
       }
     }
-    if (step === 2 && momSource === MinutesSource.TEMPLATE) {
+    if (step === 2) {
+      if (!momCore.client.trim() || !momCore.purpose.trim() || !momCore.meetingDate) {
+        addToast('Client, purpose, and date of meeting are required.', 'error');
+        return;
+      }
       const activeMomFields = fieldDefinitions.filter(fd => fd.entity === 'mom' && fd.active);
       const missingRequired = activeMomFields.find(fd => fd.required && (!momData[fd.key] || momData[fd.key].trim() === ''));
       if (missingRequired) {
@@ -146,16 +173,9 @@ export function SubmitClaim() {
   const totalAmount = claimType === 'Cash Advance'
     ? Number(cashAdvanceAmount) || 0
     : lineItemsLocal.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const flaggedHighValue = lineItemsLocal.some(item => (Number(item.amount) || 0) > highValueThreshold);
-
-  /** Company spending policy: the cap for a line's category, or 0 if none. */
-  const limitFor = (category?: string) => (category && categoryLimits[category]) || 0;
-  const overLimit = (item: DraftLineItem) => {
-    const cap = limitFor(item.category);
-    return cap > 0 && (Number(item.amount) || 0) > cap;
-  };
-  const firstOverLimit = lineItemsLocal.find(overLimit);
-  
+  const reimbursableAmount = claimType === 'Reimbursement' || claimType === 'Transport Reimbursement'
+    ? Math.min(totalAmount, REIMBURSEMENT_CAP)
+    : totalAmount;
   let varianceAmount = 0;
   let varianceType: 'Settled' | 'RefundDue' | 'ReimbursementDue' = 'Settled';
   if (claimType === 'Liquidation' && cashAdvanceId) {
@@ -189,19 +209,12 @@ export function SubmitClaim() {
     }));
   };
 
-  const handleFileUploadForMOM = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setMomFile(file);
-    setMomData(p => ({ ...p, fileName: file.name }));
-  };
-
   /** Presenter convenience (the header "Autofill" button): fill the ENTIRE
    *  flow — Minutes of Meeting, admin-configured custom fields, expense line
    *  items (with a mock receipt, since the server rejects any expense line
    *  without one) and the review meeting — in one click, so a full claim can be
    *  filled and submitted while presenting instead of typing every field. */
-  const today = () => new Date().toISOString().split('T')[0];
+  const today = () => getTodayIsoDate();
 
   /** Produce a plausible value for one admin-configured custom field, matching
    *  its input type so dropdowns land on a real option and the renderer's own
@@ -283,6 +296,11 @@ export function SubmitClaim() {
           { expenseDate: today(), amount: 1200, paymentMethod: 'Personal Card', vendor: 'Grand Hotel', category: 'Travel', businessPurpose: 'Accommodation during client visit', receiptFile: mockReceipt('receipt_1.png'), receiptUrl: URL.createObjectURL(mockReceipt('receipt_1.png')) },
         ]);
         setClaimCustomFields(fillCustomFields('claim'));
+      } else if (claimType === 'Transport Reimbursement') {
+        setLineItemsLocal([
+          { expenseDate: today(), amount: 850, paymentMethod: 'Personal Card', vendor: 'Grab', category: 'Transportation', businessPurpose: 'Business transport', orNumber: 'OR-DEMO-001', receiptFile: mockReceipt('transport_receipt.png'), receiptUrl: URL.createObjectURL(mockReceipt('transport_receipt.png')) },
+        ]);
+        setClaimCustomFields(fillCustomFields('claim'));
       } else {
         // Reimbursement — fill the whole multi-step flow at once.
         setLineItemsLocal([
@@ -302,11 +320,10 @@ export function SubmitClaim() {
           contactPerson: p.contactPerson || 'Jane Dela Cruz',
           contactPersonEmail: p.contactPersonEmail || 'jane@client.com',
           discussion: p.discussion || 'Reviewed pipeline, agreed next steps and follow-up schedule.',
+          actionItems: p.actionItems || 'Send the revised proposal and confirm the next meeting date.',
+          meetingDate: p.meetingDate || today(),
         }));
         setMomData(p => ({ ...p, ...fillCustomFields('mom') }));
-        const inThreeDays = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-        setMeetingDate(d => d || inThreeDays.toISOString().split('T')[0]);
-        setMeetingTime(t => t || '14:00');
       }
       addToast('Form filled with demo data.', 'success');
     } catch {
@@ -323,6 +340,7 @@ export function SubmitClaim() {
    * which the server rejects for anything without expense line items).
    */
   const send = async (isDraft: boolean) => {
+    if (!isDraft && isReimbursement && showReimbursementDateError()) return;
     setLoading(true);
     try {
       if (claimType === 'Cash Advance') {
@@ -340,19 +358,14 @@ export function SubmitClaim() {
         });
       } else {
         await submitClaimFlow({
+          claimType,
           lineItems: lineItemsLocal,
-          mom: {
+          mom: claimType === 'Reimbursement' ? {
             ...momCore,
-            meetingDate,
-            meetingTime,
-            source: momSource,
             documentType,
-            file: momFile,
-          },
+          } : undefined,
           customFields: { ...momData, ...claimCustomFields },
-          meetingDate,
-          meetingTime,
-          remarks: momCore.purpose,
+          remarks: claimType === 'Transport Reimbursement' ? 'Transport reimbursement' : momCore.purpose,
           isDraft,
         });
       }
@@ -360,8 +373,7 @@ export function SubmitClaim() {
       addToast(isDraft ? 'Saved as draft.' : `${claimType} submitted successfully!`, 'success');
       navigate('/claims');
     } catch (err: any) {
-      // Server-side workflow rules (missing receipt, unscheduled review meeting,
-      // no assigned manager) surface here verbatim rather than being guessed at.
+      // Server-side workflow rules surface here verbatim rather than being guessed at.
       addToast(err?.message || `Could not submit the ${claimType.toLowerCase()}.`, 'error');
     } finally {
       setLoading(false);
@@ -393,29 +405,92 @@ export function SubmitClaim() {
   if (step === 0) {
     return (
       <div className="max-w-[800px] mx-auto py-12 px-6">
-        <h2 className="font-headline-lg mb-6">What would you like to submit?</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Reimbursement'); setStep(2); }}>
-            <CardContent className="p-6 text-center">
-              <span className="material-symbols-outlined text-[48px] text-primary mb-4">receipt_long</span>
-              <h3 className="font-headline-sm">Reimbursement</h3>
-              <p className="text-sm text-on-surface-variant mt-2">Claim business expenses already paid for.</p>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-sm font-semibold text-on-surface-variant hover:text-primary mb-6"
+          onClick={() => navigate(-1)}
+        >
+          <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+          Back
+        </button>
+        <div className="mb-8">
+          <span className="font-label-sm text-primary font-bold uppercase tracking-wider">
+            {reimbursementIntent ? 'New reimbursement' : 'New request'}
+          </span>
+          <h2 className="font-display text-display text-on-surface mt-1">
+            {reimbursementIntent ? 'What are you claiming?' : 'What would you like to submit?'}
+          </h2>
+          <p className="text-body-md text-outline mt-2">
+            {reimbursementIntent
+              ? 'Choose the option that matches the expense. We will tailor the form and requirements for you.'
+              : 'Choose a request type to start the correct workflow.'}
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => { setClaimType('Reimbursement'); setStep(2); }}>
+            <CardContent className="p-7">
+              <div className="w-12 h-12 rounded-xl bg-primary-container/30 text-primary flex items-center justify-center mb-5">
+                <span className="material-symbols-outlined text-[28px]">receipt_long</span>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="font-headline-sm">General Reimbursement</h3>
+                  <p className="text-sm text-on-surface-variant mt-2">Meals, accommodation, supplies, and other business expenses.</p>
+                </div>
+                <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+              </div>
+              <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">Includes meeting details and supporting minutes.</p>
             </CardContent>
           </Card>
-          <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Cash Advance'); setStep(1); }}>
-            <CardContent className="p-6 text-center">
-              <span className="material-symbols-outlined text-[48px] text-primary mb-4">payments</span>
-              <h3 className="font-headline-sm">Cash Advance</h3>
-              <p className="text-sm text-on-surface-variant mt-2">Request funds before an upcoming expense.</p>
+          <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => {
+            setClaimType('Transport Reimbursement');
+            setLineItemsLocal([{ expenseDate: '', amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Transportation' }]);
+            setStep(1);
+          }}>
+            <CardContent className="p-7">
+              <div className="w-12 h-12 rounded-xl bg-secondary-container/60 text-on-secondary-container flex items-center justify-center mb-5">
+                <span className="material-symbols-outlined text-[28px]">local_taxi</span>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="font-headline-sm">Transport Reimbursement</h3>
+                  <p className="text-sm text-on-surface-variant mt-2">Fares, mileage, tolls, parking, and other business transport.</p>
+                </div>
+                <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+              </div>
+              <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">A faster receipt-based flow with no meeting minutes required.</p>
             </CardContent>
           </Card>
-          <Card className="hover:border-primary cursor-pointer transition-colors" onClick={() => { setClaimType('Liquidation'); setStep(1); }}>
-            <CardContent className="p-6 text-center">
-              <span className="material-symbols-outlined text-[48px] text-primary mb-4">account_balance_wallet</span>
-              <h3 className="font-headline-sm">Liquidation</h3>
-              <p className="text-sm text-on-surface-variant mt-2">Settle an existing cash advance.</p>
+          {!reimbursementIntent && <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => { setClaimType('Cash Advance'); setStep(1); }}>
+            <CardContent className="p-7">
+              <div className="w-12 h-12 rounded-xl bg-primary-container/30 text-primary flex items-center justify-center mb-5">
+                <span className="material-symbols-outlined text-[28px]">payments</span>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="font-headline-sm">Cash Advance</h3>
+                  <p className="text-sm text-on-surface-variant mt-2">Request company funds before an upcoming business expense.</p>
+                </div>
+                <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+              </div>
+              <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">The released amount must be liquidated after the expense.</p>
             </CardContent>
-          </Card>
+          </Card>}
+          {!reimbursementIntent && <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => { setClaimType('Liquidation'); setStep(1); }}>
+            <CardContent className="p-7">
+              <div className="w-12 h-12 rounded-xl bg-secondary-container/60 text-on-secondary-container flex items-center justify-center mb-5">
+                <span className="material-symbols-outlined text-[28px]">account_balance_wallet</span>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="font-headline-sm">Liquidation</h3>
+                  <p className="text-sm text-on-surface-variant mt-2">Submit receipts and settle an existing cash advance.</p>
+                </div>
+                <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
+              </div>
+              <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">Available when you have a released advance to settle.</p>
+            </CardContent>
+          </Card>}
         </div>
       </div>
     );
@@ -487,7 +562,13 @@ export function SubmitClaim() {
               <h3 className="font-headline-md text-on-surface">{claimType} Details</h3>
               <div className="flex items-center gap-2">
               {claimType !== 'Cash Advance' && !liquidationBlocked && (
-                <Button size="sm" className="gap-2" onClick={() => setLineItemsLocal(p => [...p, { expenseDate: new Date().toISOString().split('T')[0], amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }])}>
+                <Button size="sm" className="gap-2" onClick={() => setLineItemsLocal(p => [...p, {
+                  expenseDate: '',
+                  amount: 0,
+                  paymentMethod: 'Personal Card',
+                  vendor: '',
+                  category: claimType === 'Transport Reimbursement' ? 'Transportation' : 'Meals',
+                }])}>
                   <span className="material-symbols-outlined text-[18px]">add</span> Add Row
                 </Button>
               )}
@@ -545,14 +626,26 @@ export function SubmitClaim() {
               )}
               {claimType !== 'Cash Advance' && !liquidationBlocked && (
               <div className="overflow-x-auto">
-                <table className="w-full text-left min-w-[900px]">
+                {isReimbursement && (
+                  <div className="mb-4 flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+                    <span className="material-symbols-outlined text-primary text-[20px]">event_available</span>
+                    <div>
+                      <p className="text-sm font-semibold text-on-surface">30-day filing window</p>
+                      <p className="text-xs text-on-surface-variant mt-0.5">
+                        Receipt purchases must be dated from {earliestEligiblePurchaseDate} through {filingDate}. Older receipts cannot proceed to review.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <table className="w-full text-left min-w-[1080px]">
                   <thead className="bg-brand-table-header text-on-surface-variant font-label-sm uppercase tracking-wider">
                     <tr>
-                      <th className="px-3 py-3 sticky left-0 bg-brand-table-header z-20 shadow-[1px_0_0_var(--color-brand-border)]">Date</th>
+                      <th className="px-3 py-3 sticky left-0 bg-brand-table-header z-20 shadow-[1px_0_0_var(--color-brand-border)]">Date of Purchase</th>
                       <th className="px-3 py-3">Category</th>
                       <th className="px-3 py-3">Vendor / Supplier</th>
                       <th className="px-3 py-3">Payment Method</th>
                       <th className="px-3 py-3">Purpose</th>
+                      <th className="px-3 py-3">OR Number</th>
                       <th className="px-3 py-3 text-right">Amount</th>
                       <th className="px-3 py-3">Receipt / OR Attachment</th>
                       <th className="px-3 py-3 w-10"></th>
@@ -562,10 +655,26 @@ export function SubmitClaim() {
                     {lineItemsLocal.map((item, idx) => (
                       <tr key={idx} className="hover:bg-brand-row-hover transition-colors group">
                         <td className="px-3 py-3 sticky left-0 bg-white z-10 shadow-[1px_0_0_var(--color-brand-border)] group-hover:bg-brand-row-hover">
-                          <Input type="date" value={item.expenseDate || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, expenseDate: e.target.value } : li))} className="py-1 px-2 text-xs" />
+                          <Input
+                            type="date"
+                            value={item.expenseDate || ''}
+                            max={isReimbursement ? filingDate : undefined}
+                            aria-invalid={dateValidationAttempted && isReimbursement && !validateReimbursementPurchaseDate(item.expenseDate, filingDate).valid}
+                            onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, expenseDate: e.target.value } : li))}
+                            className={cn(
+                              "py-1 px-2 text-xs",
+                              dateValidationAttempted && isReimbursement && !validateReimbursementPurchaseDate(item.expenseDate, filingDate).valid && "border-error focus:ring-error",
+                            )}
+                          />
+                          {dateValidationAttempted && isReimbursement && getReimbursementDateError(item.expenseDate, filingDate) && (
+                            <p className="text-error text-[11px] mt-1 max-w-[190px] flex items-start gap-1">
+                              <span className="material-symbols-outlined text-[13px] mt-px">error</span>
+                              {getReimbursementDateError(item.expenseDate, filingDate)}
+                            </p>
+                          )}
                         </td>
                         <td className="px-3 py-3">
-                          <Select className="py-1 px-2 text-xs" value={item.category || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, category: e.target.value } : li))}>
+                          <Select disabled={claimType === 'Transport Reimbursement'} className="py-1 px-2 text-xs" value={item.category || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, category: e.target.value } : li))}>
                             <option value="">Select Category</option>
                             {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                           </Select>
@@ -585,16 +694,19 @@ export function SubmitClaim() {
                           <Input type="text" value={item.businessPurpose || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, businessPurpose: e.target.value } : li))} className="py-1 px-2 text-xs" placeholder="Purpose..." />
                         </td>
                         <td className="px-3 py-3">
+                          <Input
+                            type="text"
+                            value={item.orNumber || ''}
+                            onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, orNumber: e.target.value } : li))}
+                            className="py-1 px-2 text-xs"
+                            placeholder="Official receipt no."
+                          />
+                        </td>
+                        <td className="px-3 py-3">
                           <div className="relative">
                             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-outline-variant text-xs">₱</span>
-                            <Input type="number" value={item.amount || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, amount: Number(e.target.value) } : li))} className={cn("pl-5 py-1 px-2 text-right font-mono-data text-xs", overLimit(item) && "border-error text-error")} />
+                            <Input type="number" value={item.amount || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, amount: Number(e.target.value) } : li))} className="pl-5 py-1 px-2 text-right font-mono-data text-xs" />
                           </div>
-                          {overLimit(item) && (
-                            <p className="text-error text-[11px] mt-1 whitespace-nowrap flex items-center gap-0.5">
-                              <span className="material-symbols-outlined text-[13px]">error</span>
-                              Max {formatMoney(limitFor(item.category))}
-                            </p>
-                          )}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
@@ -686,39 +798,9 @@ export function SubmitClaim() {
                       <option value="MoM">Minutes of Meeting</option>
                       <option value="LOA">Letter of Agreement</option>
                     </Select>
-                    <Select value={momSource} onChange={(e) => setMomSource(e.target.value as MinutesSource)} className="w-auto">
-                      <option value={MinutesSource.TEMPLATE}>Fill Template</option>
-                      <option value={MinutesSource.UPLOADED}>Upload File</option>
-                    </Select>
                   </div>
                 </div>
                 
-                {momSource === MinutesSource.UPLOADED ? (
-                  <div className="border-2 border-dashed border-outline-variant rounded-lg p-12 text-center flex flex-col items-center justify-center bg-surface-container-low">
-                    <input 
-                      type="file" 
-                      accept=".pdf,.doc,.docx,image/*" 
-                      className="hidden" 
-                      ref={momFileInputRef}
-                      onChange={handleFileUploadForMOM}
-                    />
-                    {momData.fileName ? (
-                      <div className="flex flex-col items-center">
-                        <span className="material-symbols-outlined text-[56px] text-primary mb-3">description</span>
-                        <p className="font-bold text-on-surface mb-1">{momData.fileName}</p>
-                        <p className="text-xs text-green-700 bg-green-100 px-3 py-1 rounded-full mb-4">File attached ready for submission</p>
-                        <Button variant="outline" size="sm" onClick={() => setMomData(p => ({...p, fileName: undefined, fileUrl: undefined}))}>Remove File</Button>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="material-symbols-outlined text-[48px] text-outline mb-4">cloud_upload</span>
-                        <p className="font-bold text-on-surface mb-2">Drag and drop MOM document</p>
-                        <p className="text-sm text-on-surface-variant mb-6">PDF, DOCX, or JPG up to 10MB</p>
-                        <Button variant="outline" onClick={() => momFileInputRef.current?.click()}>Browse Files</Button>
-                      </>
-                    )}
-                  </div>
-                ) : (
                   <div className="space-y-6">
                     {/* Core minutes fields. These are first-class columns on the
                         server's MOM record, not admin-configurable extras, so
@@ -754,54 +836,78 @@ export function SubmitClaim() {
                         <Input value={momCore.purpose} onChange={e => setMomCore(p => ({ ...p, purpose: e.target.value }))} placeholder="Why did you meet?" />
                       </div>
                       <div>
-                        <Label>Location</Label>
+                        <Label required>Date of Meeting</Label>
+                        <Input type="date" value={momCore.meetingDate} onChange={e => setMomCore(p => ({ ...p, meetingDate: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label>Location of Meeting</Label>
                         <Input value={momCore.location} onChange={e => setMomCore(p => ({ ...p, location: e.target.value }))} />
                       </div>
-                      <div>
-                        <Label>Contact Person</Label>
-                        <Input value={momCore.contactPerson} onChange={e => setMomCore(p => ({ ...p, contactPerson: e.target.value }))} />
-                      </div>
-                      <div>
-                        <Label>Contact Email</Label>
-                        <Input type="email" value={momCore.contactPersonEmail} onChange={e => setMomCore(p => ({ ...p, contactPersonEmail: e.target.value }))} />
-                      </div>
                     </div>
+                    <section className="pt-6 border-t border-outline-variant space-y-5">
+                      <div>
+                        <h5 className="font-headline-sm text-on-surface">Meeting classification</h5>
+                        <p className="text-body-sm text-outline mt-1">Add the account and reporting details used to categorize this meeting.</p>
+                      </div>
+                      <DynamicFieldRenderer entity="mom" values={momData} onChange={(key, value) => setMomData(p => ({ ...p, [key]: value }))} />
+                    </section>
+                    <section className="pt-6 border-t border-outline-variant space-y-5">
+                      <div>
+                        <h5 className="font-headline-sm text-on-surface">Client contact</h5>
+                        <p className="text-body-sm text-outline mt-1">Who attended on behalf of the client and where should updates be sent?</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                          <Label>Contact Person</Label>
+                          <Input value={momCore.contactPerson} onChange={e => setMomCore(p => ({ ...p, contactPerson: e.target.value }))} />
+                        </div>
+                        <div>
+                          <Label>Client Email</Label>
+                          <Input type="email" value={momCore.contactPersonEmail} onChange={e => setMomCore(p => ({ ...p, contactPersonEmail: e.target.value }))} />
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-3 min-h-11 px-4 py-3 rounded-lg border border-outline-variant bg-surface-container-low cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={momCore.ccClient}
+                          onChange={e => setMomCore(p => ({ ...p, ccClient: e.target.checked }))}
+                          disabled={!momCore.contactPersonEmail}
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <span className="text-body-sm text-on-surface">CC client on claim status notifications</span>
+                      </label>
+                    </section>
+                    <section className="pt-6 border-t border-outline-variant space-y-5">
+                      <div>
+                        <h5 className="font-headline-sm text-on-surface">Full meeting record</h5>
+                        <p className="text-body-sm text-outline mt-1">Capture the discussion first, followed by clear owners and next steps.</p>
+                      </div>
                     <div>
                       <Label>Discussion</Label>
                       <textarea
-                        rows={3}
+                        rows={6}
                         className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
                         value={momCore.discussion}
                         onChange={e => setMomCore(p => ({ ...p, discussion: e.target.value }))}
                       />
                     </div>
-                    <DynamicFieldRenderer entity="mom" values={momData} onChange={(key, value) => setMomData(p => ({ ...p, [key]: value }))} />
+                    <div>
+                      <Label>Action Items</Label>
+                      <textarea
+                        rows={4}
+                        className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
+                        value={momCore.actionItems}
+                        onChange={e => setMomCore(p => ({ ...p, actionItems: e.target.value }))}
+                        placeholder="List owners, next steps, and target dates."
+                      />
+                    </div>
+                    </section>
                   </div>
-                )}
               </CardContent>
             </Card>
           </div>
         )}
         
-        {step === 3 && (
-          <Card className="max-w-2xl mx-auto">
-            <CardContent>
-              <h4 className="font-headline-md text-on-surface mb-6">Schedule Review Meeting</h4>
-              <p className="text-on-surface-variant mb-8">Select a time to review this claim with your approver ({approver?.name || 'Assigned Approver'}).</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <Label required>Date</Label>
-                  <Input type="date" value={meetingDate} onChange={e => setMeetingDate(e.target.value)} />
-                </div>
-                <div>
-                  <Label required>Time</Label>
-                  <Input type="time" value={meetingTime} onChange={e => setMeetingTime(e.target.value)} />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {step === 4 && (
           <Card className="max-w-3xl mx-auto text-center py-12">
             <span className="material-symbols-outlined text-[48px] text-primary mb-4">fact_check</span>
@@ -809,8 +915,20 @@ export function SubmitClaim() {
             <p className="text-on-surface-variant mb-6">Review your {claimType} before submission.</p>
             <div className="bg-surface-container p-6 rounded-lg text-left inline-block w-full max-w-md">
               <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Type:</span><span className="font-bold">{claimType}</span></div>
-              <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Total Amount:</span><span className="font-mono-data font-bold">{formatMoney(totalAmount)}</span></div>
+              <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Claimed Amount:</span><span className="font-mono-data font-bold">{formatMoney(totalAmount)}</span></div>
+              {(claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && (
+                <div className="flex justify-between mb-2">
+                  <span className="text-on-surface-variant">Maximum Reimbursable:</span>
+                  <span className="font-mono-data font-bold text-primary">{formatMoney(reimbursableAmount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between mb-2"><span className="text-on-surface-variant">Date Filed:</span><span className="font-mono-data font-bold">{today()}</span></div>
               <div className="flex justify-between"><span className="text-on-surface-variant">Approver:</span><span className="font-bold">{approver?.name || 'Assigned Approver'}</span></div>
+              {totalAmount > REIMBURSEMENT_CAP && (claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && (
+                <p className="text-body-sm text-tertiary mt-4 pt-4 border-t border-outline-variant">
+                  You may file the full amount, but current policy limits reimbursement to {formatMoney(REIMBURSEMENT_CAP)} per claim.
+                </p>
+              )}
             </div>
           </Card>
         )}
@@ -823,9 +941,14 @@ export function SubmitClaim() {
         <div className="flex gap-4">
           {step > 0 && !liquidationBlocked && <Button variant="ghost" onClick={handleSaveDraft} className="hidden md:inline-flex">Save Draft</Button>}
           {step > 0 && step < 4 && !liquidationBlocked ? (
-            <Button className="gap-2 px-8" onClick={handleNext}>Next Step <span className="material-symbols-outlined hidden sm:inline-block">arrow_forward</span></Button>
+            <Button
+              className="gap-2 px-8"
+              onClick={handleNext}
+            >
+              Next Step <span className="material-symbols-outlined hidden sm:inline-block">arrow_forward</span>
+            </Button>
           ) : step === 4 ? (
-            <Button className="gap-2 px-8" onClick={handleSubmit} disabled={loading}>
+            <Button className="gap-2 px-8" onClick={handleSubmit} disabled={loading || hasInvalidReimbursementDate}>
               {loading ? <span className="material-symbols-outlined animate-spin">sync</span> : null} Submit <span className="hidden sm:inline-block ml-1">{claimType}</span>
             </Button>
           ) : null}

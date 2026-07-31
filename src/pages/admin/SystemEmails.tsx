@@ -60,8 +60,8 @@ export function SystemEmails() {
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="font-display text-display text-on-surface">System Emails</h1>
-          <p className="text-body-md text-outline mt-1">Every system-generated notification and transaction email, as sent.</p>
+          <h1 className="font-display text-display text-on-surface">Sent Notifications</h1>
+          <p className="text-body-md text-outline mt-1">System-generated Email and Microsoft Teams delivery records.</p>
         </div>
         <div className="flex gap-2 text-xs font-semibold">
           <span className="bg-primary-container/20 text-primary px-3 py-1.5 rounded-full">Total: {total}</span>
@@ -90,19 +90,20 @@ export function SystemEmails() {
                 <th className="w-8 px-4 py-4"></th>
                 <th className="px-4 py-4">Timestamp</th>
                 <th className="px-4 py-4">Recipient</th>
+                <th className="px-4 py-4">Channel</th>
                 <th className="px-4 py-4">Subject & Preview</th>
                 <th className="px-4 py-4 w-20 text-center">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant">
               {loading ? (
-                <tr><td colSpan={5} className="px-6 py-12 text-center text-outline">
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-outline">
                   <span className="material-symbols-outlined animate-spin">sync</span>
                 </td></tr>
               ) : error ? (
-                <tr><td colSpan={5} className="px-6 py-8 text-center text-error">{error}</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-error">{error}</td></tr>
               ) : emails.length === 0 ? (
-                <tr><td colSpan={5} className="px-6 py-8 text-center text-outline">No matching system emails found.</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-outline">No matching system notifications found.</td></tr>
               ) : emails.map(e => {
                 const recipient = users.find(u => u.id === e.recipientId);
                 return (
@@ -118,6 +119,11 @@ export function SystemEmails() {
                     <td className="px-4 py-4 text-on-surface text-xs">
                       <p className="font-bold">{recipient?.name || e.to || e.recipientId}</p>
                       <p className="text-outline text-[12px]">{recipient?.email || e.to}</p>
+                    </td>
+                    <td className="px-4 py-4">
+                      <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${e.channel === 'Teams' ? 'bg-violet-100 text-violet-800' : 'bg-blue-100 text-blue-800'}`}>
+                        {e.channel || 'Email'}
+                      </span>
                     </td>
                     <td className="px-4 py-4 text-xs">
                       <p className="text-on-surface font-semibold truncate max-w-md">{e.subject}</p>

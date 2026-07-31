@@ -1,20 +1,26 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Portal } from '../../components/shared/Portal';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { Input } from '../../components/ui/Input';
+import { Input, Label, Select } from '../../components/ui/Input';
 import { useToast } from '../../components/shared/ToastContext';
 import { useAppContext } from '../../components/AppContext';
-import { createCompany, updateCompany } from '../../lib/api';
+import { createCompany, importCompanies, updateCompany } from '../../lib/api';
 import { Company } from '../../types';
 
 export function CompanyDirectory() {
   const { addToast } = useToast();
   const { companies, refresh } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
+  const [industryFilter, setIndustryFilter] = useState('');
+  const [completenessFilter, setCompletenessFilter] = useState('');
+  const [sortOrder, setSortOrder] = useState<'name' | 'industry'>('name');
+  const [showFilters, setShowFilters] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState('');
   const [industry, setIndustry] = useState('');
@@ -23,9 +29,17 @@ export function CompanyDirectory() {
   const [contactPerson, setContactPerson] = useState('');
   const [contactEmail, setContactEmail] = useState('');
 
-  const filtered = companies.filter(c =>
-    [c.name, c.industry, c.notes, c.address, c.contactPerson, c.contactEmail].some(v => (v || '').toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const industries = Array.from(new Set(companies.map(company => company.industry).filter((value): value is string => Boolean(value)))).sort();
+  const filtered = companies.filter(c => {
+    const matchesSearch = [c.name, c.industry, c.notes, c.address, c.contactPerson, c.contactEmail].some(v => (v || '').toLowerCase().includes(searchTerm.toLowerCase()));
+    const matchesIndustry = !industryFilter || c.industry === industryFilter;
+    const isComplete = Boolean(c.contactPerson && c.contactEmail && c.address);
+    const matchesCompleteness = !completenessFilter || (completenessFilter === 'complete' ? isComplete : !isComplete);
+    return matchesSearch && matchesIndustry && matchesCompleteness;
+  }).sort((a, b) => sortOrder === 'industry'
+    ? (a.industry || '').localeCompare(b.industry || '') || a.name.localeCompare(b.name)
+    : a.name.localeCompare(b.name));
+  const hasFilters = Boolean(industryFilter || completenessFilter);
 
   const openAdd = () => {
     setEditing(null);
@@ -77,6 +91,50 @@ export function CompanyDirectory() {
     }
   };
 
+  const handleImport = async (file?: File) => {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.trim());
+      if (lines.length < 2) throw new Error('The CSV must include a header and at least one company.');
+      const parseLine = (line: string) => {
+        const values: string[] = [];
+        let value = '';
+        let quoted = false;
+        for (let index = 0; index < line.length; index++) {
+          const char = line[index];
+          if (char === '"' && quoted && line[index + 1] === '"') { value += '"'; index++; }
+          else if (char === '"') quoted = !quoted;
+          else if (char === ',' && !quoted) { values.push(value.trim()); value = ''; }
+          else value += char;
+        }
+        values.push(value.trim());
+        return values;
+      };
+      const normalize = (value: string) => value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+      const headers = parseLine(lines[0]).map(normalize);
+      if (!headers.includes('name') && !headers.includes('company_name')) {
+        throw new Error('The CSV needs a "name" or "company_name" column.');
+      }
+      const rows = lines.slice(1).map(line => {
+        const values = parseLine(line);
+        const row: Record<string, string> = {};
+        headers.forEach((header, index) => { row[header === 'company_name' ? 'name' : header] = values[index] || ''; });
+        return row;
+      });
+      const result = await importCompanies(rows);
+      await refresh();
+      const errorText = result.errors.length ? ` ${result.errors.length} row(s) had errors.` : '';
+      addToast(`Import complete: ${result.inserted} added, ${result.updated} updated, ${result.skipped} unchanged.${errorText}`, result.errors.length ? 'info' : 'success');
+    } catch (error: any) {
+      addToast(error?.message || 'Could not import the company CSV.', 'error');
+    } finally {
+      setImporting(false);
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
@@ -85,23 +143,45 @@ export function CompanyDirectory() {
           <h1 className="font-display text-display text-on-surface mt-1">Company Directory</h1>
           <p className="text-body-md text-outline mt-1">Client and partner entities — auto-created from meeting minutes and editable here.</p>
         </div>
-        <Button className="gap-2" onClick={openAdd}>
-          <span className="material-symbols-outlined">add</span> Add Company
-        </Button>
+        <div className="flex gap-2">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={event => handleImport(event.target.files?.[0])}
+          />
+          <Button variant="outline" className="gap-2" disabled={importing} onClick={() => importInputRef.current?.click()}>
+            <span className={`material-symbols-outlined ${importing ? 'animate-spin' : ''}`}>{importing ? 'sync' : 'upload_file'}</span>
+            Import CSV
+          </Button>
+          <Button className="gap-2" onClick={openAdd}>
+            <span className="material-symbols-outlined">add</span> Add Company
+          </Button>
+        </div>
       </div>
 
-      <div className="bg-surface-container-low p-4 rounded-xl border border-outline-variant max-w-md">
-        <Input
-          type="text"
-          placeholder="Search by name, industry, or notes..."
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-        />
-      </div>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-[240px] flex-1 max-w-xl"><Input type="text" placeholder="Search name, contact, location, or notes..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+          <Button variant="outline" className="gap-2" onClick={() => setShowFilters(open => !open)}><span className="material-symbols-outlined text-[18px]">filter_list</span>Filters{hasFilters ? ' (active)' : ''}</Button>
+          <Select className="w-40" value={sortOrder} onChange={e => setSortOrder(e.target.value as typeof sortOrder)} aria-label="Sort company directory"><option value="name">Name A–Z</option><option value="industry">Industry A–Z</option></Select>
+          {(searchTerm || hasFilters || sortOrder !== 'name') && <button className="text-xs font-semibold text-primary hover:underline" onClick={() => { setSearchTerm(''); setIndustryFilter(''); setCompletenessFilter(''); setSortOrder('name'); }}>Clear all</button>}
+        </div>
+        {showFilters && <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-outline-variant pt-4">
+          <div><Label>Industry</Label><Select value={industryFilter} onChange={e => setIndustryFilter(e.target.value)}><option value="">All industries</option>{industries.map(item => <option key={item}>{item}</option>)}</Select></div>
+          <div><Label>Directory Details</Label><Select value={completenessFilter} onChange={e => setCompletenessFilter(e.target.value)}><option value="">Any completeness</option><option value="complete">Complete contact details</option><option value="missing">Missing contact details</option></Select></div>
+        </div>}
+        {hasFilters && <div className="mt-3 flex flex-wrap gap-2">
+          {industryFilter && <button onClick={() => setIndustryFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{industryFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+          {completenessFilter && <button onClick={() => setCompletenessFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{completenessFilter === 'complete' ? 'Complete details' : 'Missing details'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+        </div>}
+      </Card>
 
       <Card>
         <CardHeader className="bg-surface-container-low">
-          <h3 className="font-label-md uppercase tracking-wider text-on-surface">Registered Entities ({filtered.length})</h3>
+          <h3 className="font-label-md uppercase tracking-wider text-on-surface">Registered Entities</h3>
+          <span className="font-label-sm text-outline">{filtered.length} of {companies.length}</span>
         </CardHeader>
         <div className="overflow-x-auto">
           <table className="w-full text-left">

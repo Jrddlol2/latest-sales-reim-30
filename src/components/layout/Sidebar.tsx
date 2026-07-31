@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { cn } from '../ui/Button';
 import { useAppContext } from '../AppContext';
 import { ClaimStatus, DelegationStatus, UserRole } from '../../types';
+import { isCustodianProcessingClaim } from '../../lib/claimWorkflow';
 
 /** badgeKey ties a nav item to one of the live counts computed in Sidebar()
  *  below — new items on a queue, or unread mail, previously had no on-screen
@@ -10,73 +11,81 @@ interface NavItem {
   label: string;
   icon: string;
   path: string;
+  section: string;
   badgeKey?: 'notifications' | 'approvals' | 'processing' | 'readyToClaim' | 'delegation';
 }
 
 const getNavItems = (role: UserRole): NavItem[] => {
   const common: NavItem[] = [
-    { label: 'Dashboard', icon: 'dashboard', path: '/' },
+    { label: 'Dashboard', icon: 'dashboard', path: '/', section: 'Overview' },
   ];
 
   if (role === UserRole.REQUESTOR) {
     return [
       ...common,
-      { label: 'My Requests', icon: 'description', path: '/claims' },
-      { label: 'Payouts', icon: 'key', path: '/payouts' },
-      { label: 'Submit Claim', icon: 'add_circle', path: '/claims/new' },
-      { label: 'Minutes & Agreements', icon: 'meeting_room', path: '/moms' },
-      { label: 'Receipt Archive', icon: 'receipt_long', path: '/receipts' },
-      { label: 'Calendar', icon: 'calendar_month', path: '/calendar' },
-      { label: 'Notifications', icon: 'notifications', path: '/notifications', badgeKey: 'notifications' },
-      { label: 'Support', icon: 'help', path: '/support' },
-      { label: 'Settings', icon: 'settings', path: '/settings' },
+      { label: 'My Requests', icon: 'description', path: '/claims', section: 'Claims' },
+      { label: 'Payouts', icon: 'key', path: '/payouts', section: 'Claims' },
+      { label: 'Expenses & Receipts', icon: 'receipt_long', path: '/receipts', section: 'Claims' },
+      { label: 'Minutes & Agreements', icon: 'meeting_room', path: '/moms', section: 'Meetings' },
+      { label: 'Calendar', icon: 'calendar_month', path: '/calendar', section: 'Meetings' },
+      { label: 'Notifications', icon: 'notifications', path: '/notifications', section: 'Account', badgeKey: 'notifications' },
+      { label: 'Support', icon: 'help', path: '/support', section: 'Account' },
+      { label: 'Settings', icon: 'settings', path: '/settings', section: 'Account' },
     ];
   }
 
   if (role === UserRole.APPROVER) {
     return [
       ...common,
-      { label: 'My Requests', icon: 'description', path: '/claims' },
-      { label: 'Payouts', icon: 'key', path: '/payouts' },
-      { label: 'Submit Claim', icon: 'add_circle', path: '/claims/new' },
-      { label: 'Approvals', icon: 'assignment_turned_in', path: '/approvals', badgeKey: 'approvals' },
-      { label: 'Minutes & Agreements', icon: 'meeting_room', path: '/moms' },
-      { label: 'Receipt Archive', icon: 'receipt_long', path: '/receipts' },
-      { label: 'Calendar', icon: 'calendar_month', path: '/calendar' },
-      { label: 'Notifications', icon: 'notifications', path: '/notifications', badgeKey: 'notifications' },
-      { label: 'Support', icon: 'help', path: '/support' },
-      { label: 'Settings', icon: 'settings', path: '/settings', badgeKey: 'delegation' },
+      { label: 'My Requests', icon: 'description', path: '/claims', section: 'Claims' },
+      { label: 'Payouts', icon: 'key', path: '/payouts', section: 'Claims' },
+      { label: 'Expenses & Receipts', icon: 'receipt_long', path: '/receipts', section: 'Claims' },
+      { label: 'Approvals', icon: 'assignment_turned_in', path: '/approvals', section: 'Review', badgeKey: 'approvals' },
+      { label: 'Minutes & Agreements', icon: 'meeting_room', path: '/moms', section: 'Meetings' },
+      { label: 'Calendar', icon: 'calendar_month', path: '/calendar', section: 'Meetings' },
+      { label: 'Notifications', icon: 'notifications', path: '/notifications', section: 'Account', badgeKey: 'notifications' },
+      { label: 'Support', icon: 'help', path: '/support', section: 'Account' },
+      { label: 'Settings', icon: 'settings', path: '/settings', section: 'Account', badgeKey: 'delegation' },
     ];
   }
 
   if (role === UserRole.CUSTODIAN) {
     return [
       ...common,
-      { label: 'Processing Queue', icon: 'payments', path: '/disbursements', badgeKey: 'processing' },
-      { label: 'Ready to Claim', icon: 'outbox', path: '/ready-to-claim', badgeKey: 'readyToClaim' },
-      { label: 'Transaction History', icon: 'history', path: '/transactions' },
-      { label: 'Analytics', icon: 'monitoring', path: '/custodian/analytics' },
-      { label: 'Notifications', icon: 'notifications', path: '/notifications', badgeKey: 'notifications' },
-      { label: 'Support', icon: 'help', path: '/support' },
-      { label: 'Settings', icon: 'settings', path: '/settings' },
+      { label: 'Processing Queue', icon: 'payments', path: '/disbursements', section: 'Operations', badgeKey: 'processing' },
+      { label: 'Ready to Claim', icon: 'outbox', path: '/ready-to-claim', section: 'Operations', badgeKey: 'readyToClaim' },
+      { label: 'Transaction History', icon: 'history', path: '/transactions', section: 'Operations' },
+      { label: 'Analytics', icon: 'monitoring', path: '/custodian/analytics', section: 'Insights' },
+      { label: 'Notifications', icon: 'notifications', path: '/notifications', section: 'Account', badgeKey: 'notifications' },
+      { label: 'Support', icon: 'help', path: '/support', section: 'Account' },
+      { label: 'Settings', icon: 'settings', path: '/settings', section: 'Account' },
+    ];
+  }
+
+  if (role === UserRole.FINANCE) {
+    return [
+      ...common,
+      { label: 'Financial Records', icon: 'description', path: '/claims', section: 'Financials' },
+      { label: 'Expenses & Receipts', icon: 'receipt_long', path: '/receipts', section: 'Financials' },
+      { label: 'Transaction History', icon: 'history', path: '/transactions', section: 'Financials' },
+      { label: 'Analytics', icon: 'monitoring', path: '/finance/analytics', section: 'Insights' },
+      { label: 'Notifications', icon: 'notifications', path: '/notifications', section: 'Account', badgeKey: 'notifications' },
+      { label: 'Support', icon: 'help', path: '/support', section: 'Account' },
+      { label: 'Settings', icon: 'settings', path: '/settings', section: 'Account' },
     ];
   }
 
   if (role === UserRole.ADMIN) {
     return [
       ...common,
-      { label: 'User Accounts', icon: 'people', path: '/admin/users' },
-      { label: 'Master Data Admin', icon: 'database', path: '/admin/master-data' },
-      { label: 'Field Definitions', icon: 'input', path: '/admin/fields' },
-      { label: 'Company Directory', icon: 'business', path: '/admin/companies' },
-      { label: 'Company Policy', icon: 'policy', path: '/admin/policy' },
-      { label: 'Historical Import', icon: 'upload_file', path: '/admin/import' },
-      { label: 'Admin Reporting', icon: 'bar_chart', path: '/admin/reports' },
-      { label: 'Audit Log', icon: 'gavel', path: '/admin/audit' },
-      { label: 'System Emails', icon: 'mail', path: '/admin/emails' },
-      { label: 'Notifications', icon: 'notifications', path: '/notifications', badgeKey: 'notifications' },
-      { label: 'Support', icon: 'help', path: '/support' },
-      { label: 'Settings', icon: 'settings', path: '/settings' },
+      { label: 'User Accounts', icon: 'people', path: '/admin/users', section: 'Administration' },
+      { label: 'Company Directory', icon: 'business', path: '/admin/companies', section: 'Administration' },
+      { label: 'Historical Import', icon: 'upload_file', path: '/admin/import', section: 'Administration' },
+      { label: 'Admin Reporting', icon: 'bar_chart', path: '/admin/reports', section: 'Reporting' },
+      { label: 'System Activity', icon: 'manage_history', path: '/admin/activity', section: 'Reporting' },
+      { label: 'Notifications', icon: 'notifications', path: '/notifications', section: 'Account', badgeKey: 'notifications' },
+      { label: 'Support', icon: 'help', path: '/support', section: 'Account' },
+      { label: 'Settings', icon: 'settings', path: '/settings', section: 'Account' },
     ];
   }
 
@@ -100,7 +109,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed = false, onToggleCollapse
   const badgeCounts: Record<string, number> = {
     notifications: emails.filter(e => e.recipientId === currentUser.id && !e.read).length,
     approvals: claims.filter(c => c.status === ClaimStatus.PENDING_APPROVAL || c.status === ClaimStatus.SUBMITTED).length,
-    processing: claims.filter(c => c.status === ClaimStatus.APPROVED || c.status === ClaimStatus.PROCESSING).length,
+    processing: claims.filter(isCustodianProcessingClaim).length,
     readyToClaim: claims.filter(c => c.status === ClaimStatus.READY_FOR_CLAIM).length,
     // Incoming delegation requests waiting on this user to accept/decline —
     // previously buried in a Settings tab with zero indication anything
@@ -126,19 +135,22 @@ export function Sidebar({ isOpen, onClose, isCollapsed = false, onToggleCollapse
         {/* Header with Logo and Mobile Close control */}
         <div className={cn(
           "mb-8 flex items-center transition-all duration-300 relative",
-          isCollapsed ? "px-3 lg:px-2 justify-center" : "px-6 justify-center"
+          isCollapsed ? "px-3 lg:px-2 justify-center" : "px-4 justify-center"
         )}>
-          <div className="flex items-center overflow-hidden justify-center w-full">
+          <div className={cn(
+            "flex items-center justify-center w-full",
+            isCollapsed ? "h-8" : "h-12"
+          )}>
             <img 
               key={isCollapsed ? 'collapsed-logo' : 'full-logo'}
-              src={isCollapsed ? '/logo-icon.png' : '/logo.png'} 
+              src={isCollapsed ? '/logo-icon.png' : '/logo/logo.png'}
               alt="Company Logo" 
               loading="lazy"
               width={isCollapsed ? 32 : 180}
               height={isCollapsed ? 32 : 48}
               className={cn(
-                "w-auto max-w-[180px] object-contain transition-all duration-300",
-                isCollapsed ? "max-h-8 lg:max-h-8" : "max-h-12"
+                "block w-auto object-contain transition-all duration-300",
+                isCollapsed ? "max-w-8 max-h-8 lg:max-h-8" : "max-w-[172px] max-h-11"
               )}
               onError={(e) => {
                 const target = e.currentTarget;
@@ -208,17 +220,29 @@ export function Sidebar({ isOpen, onClose, isCollapsed = false, onToggleCollapse
         
         {/* Navigation List */}
         <nav className="flex-1 space-y-1 overflow-y-auto px-0">
-          {navItems.map((item) => {
+          {navItems.map((item, index) => {
             const count = item.badgeKey ? badgeCounts[item.badgeKey] || 0 : 0;
             const to = item.badgeKey === 'delegation' && count > 0 ? `${item.path}?tab=delegation` : item.path;
+            const startsSection = index === 0 || navItems[index - 1].section !== item.section;
             return (
-              <NavLink
+              <div
                 key={item.path}
+                className={cn(startsSection && index > 0 ? "mt-3 pt-3 border-t border-white/15" : "")}
+              >
+              {startsSection && (
+                <p className={cn(
+                  "px-5 pb-1 text-[10px] font-bold uppercase tracking-[0.14em] text-white/55",
+                  isCollapsed ? "lg:hidden" : ""
+                )}>
+                  {item.section}
+                </p>
+              )}
+              <NavLink
                 to={to}
                 onClick={() => onClose()}
                 title={count > 0 ? `${item.label} (${count})` : item.label}
                 className={({ isActive }) => cn(
-                  "flex items-center py-3 group transition-all duration-200 ease-in-out focus:ring-2 focus:ring-white focus:ring-inset outline-none",
+                  "flex items-center py-3 pr-4 group transition-all duration-200 ease-in-out focus:ring-2 focus:ring-white focus:ring-inset outline-none",
                   isCollapsed ? "lg:justify-center lg:px-0" : "",
                   isActive
                     ? "text-white font-bold border-l-4 border-white bg-black/15 shadow-inner" + (isCollapsed ? " pl-4 lg:pl-0" : " pl-4")
@@ -237,17 +261,18 @@ export function Sidebar({ isOpen, onClose, isCollapsed = false, onToggleCollapse
                   )}
                 </span>
                 <span className={cn(
-                  "font-body-base text-body-base whitespace-nowrap transition-all duration-200 flex-1",
-                  isCollapsed ? "lg:hidden" : "flex items-center justify-between"
+                  "font-body-base text-body-base whitespace-nowrap transition-all duration-200 flex-1 min-w-0",
+                  isCollapsed ? "lg:hidden" : "flex items-center gap-2"
                 )}>
-                  {item.label}
+                  <span className="truncate min-w-0 flex-1">{item.label}</span>
                   {count > 0 && (
-                    <span className="ml-2 min-w-[20px] h-5 px-1.5 rounded-full bg-white/90 text-primary text-[12px] font-bold flex items-center justify-center">
+                    <span className="shrink-0 min-w-[24px] h-5 px-1.5 rounded-full bg-white/90 text-primary text-[12px] font-bold flex items-center justify-center">
                       {count > 99 ? '99+' : count}
                     </span>
                   )}
                 </span>
               </NavLink>
+              </div>
             );
           })}
         </nav>

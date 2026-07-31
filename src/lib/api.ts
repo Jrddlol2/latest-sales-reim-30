@@ -18,6 +18,7 @@ import {
   SupportRequest, SupportRequestStatus, ApproverDelegation, DelegationStatus,
   NotificationPrefs,
 } from '../types';
+import { getReimbursementDateError, getTodayIsoDate } from './reimbursementPolicy';
 
 // --- transport ------------------------------------------------------------
 
@@ -60,6 +61,7 @@ const ROLE_DEEP_LINK: Record<string, string> = {
   requestor: 'u1', // Alice Reyes
   approver: 'u2',  // Bob Santos (Alice's manager)
   custodian: 'u3', // Carol Ramos
+  finance: 'u22',  // Sofia Lim
   admin: 'u4',     // Dave Lopez
 };
 
@@ -193,7 +195,11 @@ export function fromServerUser(u: any): User {
   };
 }
 
-function fromServerExpense(e: any, claimId: string): ExpenseLineItem {
+export function fromServerExpense(e: any, claimId: string): ExpenseLineItem {
+  const receiptPath = (e.receipt_url || '').split('?')[0];
+  const receiptFileName = receiptPath
+    ? decodeURIComponent(receiptPath.split('/').filter(Boolean).pop() || '')
+    : undefined;
   return {
     id: e.id,
     claimId,
@@ -204,9 +210,8 @@ function fromServerExpense(e: any, claimId: string): ExpenseLineItem {
     paymentMethod: e.payment_method || '',
     businessPurpose: e.business_purpose || '',
     receiptUrl: e.receipt_url || undefined,
-    // The server carries an OR number rather than a filename; surface it as the
-    // label so Receipt Archive and the detail modal have something to show.
-    receiptFileName: e.or_number || undefined,
+    receiptFileName: receiptFileName || undefined,
+    orNumber: e.or_number || undefined,
   };
 }
 
@@ -228,6 +233,7 @@ export function fromServerMom(m: any): MOM | null {
     contactPerson: m.contact_person || undefined,
     contactPersonDesignation: m.custom_fields?.contact_person_designation || undefined,
     contactPersonEmail: m.contact_person_email || undefined,
+    ccClient: Boolean(m.cc_client),
     description: m.discussion || undefined,
     agreements: m.agreements || undefined,
     actionItems: m.action_items || undefined,
@@ -267,13 +273,22 @@ export function fromServerReviewMeeting(r: any): ReviewMeeting {
   };
 }
 
-function fromServerHistory(h: any, claimId: string): StatusHistory {
+function mapHistoryStatus(status: string, type: ClaimType): ClaimStatus {
+  const table = type === 'Cash Advance'
+    ? CASH_ADVANCE_STATUS
+    : type === 'Liquidation'
+      ? LIQUIDATION_STATUS
+      : CLAIM_STATUS;
+  return table[status] ?? (status as ClaimStatus);
+}
+
+function fromServerHistory(h: any, claimId: string, type: ClaimType): StatusHistory {
   return {
     id: h.id,
     claimId,
     // '' is the server's sentinel for "no previous status" on the first entry.
-    oldStatus: h.old_status ? (h.old_status as ClaimStatus) : undefined,
-    newStatus: h.new_status as ClaimStatus,
+    oldStatus: h.old_status ? mapHistoryStatus(h.old_status, type) : undefined,
+    newStatus: mapHistoryStatus(h.new_status, type),
     changedBy: h.changed_by,
     timestamp: h.timestamp,
     // The server calls the free-text note `reason`; the UI renders it as a comment.
@@ -284,16 +299,34 @@ function fromServerHistory(h: any, claimId: string): StatusHistory {
 /** A reimbursement claim. The server's `Claim` maps almost 1:1 onto the UI's. */
 export function fromServerClaim(c: any): Claim {
   const submitted = (c.history || []).find((h: any) => h.new_status === 'Pending Approval');
+  const approved = c.approved_at || (c.history || []).find((h: any) => h.new_status === 'Processing')?.timestamp;
+  const paid = c.paid_at || (c.history || []).find((h: any) => h.new_status === 'Ready for Claim')?.timestamp;
+  const completed = (c.history || []).find((h: any) => h.new_status === 'Completed')?.timestamp;
+  const isApproved = ['Approved', 'Processing', 'Ready for Claim', 'Completed'].includes(c.status);
+  const isPaid = ['Ready for Claim', 'Completed'].includes(c.status);
+  const claimedAmount = Number(c.total_amount) || 0;
+  const type: ClaimType = c.claim_type === 'Transport Reimbursement'
+    ? 'Transport Reimbursement'
+    : 'Reimbursement';
+  const fallbackApprovedAmount = Math.min(claimedAmount, 1000);
   return {
     id: c.id,
     ref: c.claim_number || `REIM-${String(c.id).slice(0, 6)}`,
     requestorId: c.requestor_id,
     status: CLAIM_STATUS[c.status] ?? (c.status as ClaimStatus),
-    total: Number(c.total_amount) || 0,
+    total: claimedAmount,
+    claimedAmount,
+    approvedAmount: c.approved_amount != null ? Number(c.approved_amount) : isApproved ? fallbackApprovedAmount : undefined,
+    paidAmount: c.paid_amount != null ? Number(c.paid_amount) : isPaid ? fallbackApprovedAmount : 0,
     submittedAt: submitted?.timestamp,
+    approvedAt: approved || undefined,
+    paidAt: paid || undefined,
+    completedAt: completed || undefined,
     createdAt: c.created_at,
-    type: 'Reimbursement',
+    type,
     purpose: c.remarks || c.mom?.purpose || c.expense_category || 'Reimbursement',
+    client: c.mom?.client || c.mom?.client_name || undefined,
+    location: c.mom?.location || undefined,
     flaggedHighValue: Boolean(c.flagged_high_value),
     releaseCode: c.release_code || undefined,
     paymentReference: c.payment_reference || undefined,
@@ -311,16 +344,30 @@ export function fromServerClaim(c: any): Claim {
 
 /** A cash advance, flattened into the unified Claim shape. */
 export function fromServerCashAdvance(ca: any): Claim {
+  const submitted = (ca.history || []).find((h: any) => h.new_status === 'Submitted')?.timestamp;
+  const approved = ca.approvedAt || (ca.history || []).find((h: any) => h.new_status === 'Approved')?.timestamp;
+  const completed = (ca.history || []).find((h: any) => h.new_status === 'Liquidated')?.timestamp;
+  const isApproved = ['Approved', 'Released', 'Liquidated'].includes(ca.status);
+  const isPaid = ['Released', 'Liquidated'].includes(ca.status);
+  const claimedAmount = Number(ca.amount) || 0;
   return {
     id: ca.id,
     ref: `CADV-${String(ca.id).slice(0, 6)}`,
     requestorId: ca.requestorId,
     status: CASH_ADVANCE_STATUS[ca.status] ?? (ca.status as ClaimStatus),
-    total: Number(ca.amount) || 0,
+    total: claimedAmount,
+    claimedAmount,
+    approvedAmount: isApproved ? claimedAmount : undefined,
+    paidAmount: ca.paidAmount != null ? Number(ca.paidAmount) : isPaid ? claimedAmount : 0,
     createdAt: ca.createdAt,
-    submittedAt: ca.status === 'Draft' ? undefined : ca.createdAt,
+    submittedAt: submitted || (ca.status === 'Draft' ? undefined : ca.createdAt),
+    approvedAt: approved || undefined,
+    paidAt: ca.releaseDate || undefined,
+    completedAt: completed || undefined,
     type: 'Cash Advance',
     purpose: ca.purpose || 'Cash Advance',
+    client: ca.mom?.client || ca.mom?.client_name || undefined,
+    location: ca.mom?.location || undefined,
     approverId: ca.approverId || undefined,
     releasedBy: ca.releasedBy || undefined,
     releaseDate: ca.releaseDate || undefined,
@@ -332,17 +379,29 @@ export function fromServerCashAdvance(ca: any): Claim {
 
 /** A liquidation, flattened the same way and carrying its variance across. */
 export function fromServerLiquidation(l: any): Claim {
+  const submitted = (l.history || []).find((h: any) => h.new_status === 'Submitted')?.timestamp;
+  const reviewed = (l.history || []).find((h: any) => ['Reviewed', 'Closed'].includes(h.new_status))?.timestamp;
+  const completed = (l.history || []).find((h: any) => h.new_status === 'Closed')?.timestamp;
+  const claimedAmount = Number(l.totalSpent) || 0;
   return {
     id: l.id,
     ref: `LIQ-${String(l.id).slice(0, 6)}`,
     requestorId: l.requestorId,
     status: LIQUIDATION_STATUS[l.status] ?? (l.status as ClaimStatus),
-    total: Number(l.totalSpent) || 0,
+    total: claimedAmount,
+    claimedAmount,
+    approvedAmount: ['Reviewed', 'Closed'].includes(l.status) ? claimedAmount : undefined,
+    // The related cash advance/reimbursement carries the actual cash movement.
+    paidAmount: 0,
     createdAt: l.createdAt,
-    submittedAt: l.status === 'Draft' ? undefined : l.createdAt,
+    submittedAt: submitted || (l.status === 'Draft' ? undefined : l.createdAt),
+    approvedAt: reviewed || undefined,
+    completedAt: completed || undefined,
     type: 'Liquidation',
     // A liquidation has no purpose of its own — it inherits the advance's.
     purpose: l.cashAdvance?.purpose || 'Liquidation',
+    client: l.mom?.client || l.mom?.client_name || undefined,
+    location: l.mom?.location || undefined,
     cashAdvanceId: l.cashAdvanceId,
     varianceAmount: Number(l.varianceAmount) || 0,
     varianceType: l.varianceType as Claim['varianceType'],
@@ -360,6 +419,7 @@ export function fromServerEmail(e: any): SystemEmail {
     body: e.body || '',
     read: Boolean(e.read),
     timestamp: e.timestamp,
+    channel: e.channel === 'Teams' ? 'Teams' : 'Email',
   };
 }
 
@@ -528,9 +588,17 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
   // attached to a claim), so it supersedes the claim-embedded copies.
   const moms = (rawMoms || []).map(fromServerMom).filter(Boolean) as MOM[];
 
-  const statusHistory = (rawClaims || []).flatMap((c: any) =>
-    (c.history || []).map((h: any) => fromServerHistory(h, c.id))
-  );
+  const statusHistory = [
+    ...(rawClaims || []).flatMap((c: any) =>
+      (c.history || []).map((h: any) => fromServerHistory(h, c.id, 'Reimbursement'))
+    ),
+    ...(rawAdvances || []).flatMap((ca: any) =>
+      (ca.history || []).map((h: any) => fromServerHistory(h, ca.id, 'Cash Advance'))
+    ),
+    ...(rawLiquidations || []).flatMap((l: any) =>
+      (l.history || []).map((h: any) => fromServerHistory(h, l.id, 'Liquidation'))
+    ),
+  ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   return {
     currentUser: fromServerUser(me),
@@ -587,8 +655,146 @@ export interface PageResult<T> {
  * call, via `limit`). With `page`/`pageSize`, the server returns a
  * `PageResult` instead — that's the shape AuditLog.tsx uses.
  */
-export const fetchAuditHistory = (params?: { page?: number; pageSize?: number; search?: string; limit?: number }) =>
+export const fetchAuditHistory = (params?: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  limit?: number;
+  role?: string;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}) =>
   apiFetch(`/api/history${toQueryString(params as any)}`);
+
+export interface SystemActivityEntry {
+  id: string;
+  source: 'audit' | 'notification';
+  activityType: 'client' | 'system';
+  timestamp: string;
+  actor?: { name: string; role: string };
+  recipient?: { id: string; name: string; email: string };
+  subject: string;
+  oldStatus?: string;
+  newStatus?: string;
+  action: string;
+  details: string;
+  notification?: {
+    id: string;
+    recipient_id: string;
+    from: string;
+    to: string;
+    subject: string;
+    body: string;
+    read: boolean;
+    timestamp: string;
+    channel: 'Email' | 'Teams';
+  };
+}
+
+export const fetchSystemActivity = async (params: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  activityType?: 'client' | 'system' | '';
+  source?: 'audit' | 'notification' | '';
+  role?: string;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+} = {}): Promise<PageResult<SystemActivityEntry>> => {
+  // Build the unified feed from the two established endpoints. This also
+  // works while a local backend process is still running an older server
+  // bundle that predates the dedicated /api/system-activity route.
+  const [history, outbox] = await Promise.all([
+    apiFetch<any[]>('/api/history'),
+    apiFetch<any[]>('/api/outbox'),
+  ]);
+
+  const auditItems: SystemActivityEntry[] = (history || []).map(entry => {
+    const subject = entry.claim?.claim_number || entry.targetUser?.name || entry.master_data_key || 'System';
+    return {
+      id: `audit-${entry.id}`,
+      source: 'audit',
+      activityType: entry.changedBy ? 'client' : 'system',
+      timestamp: entry.timestamp,
+      actor: entry.changedBy ? { name: entry.changedBy.name, role: entry.changedBy.role } : undefined,
+      subject,
+      oldStatus: entry.old_status,
+      newStatus: entry.new_status,
+      action: entry.old_status && entry.old_status !== entry.new_status
+        ? `${entry.old_status} → ${entry.new_status}`
+        : entry.new_status,
+      details: entry.reason || 'Recorded by the system.',
+    };
+  });
+  const notificationItems: SystemActivityEntry[] = (outbox || []).map(entry => {
+    const channel: 'Email' | 'Teams' = entry.channel === 'Teams' ? 'Teams' : 'Email';
+    return {
+      id: `notification-${entry.id}`,
+      source: 'notification',
+      activityType: 'system',
+      timestamp: entry.timestamp,
+      recipient: {
+        id: entry.recipient_id,
+        name: entry.to || 'Unknown recipient',
+        email: entry.to || '',
+      },
+      subject: entry.subject || 'Notification',
+      action: `${channel} notification sent`,
+      details: entry.body || '',
+      notification: {
+        id: entry.id,
+        recipient_id: entry.recipient_id,
+        from: entry.from || 'no-reply@mgenesis.com',
+        to: entry.to || '',
+        subject: entry.subject || '',
+        body: entry.body || '',
+        read: Boolean(entry.read),
+        timestamp: entry.timestamp,
+        channel,
+      },
+    };
+  });
+
+  let items = [...auditItems, ...notificationItems]
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const query = params.search?.trim().toLowerCase();
+  if (query) {
+    items = items.filter(item => [
+      item.actor?.name,
+      item.actor?.role,
+      item.recipient?.name,
+      item.recipient?.email,
+      item.subject,
+      item.action,
+      item.details,
+      item.newStatus,
+    ].some(value => (value || '').toLowerCase().includes(query)));
+  }
+  if (params.activityType) items = items.filter(item => item.activityType === params.activityType);
+  if (params.source) items = items.filter(item => item.source === params.source);
+  if (params.role) items = items.filter(item => (item.actor?.role || '') === params.role);
+  if (params.status) items = items.filter(item => (item.newStatus || '') === params.status);
+  if (params.dateFrom) {
+    const start = new Date(`${params.dateFrom}T00:00:00`).getTime();
+    items = items.filter(item => new Date(item.timestamp).getTime() >= start);
+  }
+  if (params.dateTo) {
+    const end = new Date(`${params.dateTo}T23:59:59.999`).getTime();
+    items = items.filter(item => new Date(item.timestamp).getTime() <= end);
+  }
+
+  const page = Math.max(1, params.page || 1);
+  const pageSize = Math.max(1, params.pageSize || 25);
+  const total = items.length;
+  return {
+    items: items.slice((page - 1) * pageSize, page * pageSize),
+    total,
+    page,
+    pageSize,
+  };
+};
 
 /**
  * Admin's full outbox, paginated + searched server-side. With no args this
@@ -648,7 +854,8 @@ export const updateNotificationPrefs = (prefs: NotificationPrefs) =>
 export async function decideOnClaim(
   claim: Claim,
   decision: 'Approved' | 'Rejected' | 'Returned',
-  comment: string
+  comment: string,
+  options?: { reviewMeetingDate?: string; reviewMeetingTime?: string }
 ) {
   if (claim.type === 'Cash Advance') {
     return apiFetch(`/api/cash-advances/${claim.id}/approve`, {
@@ -664,7 +871,12 @@ export async function decideOnClaim(
   }
   return apiFetch(`/api/claims/${claim.id}/approve`, {
     method: 'POST',
-    body: JSON.stringify({ decision, comment }),
+    body: JSON.stringify({
+      decision,
+      comment,
+      review_meeting_date: options?.reviewMeetingDate || undefined,
+      review_meeting_time: options?.reviewMeetingTime || undefined,
+    }),
   });
 }
 
@@ -731,6 +943,20 @@ export const markReadyForClaim = (claimId: string, paymentMethod?: string) =>
   });
 
 /**
+ * Custodian correction decision after approval but before funds move.
+ * The server validates which decision is meaningful for each request type.
+ */
+export const decideAsCustodian = (
+  claimId: string,
+  decision: 'Return' | 'Reject',
+  comment: string,
+) =>
+  apiFetch(`/api/custodian/claims/${claimId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, comment }),
+  });
+
+/**
  * Requestor: confirm receipt of funds by quoting the release code the custodian
  * issued. This is the two-party anti-fraud gate — the server verifies both that
  * the caller owns the claim and that the code matches, then completes it.
@@ -761,28 +987,63 @@ export interface DraftLineItem {
 }
 
 export interface SubmitClaimInput {
+  claimType: 'Reimbursement' | 'Transport Reimbursement';
   lineItems: DraftLineItem[];
   /** Core MOM columns the server models as first-class fields. */
-  mom: {
+  mom?: {
     client?: string;
     purpose?: string;
     location?: string;
     contactPerson?: string;
     contactPersonEmail?: string;
+    ccClient?: boolean;
     discussion?: string;
+    actionItems?: string;
     meetingDate?: string;
     meetingTime?: string;
-    source: MinutesSource;
+    source?: MinutesSource;
     documentType?: 'MoM' | 'LOA';
-    file?: File;
   };
   /** Admin-defined dynamic fields, keyed by FieldDefinition.key. */
   customFields?: Record<string, string>;
-  meetingDate: string;
-  meetingTime: string;
   remarks?: string;
   isDraft?: boolean;
 }
+
+export interface CreateMomInput {
+  documentType?: 'MoM' | 'LOA';
+  client: string;
+  purpose: string;
+  meetingDate: string;
+  location?: string;
+  contactPerson?: string;
+  contactPersonEmail?: string;
+  ccClient?: boolean;
+  discussion?: string;
+  actionItems?: string;
+  customFields?: Record<string, string>;
+  status?: 'Draft' | 'Completed';
+}
+
+export const createMom = (input: CreateMomInput) =>
+  apiFetch('/api/moms', {
+    method: 'POST',
+    body: JSON.stringify({
+      document_type: input.documentType || 'MoM',
+      client: input.client,
+      purpose: input.purpose,
+      meeting_date: input.meetingDate,
+      location: input.location || '',
+      contact_person: input.contactPerson || '',
+      contact_person_email: input.contactPersonEmail || '',
+      cc_client: Boolean(input.ccClient),
+      discussion: input.discussion || '',
+      action_items: input.actionItems || '',
+      minutes_source: MinutesSource.TEMPLATE,
+      custom_fields: input.customFields,
+      status: input.status || 'Completed',
+    }),
+  });
 
 /**
  * The server models submission as three dependent writes — receipts must exist
@@ -791,7 +1052,15 @@ export interface SubmitClaimInput {
  * earlier writes in place, which is why the error message names the stage.
  */
 export async function submitClaimFlow(input: SubmitClaimInput) {
-  const { lineItems, mom, customFields, meetingDate, meetingTime, remarks, isDraft } = input;
+  const { claimType, lineItems, mom, customFields, remarks, isDraft } = input;
+
+  if (!isDraft) {
+    const filingDate = getTodayIsoDate();
+    const invalidDateIndex = lineItems.findIndex(li => Boolean(getReimbursementDateError(li.expenseDate, filingDate)));
+    if (invalidDateIndex !== -1) {
+      throw new Error(`Expense row ${invalidDateIndex + 1}: ${getReimbursementDateError(lineItems[invalidDateIndex].expenseDate, filingDate)}`);
+    }
+  }
 
   // 1. Receipts. The server rejects any line item without a receipt_url.
   let uploaded: DraftLineItem[];
@@ -814,43 +1083,39 @@ export async function submitClaimFlow(input: SubmitClaimInput) {
     throw new Error(`Expense row ${missing + 1} needs a receipt attached before you can submit.`);
   }
 
-  // 2. MOM. Must be Completed for a real submission; a draft claim may carry a draft MOM.
-  let momFileUrl: string | undefined;
-  let momFileName: string | undefined;
-  if (mom.file) {
-    const up = await uploadFile(mom.file);
-    momFileUrl = up.url;
-    momFileName = mom.file.name;
+  // 2. MOM. Transport Reimbursement is deliberately lightweight and skips
+  // this write; standard Reimbursement remains anchored to template minutes.
+  let createdMom: any | undefined;
+  if (claimType === 'Reimbursement') {
+    if (!mom) throw new Error('Minutes of Meeting details are required.');
+    createdMom = await apiFetch('/api/moms', {
+      method: 'POST',
+      body: JSON.stringify({
+        client: mom.client || '',
+        purpose: mom.purpose || '',
+        location: mom.location || '',
+        contact_person: mom.contactPerson || '',
+        contact_person_email: mom.contactPersonEmail || '',
+        cc_client: Boolean(mom.ccClient),
+        discussion: mom.discussion || '',
+        action_items: mom.actionItems || '',
+        meeting_date: mom.meetingDate || new Date().toISOString().split('T')[0],
+        meeting_time: mom.meetingTime || '',
+        minutes_source: MinutesSource.TEMPLATE,
+        document_type: mom.documentType || 'MoM',
+        status: isDraft ? 'Draft' : 'Completed',
+        custom_fields: customFields,
+      }),
+    });
   }
-
-  const createdMom = await apiFetch('/api/moms', {
-    method: 'POST',
-    body: JSON.stringify({
-      client: mom.client || '',
-      purpose: mom.purpose || '',
-      location: mom.location || '',
-      contact_person: mom.contactPerson || '',
-      contact_person_email: mom.contactPersonEmail || '',
-      discussion: mom.discussion || '',
-      meeting_date: mom.meetingDate || meetingDate || new Date().toISOString().split('T')[0],
-      meeting_time: mom.meetingTime || meetingTime || '',
-      minutes_source: mom.source,
-      document_type: mom.documentType || 'MoM',
-      file_url: momFileUrl,
-      file_name: momFileName,
-      status: isDraft ? 'Draft' : 'Completed',
-      custom_fields: customFields,
-    }),
-  });
 
   // 3. Claim.
   return apiFetch('/api/claims', {
     method: 'POST',
     body: JSON.stringify({
-      mom_id: createdMom.id,
-      remarks: remarks || mom.purpose || '',
-      meeting_date: meetingDate,
-      meeting_time: meetingTime,
+      claim_type: claimType,
+      mom_id: createdMom?.id,
+      remarks: remarks || mom?.purpose || (claimType === 'Transport Reimbursement' ? 'Transport reimbursement' : ''),
       is_draft: Boolean(isDraft),
       line_items: uploaded.map((li) => ({
         category: li.category,
@@ -870,7 +1135,8 @@ export async function submitClaimFlow(input: SubmitClaimInput) {
 
 export interface ResubmitClaimInput {
   claimId: string;
-  momId: string;
+  momId?: string;
+  claimType?: 'Reimbursement' | 'Transport Reimbursement';
   lineItems: DraftLineItem[];
   remarks?: string;
 }
@@ -883,7 +1149,13 @@ export interface ResubmitClaimInput {
  * a fresh submission's receipt-then-claim ordering.
  */
 export async function resubmitClaimFlow(input: ResubmitClaimInput) {
-  const { claimId, momId, lineItems, remarks } = input;
+  const { claimId, momId, claimType, lineItems, remarks } = input;
+
+  const filingDate = getTodayIsoDate();
+  const invalidDateIndex = lineItems.findIndex(li => Boolean(getReimbursementDateError(li.expenseDate, filingDate)));
+  if (invalidDateIndex !== -1) {
+    throw new Error(`Expense row ${invalidDateIndex + 1}: ${getReimbursementDateError(lineItems[invalidDateIndex].expenseDate, filingDate)}`);
+  }
 
   let uploaded: DraftLineItem[];
   try {
@@ -909,6 +1181,7 @@ export async function resubmitClaimFlow(input: ResubmitClaimInput) {
     method: 'PUT',
     body: JSON.stringify({
       mom_id: momId,
+      claim_type: claimType,
       remarks: remarks || '',
       line_items: uploaded.map((li) => ({
         category: li.category,
@@ -1055,6 +1328,20 @@ export const createCompany = (body: Record<string, unknown>) =>
 
 export const updateCompany = (id: string, body: Record<string, unknown>) =>
   apiFetch(`/api/companies/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+
+export interface CompanyImportResult {
+  inserted: number;
+  updated: number;
+  skipped: number;
+  total: number;
+  errors: Array<{ row: number; error: string }>;
+}
+
+export const importCompanies = (companies: Array<Record<string, string>>) =>
+  apiFetch<CompanyImportResult>('/api/companies/import', {
+    method: 'POST',
+    body: JSON.stringify({ companies }),
+  });
 
 /** One row of a parsed historical-import CSV, already resolved to a requestor. */
 export interface HistoricalImportRecord {

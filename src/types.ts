@@ -2,6 +2,7 @@ export enum UserRole {
   REQUESTOR = 'Requestor',
   APPROVER = 'Approver',
   CUSTODIAN = 'Custodian',
+  FINANCE = 'Finance',
   ADMIN = 'Admin'
 }
 
@@ -146,6 +147,7 @@ export interface ExpenseLineItem {
   businessPurpose: string;
   receiptUrl?: string;
   receiptFileName?: string;
+  orNumber?: string;
 }
 
 export interface MOM {
@@ -166,6 +168,7 @@ export interface MOM {
   contactPerson?: string;
   contactPersonDesignation?: string;
   contactPersonEmail?: string;
+  ccClient?: boolean;
   description?: string;
   agreements?: string;
   actionItems?: string;
@@ -211,7 +214,7 @@ export interface StatusHistory {
   comment?: string;
 }
 
-export type ClaimType = 'Reimbursement' | 'Cash Advance' | 'Liquidation';
+export type ClaimType = 'Reimbursement' | 'Transport Reimbursement' | 'Cash Advance' | 'Liquidation';
 
 export interface Claim {
   id: string;
@@ -219,10 +222,21 @@ export interface Claim {
   requestorId: string;
   status: ClaimStatus;
   total: number;
+  /** Amount originally requested/reported. `total` remains as a compatibility alias. */
+  claimedAmount: number;
+  /** Amount approved for release. Undefined until an approval/review decision exists. */
+  approvedAmount?: number;
+  /** Amount actually released. Liquidation spend is never counted a second time here. */
+  paidAmount: number;
   submittedAt?: string;
+  approvedAt?: string;
+  paidAt?: string;
+  completedAt?: string;
   createdAt: string;
   type: ClaimType;
   purpose: string; // derived from MOM usually, but useful at top level
+  client?: string;
+  location?: string;
   
   // Custom flags
   flaggedHighValue?: boolean;
@@ -319,4 +333,5 @@ export interface SystemEmail {
   body: string;
   read: boolean;
   timestamp: string;
+  channel?: 'Email' | 'Teams';
 }

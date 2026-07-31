@@ -30,23 +30,21 @@ const ProcessingQueue = lazy(() => import('./pages/custodian/ProcessingQueue').t
 const ReadyToClaimQueue = lazy(() => import('./pages/custodian/ReadyToClaimQueue').then(m => ({ default: m.ReadyToClaimQueue })));
 const TransactionHistory = lazy(() => import('./pages/custodian/TransactionHistory').then(m => ({ default: m.TransactionHistory })));
 const CustodianAnalytics = lazy(() => import('./pages/custodian/CustodianAnalytics').then(m => ({ default: m.CustodianAnalytics })));
-const AuditLog = lazy(() => import('./pages/admin/AuditLog').then(m => ({ default: m.AuditLog })));
+const SystemActivity = lazy(() => import('./pages/admin/SystemActivity').then(m => ({ default: m.SystemActivity })));
 const UserAccounts = lazy(() => import('./pages/admin/UserAccounts').then(m => ({ default: m.UserAccounts })));
 const MOMs = lazy(() => import('./pages/shared/MOMs').then(m => ({ default: m.MOMs })));
 const MomDetail = lazy(() => import('./pages/shared/MomDetail').then(m => ({ default: m.MomDetail })));
+const CreateMom = lazy(() => import('./pages/shared/CreateMom').then(m => ({ default: m.CreateMom })));
 const Calendar = lazy(() => import('./pages/shared/Calendar').then(m => ({ default: m.Calendar })));
 const Settings = lazy(() => import('./pages/shared/Settings').then(m => ({ default: m.Settings })));
 const Support = lazy(() => import('./pages/shared/Support').then(m => ({ default: m.Support })));
 const Notifications = lazy(() => import('./pages/shared/Notifications').then(m => ({ default: m.Notifications })));
 const CompanyDirectory = lazy(() => import('./pages/admin/CompanyDirectory').then(m => ({ default: m.CompanyDirectory })));
 const Receipts = lazy(() => import('./pages/shared/Receipts').then(m => ({ default: m.Receipts })));
-const MasterData = lazy(() => import('./pages/admin/MasterData').then(m => ({ default: m.MasterData })));
-const FieldDefinitionsAdmin = lazy(() => import('./pages/admin/FieldDefinitionsAdmin').then(m => ({ default: m.FieldDefinitionsAdmin })));
 // recharts alone is a big chunk only this page needs — the audit's own example.
 const AdminReporting = lazy(() => import('./pages/admin/AdminReporting').then(m => ({ default: m.AdminReporting })));
-const SystemEmails = lazy(() => import('./pages/admin/SystemEmails').then(m => ({ default: m.SystemEmails })));
+const FinanceAnalytics = lazy(() => import('./pages/admin/AdminReporting').then(m => ({ default: m.FinanceAnalytics })));
 const HistoricalImport = lazy(() => import('./pages/admin/HistoricalImport').then(m => ({ default: m.HistoricalImport })));
-const CompanyPolicy = lazy(() => import('./pages/admin/CompanyPolicy').then(m => ({ default: m.CompanyPolicy })));
 
 function RouteFallback() {
   return (
@@ -83,6 +81,7 @@ function RoleBasedRouter() {
         <Route path="/claims/new" element={<SubmitClaim />} />
         <Route path="/claims/:id" element={<ClaimDetail />} />
         <Route path="/moms" element={<MOMs />} />
+        <Route path="/moms/new" element={<CreateMom />} />
         <Route path="/moms/:id" element={<MomDetail />} />
         <Route path="/receipts" element={<Receipts />} />
         
@@ -100,17 +99,16 @@ function RoleBasedRouter() {
         <Route path="/ready-to-claim" element={<ReadyToClaimQueue />} />
         <Route path="/transactions" element={<TransactionHistory />} />
         <Route path="/custodian/analytics" element={<CustodianAnalytics />} />
+        <Route path="/finance/analytics" element={<FinanceAnalytics />} />
         
         {/* Admin */}
         <Route path="/admin/users" element={<UserAccounts />} />
-        <Route path="/admin/master-data" element={<MasterData />} />
-        <Route path="/admin/fields" element={<FieldDefinitionsAdmin />} />
         <Route path="/admin/companies" element={<CompanyDirectory />} />
-        <Route path="/admin/policy" element={<CompanyPolicy />} />
         <Route path="/admin/import" element={<HistoricalImport />} />
         <Route path="/admin/reports" element={<AdminReporting />} />
-        <Route path="/admin/audit" element={<AuditLog />} />
-        <Route path="/admin/emails" element={<SystemEmails />} />
+        <Route path="/admin/activity" element={<SystemActivity />} />
+        <Route path="/admin/audit" element={<Navigate to="/admin/activity?tab=audit" replace />} />
+        <Route path="/admin/emails" element={<Navigate to="/admin/activity?tab=messages" replace />} />
         
         {/* Catch all */}
         <Route path="*" element={<Navigate to="/" replace />} />

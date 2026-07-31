@@ -1,298 +1,259 @@
-import { useMemo, useState } from 'react';
-import { Card, CardHeader, CardContent } from '../../components/ui/Card';
-import { Button } from '../../components/ui/Button';
-import { Select } from '../../components/ui/Input';
-import { useAppContext } from '../../components/AppContext';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AnalyticsFilters } from '../../components/shared/AnalyticsFilters';
 import { useToast } from '../../components/shared/ToastContext';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend } from 'recharts';
-import { formatMoney, formatAxisMoney } from '../../lib/money';
-import { ClaimStatus, UserRole } from '../../types';
+import { Card, CardContent, CardHeader } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { Pagination } from '../../components/ui/Pagination';
+import { StatusBadge } from '../../components/ui/StatusBadge';
+import {
+  AnalyticsFilters as AnalyticsFilterState,
+  AnalyticsSummary,
+  DEFAULT_ANALYTICS_FILTERS,
+  downloadAnalyticsCsv,
+  fetchAnalyticsSummary,
+} from '../../lib/analytics';
+import { formatDate } from '../../lib/date';
+import { formatAxisMoney, formatMoney } from '../../lib/money';
+import { ClaimStatus } from '../../types';
 
-// Design-token hex values (see index.css @theme) -- not an arbitrary rainbow.
-// Colors carry meaning: blue family = normal progress, orange = needs
-// attention, red = rejected, grey = still waiting on someone.
 const COLOR_PRIMARY = '#004ac6';
-const COLOR_PRIMARY_CONTAINER = '#2563eb';
 const COLOR_SECONDARY = '#565e74';
 const COLOR_TERTIARY = '#943700';
-const COLOR_ERROR = '#ba1a1a';
+const PAGE_SIZE = 20;
 
 const STATUS_COLOR: Partial<Record<ClaimStatus, string>> = {
   [ClaimStatus.DRAFT]: '#9ca3af',
   [ClaimStatus.SUBMITTED]: COLOR_SECONDARY,
   [ClaimStatus.PENDING_APPROVAL]: COLOR_SECONDARY,
-  [ClaimStatus.REVIEW_MEETING_SCHEDULED]: COLOR_SECONDARY,
-  [ClaimStatus.APPROVED]: COLOR_PRIMARY_CONTAINER,
-  [ClaimStatus.PROCESSING]: COLOR_PRIMARY_CONTAINER,
-  [ClaimStatus.READY_FOR_CLAIM]: COLOR_PRIMARY_CONTAINER,
-  [ClaimStatus.RELEASED]: COLOR_PRIMARY_CONTAINER,
-  [ClaimStatus.REVIEWED]: COLOR_PRIMARY_CONTAINER,
-  [ClaimStatus.COMPLETED]: COLOR_PRIMARY,
-  [ClaimStatus.LIQUIDATED]: COLOR_PRIMARY,
-  [ClaimStatus.CLOSED]: COLOR_PRIMARY,
+  [ClaimStatus.APPROVED]: COLOR_PRIMARY,
+  [ClaimStatus.PROCESSING]: COLOR_PRIMARY,
+  [ClaimStatus.READY_FOR_CLAIM]: COLOR_PRIMARY,
+  [ClaimStatus.RELEASED]: COLOR_PRIMARY,
+  [ClaimStatus.REVIEWED]: COLOR_PRIMARY,
+  [ClaimStatus.COMPLETED]: '#0d9488',
+  [ClaimStatus.LIQUIDATED]: '#0d9488',
+  [ClaimStatus.CLOSED]: '#0d9488',
   [ClaimStatus.RETURNED]: COLOR_TERTIARY,
-  [ClaimStatus.REJECTED]: COLOR_ERROR,
+  [ClaimStatus.REJECTED]: '#ba1a1a',
 };
 
-const TOP_N_REQUESTORS = 10;
-const APPROVAL_SLA_DAYS = 2;
+interface ReportingProps {
+  audience?: 'admin' | 'finance';
+}
 
-export function AdminReporting() {
-  const { claims, lineItems, users, statusHistory } = useAppContext();
+export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
+  const navigate = useNavigate();
   const { addToast } = useToast();
+  const [filters, setFilters] = useState<AnalyticsFilterState>({ ...DEFAULT_ANALYTICS_FILTERS });
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [page, setPage] = useState(1);
 
-  const [dateRange, setDateRange] = useState<'30d' | '90d' | 'all'>('all');
-  const [claimTypeFilter, setClaimTypeFilter] = useState<'All' | 'Reimbursement' | 'CashAdvance' | 'Liquidation'>('All');
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
+    fetchAnalyticsSummary(filters)
+      .then(result => {
+        if (!active) return;
+        setSummary(result);
+        setPage(1);
+      })
+      .catch((cause: any) => {
+        if (!active) return;
+        setError(cause?.message || 'Could not load analytics.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [filters]);
 
-  const filteredClaims = useMemo(() => claims.filter(c => {
-    if (claimTypeFilter !== 'All' && c.type !== claimTypeFilter) return false;
-    if (dateRange === '30d' || dateRange === '90d') {
-      const days = dateRange === '30d' ? 30 : 90;
-      const d = new Date(c.createdAt);
-      return (Date.now() - d.getTime()) <= days * 24 * 60 * 60 * 1000;
+  const paginatedRecords = useMemo(() => {
+    if (!summary) return [];
+    const start = (page - 1) * PAGE_SIZE;
+    return summary.records.slice(start, start + PAGE_SIZE);
+  }, [summary, page]);
+  const totalPages = Math.max(1, Math.ceil((summary?.records.length || 0) / PAGE_SIZE));
+
+  const exportRecords = () => {
+    if (!summary?.records.length) {
+      addToast('There are no filtered records to export.', 'info');
+      return;
     }
-    return true;
-  }), [claims, claimTypeFilter, dateRange]);
-
-  const filteredClaimIds = useMemo(() => new Set(filteredClaims.map(c => c.id)), [filteredClaims]);
-  const filteredLineItems = useMemo(() => lineItems.filter(li => filteredClaimIds.has(li.claimId)), [lineItems, filteredClaimIds]);
-
-  const categoryChartData = useMemo(() => {
-    const totals: Record<string, number> = {};
-    filteredLineItems.forEach(item => { totals[item.category] = (totals[item.category] || 0) + item.amount; });
-    return Object.entries(totals)
-      .map(([name, value]) => ({ name, amount: Number(value.toFixed(2)) }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [filteredLineItems]);
-
-  const statusChartData = useMemo(() => {
-    const counts: Record<string, number> = {};
-    filteredClaims.forEach(c => { counts[c.status] = (counts[c.status] || 0) + 1; });
-    return Object.entries(counts).map(([name, count]) => ({ name, count }));
-  }, [filteredClaims]);
-
-  const userSpendChartData = useMemo(() => {
-    const spend: Record<string, number> = {};
-    filteredClaims.forEach(c => {
-      const requestor = users.find(u => u.id === c.requestorId)?.name || c.requestorId;
-      spend[requestor] = (spend[requestor] || 0) + c.total;
-    });
-    return Object.entries(spend)
-      .map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }))
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, TOP_N_REQUESTORS);
-  }, [filteredClaims, users]);
-
-  const departmentChartData = useMemo(() => {
-    const spend: Record<string, number> = {};
-    filteredClaims.forEach(c => {
-      const dept = users.find(u => u.id === c.requestorId)?.department || 'Unknown';
-      spend[dept] = (spend[dept] || 0) + c.total;
-    });
-    return Object.entries(spend)
-      .map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [filteredClaims, users]);
-
-  // Avg approval turnaround, computed only from claims that actually have
-  // both a submission and a decision timestamp in this filter's scope --
-  // no fallback number when there's nothing to compute from.
-  const avgTurnaroundDays = useMemo(() => {
-    let totalDays = 0;
-    let count = 0;
-    filteredClaims.forEach(c => {
-      const history = statusHistory.filter(h => h.claimId === c.id);
-      const submitted = history.find(h => h.newStatus === ClaimStatus.SUBMITTED || h.newStatus === ClaimStatus.PENDING_APPROVAL);
-      const decided = history.find(h => h.newStatus === ClaimStatus.APPROVED || h.newStatus === ClaimStatus.READY_FOR_CLAIM || h.newStatus === ClaimStatus.REJECTED);
-      if (submitted && decided) {
-        const diffDays = (new Date(decided.timestamp).getTime() - new Date(submitted.timestamp).getTime()) / (1000 * 60 * 60 * 24);
-        if (diffDays >= 0) { totalDays += diffDays; count++; }
-      }
-    });
-    return count > 0 ? totalDays / count : null;
-  }, [filteredClaims, statusHistory]);
-
-  const requestorApproverCount = useMemo(
-    () => users.filter(u => u.role === UserRole.REQUESTOR || u.role === UserRole.APPROVER).length,
-    [users]
-  );
-
-  const handleExportCSV = () => {
-    const headers = ['Claim ID', 'Reference', 'Type', 'Requestor', 'Purpose', 'Total Amount', 'Status', 'Created Date'];
-    const rows = filteredClaims.map(c => [
-      c.id,
-      c.ref,
-      c.type,
-      users.find(u => u.id === c.requestorId)?.name || c.requestorId,
-      `"${c.purpose.replace(/"/g, '""')}"`,
-      c.total.toFixed(2),
-      c.status,
-      c.createdAt
-    ]);
-
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `claims_summary_report_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    addToast('CSV Report exported successfully!', 'success');
+    downloadAnalyticsCsv(summary.records, audience === 'finance' ? 'finance-analytics' : 'admin-analytics');
+    addToast(`Exported ${summary.records.length} filtered record${summary.records.length === 1 ? '' : 's'}.`, 'success');
   };
 
-  const totalFilteredSpend = filteredClaims.reduce((sum, c) => sum + c.total, 0);
+  const metrics = summary?.metrics;
+  const categoryData = summary?.breakdowns.byCategory || [];
+  const departmentData = (summary?.breakdowns.byDepartment || []).slice(0, 10);
+  const requestorData = (summary?.breakdowns.byRequestor || []).slice(0, 10);
+  const statusData = summary?.breakdowns.byStatus || [];
+  const monthlyMovement = useMemo(() => {
+    const now = new Date();
+    const months = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+      return {
+        key: `${date.getFullYear()}-${date.getMonth()}`,
+        month: date.toLocaleDateString(undefined, { month: 'short' }),
+        claimed: 0,
+        paid: 0,
+      };
+    });
+    const byMonth = new Map(months.map(month => [month.key, month]));
+    (summary?.records || []).forEach(record => {
+      const submitted = new Date(record.submittedAt || record.createdAt);
+      const submittedBucket = byMonth.get(`${submitted.getFullYear()}-${submitted.getMonth()}`);
+      if (submittedBucket) submittedBucket.claimed += record.claimedAmount;
+      if (record.paidAt) {
+        const paid = new Date(record.paidAt);
+        const paidBucket = byMonth.get(`${paid.getFullYear()}-${paid.getMonth()}`);
+        if (paidBucket) paidBucket.paid += record.paidAmount;
+      }
+    });
+    return months;
+  }, [summary]);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-12">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
-          <h1 className="font-display text-display text-on-surface">Admin Reporting & Analytics</h1>
-          <p className="text-body-md text-outline mt-1">Expenditure analysis, compliance metrics, and audit exports.</p>
+          <span className="font-label-sm text-primary font-bold tracking-wider uppercase">
+            {audience === 'finance' ? 'View-only financial reporting' : 'System-wide reporting'}
+          </span>
+          <h1 className="font-display text-display text-on-surface mt-1">
+            {audience === 'finance' ? 'Finance Analytics' : 'Admin Analytics'}
+          </h1>
+          <p className="text-body-md text-outline mt-1">
+            Claimed, approved, paid, and outstanding values use one role-scoped metric contract.
+          </p>
         </div>
-        <Button className="gap-2" onClick={handleExportCSV}>
-          <span className="material-symbols-outlined">download</span> Export Claims CSV
+        <Button variant="outline" className="gap-2" onClick={exportRecords} disabled={loading || !summary?.records.length}>
+          <span className="material-symbols-outlined text-[18px]">download</span>
+          Export filtered CSV
         </Button>
       </div>
 
-      {/* Filter Bar */}
-      <div className="flex flex-col sm:flex-row gap-4 bg-surface-container-low p-4 rounded-xl border border-outline-variant">
-        <div className="w-full sm:w-48">
-          <label className="text-xs font-semibold text-outline block mb-1">Timeframe</label>
-          <Select value={dateRange} onChange={e => setDateRange(e.target.value as any)}>
-            <option value="all">All Time</option>
-            <option value="30d">Last 30 Days</option>
-            <option value="90d">Last 90 Days</option>
-          </Select>
-        </div>
-        <div className="w-full sm:w-56">
-          <label className="text-xs font-semibold text-outline block mb-1">Claim Type</label>
-          <Select value={claimTypeFilter} onChange={e => setClaimTypeFilter(e.target.value as any)}>
-            <option value="All">All Claim Types</option>
-            <option value="Reimbursement">Reimbursements</option>
-            <option value="CashAdvance">Cash Advances</option>
-            <option value="Liquidation">Liquidations</option>
-          </Select>
-        </div>
-      </div>
+      <AnalyticsFilters
+        value={filters}
+        dimensions={summary?.dimensions}
+        onChange={setFilters}
+        loading={loading}
+      />
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <Card className="p-6 bg-surface-container-low">
-          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Total Period Expenditure</p>
-          <p className="font-mono-data text-2xl font-bold text-primary">{formatMoney(totalFilteredSpend)}</p>
-          <p className="text-[12px] text-outline mt-1">{filteredClaims.length} total claims match filter</p>
+      {error && (
+        <Card className="p-5 border-error/30 bg-error-container/10 text-error">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined">error</span>
+            <p className="text-sm font-semibold">{error}</p>
+          </div>
         </Card>
+      )}
 
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="p-6 bg-surface-container-low">
-          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Avg Approval Turnaround</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">
-            {avgTurnaroundDays === null ? '—' : `${avgTurnaroundDays.toFixed(1)} Day${avgTurnaroundDays.toFixed(1) === '1.0' ? '' : 's'}`}
+          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Claimed / Reported</p>
+          <p className="font-mono-data text-2xl font-bold text-on-surface">{loading ? '…' : formatMoney(metrics?.claimedAmount || 0)}</p>
+          <p className="text-[12px] text-outline mt-1">{metrics?.recordCount || 0} filtered records</p>
+        </Card>
+        <Card className="p-6 bg-surface-container-low">
+          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Approved / Reviewed</p>
+          <p className="font-mono-data text-2xl font-bold text-primary">{loading ? '…' : formatMoney(metrics?.approvedAmount || 0)}</p>
+          <p className="text-[12px] text-outline mt-1">Accepted for processing</p>
+        </Card>
+        <Card className="p-6 bg-surface-container-low">
+          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Paid / Released</p>
+          <p className="font-mono-data text-2xl font-bold text-tertiary">{loading ? '…' : formatMoney(metrics?.paidAmount || 0)}</p>
+          <p className="text-[12px] text-outline mt-1">Actual company cash movement</p>
+        </Card>
+        <Card className="p-6 bg-surface-container-low">
+          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Outstanding</p>
+          <p className="font-mono-data text-2xl font-bold text-on-surface">{loading ? '…' : formatMoney(metrics?.outstandingAmount || 0)}</p>
+          <p className="text-[12px] text-outline mt-1">
+            {metrics?.avgApprovalTurnaroundDays == null
+              ? 'No complete approval intervals'
+              : `${metrics.avgApprovalTurnaroundDays.toFixed(1)} day average approval`}
           </p>
-          <p className={`text-[12px] mt-1 ${avgTurnaroundDays === null ? 'text-outline' : avgTurnaroundDays <= APPROVAL_SLA_DAYS ? 'text-green-600' : 'text-error'}`}>
-            {avgTurnaroundDays === null ? 'No decided claims in range' : avgTurnaroundDays <= APPROVAL_SLA_DAYS ? `Within ${APPROVAL_SLA_DAYS}-day target` : `Over ${APPROVAL_SLA_DAYS}-day target`}
-          </p>
-        </Card>
-
-        <Card className="p-6 bg-surface-container-low">
-          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Line Items in Range</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{filteredLineItems.length}</p>
-          <p className="text-[12px] text-outline mt-1">Logged expense items matching filter</p>
-        </Card>
-
-        <Card className="p-6 bg-surface-container-low">
-          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Requestors &amp; Approvers</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{requestorApproverCount}</p>
-          <p className="text-[12px] text-outline mt-1">Of {users.length} total system accounts</p>
         </Card>
       </div>
 
-      {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Category Spend */}
-        <Card>
-          <CardHeader className="bg-surface-container-low border-b border-outline-variant">
-            <h3 className="font-headline-sm text-on-surface">Expenditure by Expense Category</h3>
-          </CardHeader>
-          <CardContent className="p-0 overflow-y-auto h-80">
-            {categoryChartData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-outline">No expense items to chart</div>
-            ) : (
-              <div style={{ height: Math.max(320, categoryChartData.length * 40) }} className="p-6">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={categoryChartData} layout="vertical" margin={{ left: 8 }}>
-                    <XAxis type="number" stroke="#565e74" fontSize={12} tickFormatter={val => formatAxisMoney(val)} />
-                    <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={11} width={110} interval={0} />
-                    <Tooltip formatter={(value: any) => [formatMoney(value), 'Amount']} />
-                    <Bar dataKey="amount" fill={COLOR_PRIMARY} radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <Card className="overflow-hidden">
+        <CardHeader className="bg-surface-container-low border-b border-outline-variant">
+          <div>
+            <h3 className="font-headline-sm text-on-surface">
+              {audience === 'finance' ? 'Cash exposure and releases' : 'Submission and payout movement'}
+            </h3>
+            <p className="text-xs text-outline mt-1">
+              {audience === 'finance'
+                ? 'Compare reported obligations with actual cash released during the last six months.'
+                : 'Track demand entering the system against value successfully paid out.'}
+            </p>
+          </div>
+        </CardHeader>
+        <CardContent className="p-6 h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={monthlyMovement} margin={{ top: 8, right: 8, left: 4, bottom: 0 }}>
+              <defs>
+                <linearGradient id={`claimed-${audience}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COLOR_PRIMARY} stopOpacity={0.24} />
+                  <stop offset="95%" stopColor={COLOR_PRIMARY} stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" axisLine={false} tickLine={false} stroke="#565e74" fontSize={12} />
+              <YAxis axisLine={false} tickLine={false} stroke="#565e74" fontSize={12} tickFormatter={formatAxisMoney} width={72} />
+              <Tooltip formatter={(value: number, key: string) => [formatMoney(value), key === 'claimed' ? 'Claimed' : 'Paid']} />
+              <Area type="monotone" dataKey="claimed" stroke={COLOR_PRIMARY} strokeWidth={2.5} fill={`url(#claimed-${audience})`} />
+              <Area type="monotone" dataKey="paid" stroke="#0d9488" strokeWidth={2.5} fill="transparent" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
-        {/* User Spend */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+        <MetricBarCard
+          title={audience === 'finance' ? 'Expense exposure by category' : 'Reported expenses by category'}
+          data={categoryData}
+          dataKey="amount"
+          color={COLOR_PRIMARY}
+          emptyText="No expense lines match these filters."
+        />
+        <MetricBarCard
+          title={audience === 'finance' ? 'Obligations by department' : 'Adoption and value by department'}
+          data={departmentData}
+          dataKey="claimedAmount"
+          color={COLOR_SECONDARY}
+          emptyText="No department activity matches these filters."
+        />
+        <MetricBarCard
+          title={audience === 'finance' ? 'Highest-value requestors' : 'Top requestors by claimed value'}
+          data={requestorData}
+          dataKey="claimedAmount"
+          color={COLOR_TERTIARY}
+          emptyText="No requestor activity matches these filters."
+        />
         <Card>
           <CardHeader className="bg-surface-container-low border-b border-outline-variant">
-            <h3 className="font-headline-sm text-on-surface">Top {TOP_N_REQUESTORS} Requestors by Spend</h3>
-          </CardHeader>
-          <CardContent className="p-0 overflow-y-auto h-80">
-            {userSpendChartData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-outline">No requestor spend to chart</div>
-            ) : (
-              <div style={{ height: Math.max(320, userSpendChartData.length * 40) }} className="p-6">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={userSpendChartData} layout="vertical" margin={{ left: 8 }}>
-                    <XAxis type="number" stroke="#565e74" fontSize={12} tickFormatter={val => formatAxisMoney(val)} />
-                    <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={11} width={110} interval={0} />
-                    <Tooltip formatter={(value: any) => [formatMoney(value), 'Total Spend']} />
-                    <Bar dataKey="amount" fill={COLOR_TERTIARY} radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Department Spend */}
-        <Card>
-          <CardHeader className="bg-surface-container-low border-b border-outline-variant">
-            <h3 className="font-headline-sm text-on-surface">Expenditure by Department</h3>
+            <div>
+              <h3 className="font-headline-sm text-on-surface">Records by Status</h3>
+              <p className="text-xs text-outline mt-1">Counts use the same role scope and filters.</p>
+            </div>
           </CardHeader>
           <CardContent className="p-6 h-80">
-            {departmentChartData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-outline">No department spend to chart</div>
+            {statusData.length === 0 ? (
+              <EmptyChart text="No statuses match these filters." />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={departmentChartData} margin={{ bottom: 8 }}>
-                  <XAxis dataKey="name" stroke="#565e74" fontSize={12} />
-                  <YAxis stroke="#565e74" fontSize={12} tickFormatter={val => formatAxisMoney(val)} width={70} />
-                  <Tooltip formatter={(value: any) => [formatMoney(value), 'Amount']} />
-                  <Bar dataKey="amount" fill={COLOR_SECONDARY} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Status Distribution */}
-        <Card>
-          <CardHeader className="bg-surface-container-low border-b border-outline-variant">
-            <h3 className="font-headline-sm text-on-surface">Claim Distribution by Status</h3>
-          </CardHeader>
-          <CardContent className="p-6 h-80">
-            {statusChartData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-outline">No claims to chart</div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={statusChartData.sort((a,b) => b.count - a.count)} layout="vertical" margin={{ left: 8 }}>
-                  <XAxis type="number" stroke="#565e74" fontSize={12} />
-                  <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={11} width={110} interval={0} />
-                  <Tooltip formatter={(value: any) => [`${value} claim${value === 1 ? '' : 's'}`, 'Count']} />
+                <BarChart data={statusData} layout="vertical" margin={{ left: 8 }}>
+                  <XAxis type="number" stroke="#565e74" fontSize={12} allowDecimals={false} />
+                  <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={11} width={115} interval={0} />
+                  <Tooltip formatter={(value: any) => [value, 'Records']} />
                   <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-                    {statusChartData.map((entry) => (
+                    {statusData.map(entry => (
                       <Cell key={entry.name} fill={STATUS_COLOR[entry.name as ClaimStatus] || '#9ca3af'} />
                     ))}
                   </Bar>
@@ -302,6 +263,106 @@ export function AdminReporting() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="bg-surface-container-low border-b border-outline-variant">
+          <div>
+            <h3 className="font-headline-sm text-on-surface">Filtered Records</h3>
+            <p className="text-xs text-outline mt-1">Drill down from any KPI or chart using the shared filters above.</p>
+          </div>
+          <span className="text-xs font-semibold text-outline">{summary?.records.length || 0} records</span>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left min-w-[1050px]">
+            <thead className="bg-surface-container-low text-outline font-label-sm uppercase tracking-wider">
+              <tr>
+                <th className="px-5 py-4">Reference</th>
+                <th className="px-5 py-4">Requestor</th>
+                <th className="px-5 py-4">Type</th>
+                <th className="px-5 py-4">Submitted</th>
+                <th className="px-5 py-4 text-right">Claimed</th>
+                <th className="px-5 py-4 text-right">Approved</th>
+                <th className="px-5 py-4 text-right">Paid</th>
+                <th className="px-5 py-4 text-right">Outstanding</th>
+                <th className="px-5 py-4 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant">
+              {!loading && paginatedRecords.length === 0 ? (
+                <tr><td colSpan={9} className="px-6 py-12 text-center text-outline">No records match the current filters.</td></tr>
+              ) : paginatedRecords.map(record => (
+                <tr
+                  key={`${record.type}-${record.id}`}
+                  className="hover:bg-primary-container/5 cursor-pointer"
+                  onClick={() => navigate(`/claims/${record.id}`)}
+                >
+                  <td className="px-5 py-4 font-mono-data font-bold text-primary">{record.ref}</td>
+                  <td className="px-5 py-4">
+                    <p className="text-sm font-semibold text-on-surface">{record.requestorName}</p>
+                    <p className="text-xs text-outline">{record.department}</p>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-on-surface-variant">{record.type}</td>
+                  <td className="px-5 py-4 text-sm text-on-surface-variant whitespace-nowrap">
+                    {record.submittedAt ? formatDate(record.submittedAt) : '—'}
+                  </td>
+                  <td className="px-5 py-4 text-right font-mono-data">{formatMoney(record.claimedAmount)}</td>
+                  <td className="px-5 py-4 text-right font-mono-data">{formatMoney(record.approvedAmount)}</td>
+                  <td className="px-5 py-4 text-right font-mono-data">{formatMoney(record.paidAmount)}</td>
+                  <td className="px-5 py-4 text-right font-mono-data font-bold">{formatMoney(record.outstandingAmount)}</td>
+                  <td className="px-5 py-4 text-center"><StatusBadge status={record.status as ClaimStatus} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {summary && summary.records.length > PAGE_SIZE && (
+          <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+        )}
+      </Card>
     </div>
   );
+}
+
+function MetricBarCard({
+  title,
+  data,
+  dataKey,
+  color,
+  emptyText,
+}: {
+  title: string;
+  data: Array<Record<string, any>>;
+  dataKey: string;
+  color: string;
+  emptyText: string;
+}) {
+  return (
+    <Card>
+      <CardHeader className="bg-surface-container-low border-b border-outline-variant">
+        <h3 className="font-headline-sm text-on-surface">{title}</h3>
+      </CardHeader>
+      <CardContent className="p-6 h-80">
+        {data.length === 0 ? (
+          <EmptyChart text={emptyText} />
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} layout="vertical" margin={{ left: 8 }}>
+              <XAxis type="number" stroke="#565e74" fontSize={12} tickFormatter={value => formatAxisMoney(value)} />
+              <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={11} width={115} interval={0} />
+              <Tooltip formatter={(value: any) => [formatMoney(value), 'Amount']} />
+              <Bar dataKey={dataKey} fill={color} radius={[0, 4, 4, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EmptyChart({ text }: { text: string }) {
+  return <div className="h-full flex items-center justify-center text-center text-sm text-outline">{text}</div>;
+}
+
+export function FinanceAnalytics() {
+  return <AdminReporting audience="finance" />;
 }

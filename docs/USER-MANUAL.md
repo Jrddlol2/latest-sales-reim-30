@@ -1,7 +1,7 @@
 # User Manual — Sales Reimbursement System
 
 This is a how-to-use guide, written for the people who work in the app day to day —
-Requestors, Approvers, Custodians, and Admins. If you're a developer looking for the
+Requestors, Approvers, Custodians, Finance viewers, and Admins. If you're a developer looking for the
 technical architecture, see [`README.md`](../README.md) instead.
 
 > **Note on signing in:** this system doesn't have passwords yet — you sign in by picking
@@ -29,6 +29,7 @@ technical architecture, see [`README.md`](../README.md) instead.
 - [For Custodians](#for-custodians)
   - [Processing an approved claim](#processing-an-approved-claim)
   - [Collecting a liquidation refund](#collecting-a-liquidation-refund)
+- [For Finance](#for-finance)
 - [For Admins](#for-admins)
 - [Everyone: notifications, support, settings](#everyone-notifications-support-settings)
 - [FAQ](#faq)
@@ -38,7 +39,7 @@ technical architecture, see [`README.md`](../README.md) instead.
 ## Signing in
 
 Open the app and you'll see a list of accounts grouped by role (Requestor, Approver,
-Custodian, Admin). Click your name to sign in — no password is needed in this version of
+Custodian, Finance, Admin). Click your name to sign in — no password is needed in this version of
 the system. To switch to a different account, click **Sign out** in the top-right corner
 of any page; that returns you to the account list.
 
@@ -197,6 +198,20 @@ requestor's confirmation.
 When a liquidation comes through with **Refund Due**, it lands in your queue the same way
 — review it, collect the difference from the requestor by whatever means your office uses,
 then mark it closed.
+
+---
+
+## For Finance
+
+Finance is a view-only role with company-wide visibility into submitted financial records.
+Use **Financial Records** to filter claims, cash advances, and liquidations by type, status,
+client, location, or submitted date. **Receipt Archive** provides receipt totals plus
+requestor, category, and date filters. **Transaction History** shows finalized activity,
+while **Analytics** provides expenditure, department, client, category, and workflow views.
+
+Finance users cannot create or edit claims, approve or return requests, process
+disbursements, generate release codes, or change administrative configuration. Personal
+Minutes & Agreements remain private unless they are linked to a submitted claim.
 
 ---
 

@@ -72,11 +72,12 @@ domain in PHP.
 | **Requestor** | Submits reimbursements/advances/liquidations, tracks their status, confirms payout receipt, resubmits returned claims. |
 | **Approver** | Reviews their direct reports' submissions (approve / reject / return with a comment), confirms review meetings, can delegate approval authority. Also a Requestor for their own claims. |
 | **Custodian** | Processes approved claims: generates a release code, records the payment method, marks a claim Ready for Claim, collects liquidation refunds. |
+| **Finance** | View-only company-wide access to submitted financial records, receipts, transaction history, and analytics. Cannot approve, edit, process, or release funds. |
 | **Admin** | Owns master data, user accounts/org chart, field definitions, company directory, historical import, reporting, the audit log, and system emails. |
 
 ## Tech stack
 
-- **Frontend:** React 19, React Router 7, Tailwind CSS 4, Vite 6, Recharts (admin reporting
+- **Frontend:** React 19, React Router 7, Tailwind CSS 4, Vite 6, Recharts (analytics/reporting
   only, code-split — see [Architecture](#architecture))
 - **Backend:** Express 4, in-memory data (no database yet — see
   [`docs/DATABASE-MIGRATION.md`](docs/DATABASE-MIGRATION.md)), `helmet` + `cors` for basic
@@ -110,6 +111,7 @@ the picker so you can switch identities.
 | `u1` | Alice Reyes | Requestor |
 | `u2` | Bob Santos | Approver (Alice's manager) |
 | `u3` | Carol Ramos | Custodian |
+| `u22` | Sofia Lim | Finance (view-only) |
 
 ## Architecture
 

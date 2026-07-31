@@ -6,7 +6,7 @@ import { formatMoney } from '../../lib/money';
 import { ConfirmModal } from './ConfirmModal';
 import { useAppContext } from '../AppContext';
 import { useToast } from './ToastContext';
-import { generateClaimCode } from '../../lib/api';
+import { decideAsCustodian, generateClaimCode } from '../../lib/api';
 
 interface CustodianActionButtonsProps {
   claim: Claim;
@@ -21,24 +21,55 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   const { lineItems, currentUser, updateClaimStatus, refresh, paymentMethods } = useAppContext();
   const { addToast } = useToast();
 
-  const [activeModal, setActiveModal] = useState<'markReady' | 'release' | 'closeLiq' | null>(null);
+  const [activeModal, setActiveModal] = useState<'markReady' | 'release' | 'closeLiq' | 'return' | 'reject' | null>(null);
   const [generatingCode, setGeneratingCode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('');
   const [paymentRef, setPaymentRef] = useState('');
   const [refundMethod, setRefundMethod] = useState('');
   const [refundRef, setRefundRef] = useState('');
   const [error, setError] = useState('');
+  const [correctionComment, setCorrectionComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isReimbursement = claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement';
 
-  const handleAction = (action: 'markReady' | 'release' | 'closeLiq') => {
+  const handleAction = (action: 'markReady' | 'release' | 'closeLiq' | 'return' | 'reject') => {
     setPaymentMethod('');
     setPaymentRef('');
     // Prefill the refund method with whatever the requestor declared at
     // submission (mapped onto claim.paymentMethod) — the custodian confirms it.
     setRefundMethod(action === 'closeLiq' ? (claim.paymentMethod || '') : '');
     setRefundRef('');
+    setCorrectionComment('');
     setError('');
     setActiveModal(action);
+  };
+
+  const handleCorrectionDecision = async () => {
+    if (activeModal !== 'return' && activeModal !== 'reject') return;
+    if (!correctionComment.trim()) {
+      setError('Explain what needs correction or why the request is being rejected.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await decideAsCustodian(
+        claim.id,
+        activeModal === 'return' ? 'Return' : 'Reject',
+        correctionComment.trim(),
+      );
+      await refresh();
+      addToast(
+        activeModal === 'return' ? 'Returned to the requestor for revision.' : 'Request rejected before release.',
+        'success',
+      );
+      setActiveModal(null);
+    } catch (err: any) {
+      setError(err?.message || 'The server rejected this decision.');
+      addToast(err?.message || 'Decision failed.', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   /**
@@ -126,10 +157,10 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
-        {claim.type === 'Reimbursement' && claim.status === ClaimStatus.APPROVED && (
+        {isReimbursement && claim.status === ClaimStatus.APPROVED && (
           <span className="text-body-sm text-outline italic self-center pr-2">Awaiting processing</span>
         )}
-        {claim.type === 'Reimbursement' && claim.status === ClaimStatus.PROCESSING && (
+        {isReimbursement && claim.status === ClaimStatus.PROCESSING && (
           <Button size={size} className="gap-1.5" onClick={() => handleAction('markReady')}>
             <span className="material-symbols-outlined text-[16px]">fact_check</span> Review
           </Button>
@@ -140,7 +171,75 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
         {claim.type === 'Liquidation' && claim.status === ClaimStatus.REVIEWED && claim.varianceType === 'RefundDue' && (
           <Button size={size} onClick={() => handleAction('closeLiq')}>Close Liquidation</Button>
         )}
+        {((isReimbursement && [ClaimStatus.APPROVED, ClaimStatus.PROCESSING].includes(claim.status)) ||
+          (claim.type === 'Liquidation' && claim.status === ClaimStatus.REVIEWED && claim.varianceType === 'RefundDue')) && (
+          <Button size={size} variant="outline" className="text-tertiary border-tertiary/50" onClick={() => handleAction('return')}>
+            Return
+          </Button>
+        )}
+        {((isReimbursement && [ClaimStatus.APPROVED, ClaimStatus.PROCESSING].includes(claim.status)) ||
+          (claim.type === 'Cash Advance' && claim.status === ClaimStatus.APPROVED)) && (
+          <Button size={size} variant="outline" className="text-error border-error/50 hover:bg-error-container/20" onClick={() => handleAction('reject')}>
+            Reject
+          </Button>
+        )}
       </div>
+
+      <ConfirmModal
+        isOpen={activeModal === 'return'}
+        onClose={() => setActiveModal(null)}
+        onConfirm={handleCorrectionDecision}
+        title="Return to Requestor"
+        confirmLabel={isSubmitting ? 'Returning...' : 'Return for Revision'}
+        variant="warning"
+        disabled={isSubmitting}
+      >
+        <div className="space-y-3">
+          <p>
+            Return <strong>{claim.ref}</strong> without releasing funds. The requestor will see this note and can correct the record.
+          </p>
+          <div>
+            <label className="block text-label-md text-on-surface mb-1">Required correction <span className="text-error">*</span></label>
+            <textarea
+              value={correctionComment}
+              onChange={event => { setCorrectionComment(event.target.value); setError(''); }}
+              rows={4}
+              placeholder="Describe the missing document, incorrect amount, or required correction..."
+              className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-y"
+              disabled={isSubmitting}
+            />
+          </div>
+          {error && <p className="text-error text-body-sm">{error}</p>}
+        </div>
+      </ConfirmModal>
+
+      <ConfirmModal
+        isOpen={activeModal === 'reject'}
+        onClose={() => setActiveModal(null)}
+        onConfirm={handleCorrectionDecision}
+        title="Reject Before Release"
+        confirmLabel={isSubmitting ? 'Rejecting...' : 'Reject Request'}
+        variant="error"
+        disabled={isSubmitting}
+      >
+        <div className="space-y-3">
+          <p>
+            Reject <strong>{claim.ref}</strong> before any funds are released. This decision and your reason will be written to the audit history.
+          </p>
+          <div>
+            <label className="block text-label-md text-on-surface mb-1">Rejection reason <span className="text-error">*</span></label>
+            <textarea
+              value={correctionComment}
+              onChange={event => { setCorrectionComment(event.target.value); setError(''); }}
+              rows={4}
+              placeholder="Explain why this request cannot proceed..."
+              className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-y"
+              disabled={isSubmitting}
+            />
+          </div>
+          {error && <p className="text-error text-body-sm">{error}</p>}
+        </div>
+      </ConfirmModal>
 
       <ConfirmModal
         isOpen={activeModal === 'markReady'}
@@ -204,6 +303,10 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
               <div className="flex justify-between items-center pt-2 border-t border-outline-variant">
                 <span className="font-label-md text-on-surface-variant">Claim Total</span>
                 <span className="font-mono-data font-bold text-on-surface">{formatMoney(claim.total)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-label-md text-on-surface-variant">Amount to Release</span>
+                <span className="font-mono-data font-bold text-primary">{formatMoney(claim.approvedAmount ?? Math.min(claim.total, 1000))}</span>
               </div>
               <div>
                 <label className="block text-label-md text-on-surface mb-1">Payment Method <span className="text-error">*</span></label>

@@ -20,6 +20,10 @@ export function UserAccounts() {
 
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sortOrder, setSortOrder] = useState<'name' | 'department' | 'role'>('name');
+  const [showFilters, setShowFilters] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
@@ -28,16 +32,24 @@ export function UserAccounts() {
     return users.filter(u => {
       const matchesSearch = !q || [u.name, u.email, u.department, u.jobTitle].some(v => (v || '').toLowerCase().includes(q));
       const matchesRole = !roleFilter || u.role === roleFilter;
-      return matchesSearch && matchesRole;
+      const matchesDepartment = !departmentFilter || u.department === departmentFilter;
+      const matchesStatus = !statusFilter || u.employmentStatus === statusFilter;
+      return matchesSearch && matchesRole && matchesDepartment && matchesStatus;
+    }).sort((a, b) => {
+      if (sortOrder === 'department') return (a.department || '').localeCompare(b.department || '') || a.name.localeCompare(b.name);
+      if (sortOrder === 'role') return a.role.localeCompare(b.role) || a.name.localeCompare(b.name);
+      return a.name.localeCompare(b.name);
     });
-  }, [users, search, roleFilter]);
+  }, [users, search, roleFilter, departmentFilter, statusFilter, sortOrder]);
+  const departments = useMemo(() => Array.from(new Set(users.map(user => user.department).filter(Boolean))).sort(), [users]);
+  const hasFilters = Boolean(roleFilter || departmentFilter || statusFilter);
 
   const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
   const paginatedUsers = filteredUsers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, roleFilter]);
+  }, [search, roleFilter, departmentFilter, statusFilter, sortOrder]);
 
   const openEditor = (user: User) => {
     setEditing(user);
@@ -98,28 +110,29 @@ export function UserAccounts() {
         </div>
       </div>
 
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-[240px] flex-1 max-w-xl"><Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, email, department, or title..." /></div>
+          <Select className="w-40" value={roleFilter} onChange={e => setRoleFilter(e.target.value)} aria-label="Filter users by role"><option value="">All roles</option>{Object.values(UserRole).map(r => <option key={r} value={r}>{r}</option>)}</Select>
+          <Button variant="outline" className="gap-2" onClick={() => setShowFilters(open => !open)}><span className="material-symbols-outlined text-[18px]">filter_list</span>Filters{departmentFilter || statusFilter ? ' (active)' : ''}</Button>
+          <Select className="w-40" value={sortOrder} onChange={e => setSortOrder(e.target.value as typeof sortOrder)} aria-label="Sort user accounts"><option value="name">Name A–Z</option><option value="department">Department</option><option value="role">Role</option></Select>
+          {(search || hasFilters || sortOrder !== 'name') && <button className="text-xs font-semibold text-primary hover:underline" onClick={() => { setSearch(''); setRoleFilter(''); setDepartmentFilter(''); setStatusFilter(''); setSortOrder('name'); }}>Clear all</button>}
+        </div>
+        {showFilters && <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-outline-variant pt-4">
+          <div><Label>Department</Label><Select value={departmentFilter} onChange={e => setDepartmentFilter(e.target.value)}><option value="">All departments</option>{departments.map(item => <option key={item}>{item}</option>)}</Select></div>
+          <div><Label>Employment Status</Label><Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></Select></div>
+        </div>}
+        {hasFilters && <div className="mt-3 flex flex-wrap gap-2">
+          {roleFilter && <button onClick={() => setRoleFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{roleFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+          {departmentFilter && <button onClick={() => setDepartmentFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{departmentFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+          {statusFilter && <button onClick={() => setStatusFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{statusFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+        </div>}
+      </Card>
+
       <Card>
         <CardHeader className="bg-surface-container-low">
-          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center w-full gap-3">
-            <h3 className="font-label-md uppercase tracking-wider text-on-surface whitespace-nowrap">Registered Users</h3>
-            <div className="flex items-center gap-3">
-              <div className="w-56 max-w-full">
-                <Input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="Search name, email, department..."
-                  className="py-1.5 text-sm"
-                />
-              </div>
-              <div className="w-40">
-                <Select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} className="py-1.5 text-sm">
-                  <option value="">All Roles</option>
-                  {Object.values(UserRole).map(r => <option key={r} value={r}>{r}</option>)}
-                </Select>
-              </div>
-              <span className="font-label-sm text-outline whitespace-nowrap">{filteredUsers.length} of {users.length}</span>
-            </div>
-          </div>
+          <h3 className="font-label-md uppercase tracking-wider text-on-surface">Registered Users</h3>
+          <span className="font-label-sm text-outline whitespace-nowrap">{filteredUsers.length} of {users.length}</span>
         </CardHeader>
         <div className="overflow-x-auto">
           <table className="w-full text-left">

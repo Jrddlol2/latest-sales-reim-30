@@ -1,9 +1,11 @@
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '../ui/Card';
-import { Claim, ClaimStatus, ClaimType, User } from '../../types';
+import { Claim, ClaimStatus, ClaimType, StatusHistory, User } from '../../types';
+import { formatDateTime } from '../../lib/date';
 
 const STAGE_FLOWS: Record<ClaimType, ClaimStatus[]> = {
   'Reimbursement': [ClaimStatus.PENDING_APPROVAL, ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED],
+  'Transport Reimbursement': [ClaimStatus.PENDING_APPROVAL, ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED],
   'Cash Advance': [ClaimStatus.SUBMITTED, ClaimStatus.APPROVED, ClaimStatus.RELEASED, ClaimStatus.LIQUIDATED],
   'Liquidation': [ClaimStatus.SUBMITTED, ClaimStatus.REVIEWED, ClaimStatus.CLOSED],
 };
@@ -56,7 +58,15 @@ function currentlyWith(claim: Claim, users: User[]): string {
  *  which is current, and whose court the ball is in right now. Shared
  *  between the Requestor dashboard and the Approver's "My Requests" (both
  *  show "your own" claims the same way). */
-export function ClaimProgressTracker({ claim, users }: { claim: Claim | undefined; users: User[] }) {
+export function ClaimProgressTracker({
+  claim,
+  users,
+  statusHistory = [],
+}: {
+  claim: Claim | undefined;
+  users: User[];
+  statusHistory?: StatusHistory[];
+}) {
   const navigate = useNavigate();
 
   if (!claim) {
@@ -73,6 +83,13 @@ export function ClaimProgressTracker({ claim, users }: { claim: Claim | undefine
   const flow = STAGE_FLOWS[claim.type];
   const isBranched = BRANCH_STATUSES.includes(claim.status);
   const currentIndex = flow.indexOf(claim.status);
+  const latestComment = statusHistory
+    .filter(h => h.claimId === claim.id && h.comment?.trim())
+    .slice()
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+  const commentAuthor = latestComment
+    ? users.find(user => user.id === latestComment.changedBy)?.name || 'System'
+    : '';
 
   return (
     <Card className="cursor-pointer hover:border-primary/40 transition-colors" onClick={() => navigate(`/claims/${claim.id}`)}>
@@ -119,11 +136,28 @@ export function ClaimProgressTracker({ claim, users }: { claim: Claim | undefine
           </div>
         )}
 
+        {latestComment && (
+          <div className="mt-5 rounded-lg border border-outline-variant bg-surface-container-low p-3">
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined text-[18px] text-primary mt-0.5">comment</span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-on-surface">
+                  {STAGE_LABELS[latestComment.newStatus] || latestComment.newStatus}
+                  <span className="font-normal text-outline"> · {commentAuthor}</span>
+                </p>
+                <p className="text-body-sm text-on-surface-variant mt-1 line-clamp-3">{latestComment.comment}</p>
+                <p className="text-[11px] text-outline mt-1">{formatDateTime(latestComment.timestamp)}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mt-5 pt-4 border-t border-outline-variant flex items-center gap-2">
           <span className="material-symbols-outlined text-[18px] text-outline">person_pin_circle</span>
           <span className="text-body-sm text-on-surface-variant">
             {isBranched ? 'Ended:' : 'Currently with:'} <span className="font-semibold text-on-surface">{currentlyWith(claim, users)}</span>
           </span>
+          <span className="ml-auto text-xs font-semibold text-primary whitespace-nowrap">View activity</span>
         </div>
       </CardContent>
     </Card>

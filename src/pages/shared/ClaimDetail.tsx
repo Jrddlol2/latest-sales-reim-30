@@ -12,6 +12,7 @@ import { confirmReceipt, uploadUrl, resubmitClaimFlow, DraftLineItem } from '../
 import { UserRole, ClaimStatus, ExpenseLineItem } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDateTime } from '../../lib/date';
+import { isCustodianProcessingClaim } from '../../lib/claimWorkflow';
 
 export function ClaimDetail() {
   const { addToast } = useToast();
@@ -41,14 +42,15 @@ export function ClaimDetail() {
   // Matches ProcessingQueue's own worklist scope: the claim must actually be
   // at a step the custodian can act on (Ready for Claim has nothing left to
   // do here — that's the requestor's move via Confirm Receipt below).
-  const isCustodian = currentUser.role === UserRole.CUSTODIAN &&
-    (claim.status === ClaimStatus.PROCESSING || claim.status === ClaimStatus.APPROVED || claim.status === ClaimStatus.REVIEWED);
+  const isCustodian = currentUser.role === UserRole.CUSTODIAN && isCustodianProcessingClaim(claim);
   // Only the requestor closes the loop, by quoting the code the custodian issued.
   const canConfirmReceipt = currentUser.id === claim.requestorId && claim.status === ClaimStatus.READY_FOR_CLAIM;
   // Returned is a Reimbursement-only status (PUT /api/claims/:id/resubmit is
   // specific to the `claims` table — Cash Advances/Liquidations use their own
   // ReturnedForRevision flow with different routes).
-  const canResubmit = currentUser.id === claim.requestorId && claim.status === ClaimStatus.RETURNED && claim.type === 'Reimbursement';
+  const canResubmit = currentUser.id === claim.requestorId &&
+    claim.status === ClaimStatus.RETURNED &&
+    (claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement');
 
   const openRevise = () => {
     setReviseLineItems(items.map(li => ({
@@ -59,6 +61,7 @@ export function ClaimDetail() {
       expenseDate: li.expenseDate,
       paymentMethod: li.paymentMethod,
       receiptUrl: li.receiptUrl,
+      orNumber: li.orNumber,
     })));
     setRevising(true);
   };
@@ -68,13 +71,19 @@ export function ClaimDetail() {
       addToast('Add at least one expense line item.', 'error');
       return;
     }
-    if (!mom) {
+    if (claim.type === 'Reimbursement' && !mom) {
       addToast('This claim has no Minutes of Meeting to resubmit against.', 'error');
       return;
     }
     setSubmittingRevision(true);
     try {
-      await resubmitClaimFlow({ claimId: claim.id, momId: mom.id, lineItems: reviseLineItems, remarks: claim.purpose });
+      await resubmitClaimFlow({
+        claimId: claim.id,
+        momId: mom?.id,
+        claimType: claim.type === 'Transport Reimbursement' ? 'Transport Reimbursement' : 'Reimbursement',
+        lineItems: reviseLineItems,
+        remarks: claim.purpose,
+      });
       await refresh();
       addToast('Claim revised and resubmitted for approval.', 'success');
       setRevising(false);
@@ -163,34 +172,26 @@ export function ClaimDetail() {
             </Card>
           )}
 
-          {mom && (
+          {(claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement') && (
             <Card>
               <CardContent className="p-6">
-                <div className="flex items-center justify-between gap-4 mb-6">
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-primary">summarize</span>
-                    <h3 className="font-headline-md text-on-surface">Meeting Summary</h3>
-                  </div>
-                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate(`/moms/${mom.id}`)}>
-                    <span className="material-symbols-outlined text-[16px]">open_in_new</span>
-                    {mom.fileUrl ? 'View Full Minutes & Document' : 'View Full Minutes'}
-                  </Button>
+                <div className="flex items-center gap-2 mb-5">
+                  <span className="material-symbols-outlined text-primary">payments</span>
+                  <h3 className="font-headline-md text-on-surface">Reimbursement Summary</h3>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                   <div>
-                    <p className="font-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Purpose</p>
-                    <p className="font-body-lg text-on-surface">{mom.purposeOfMeeting || 'N/A'}</p>
+                    <p className="font-label-sm text-outline uppercase">Claimed Amount</p>
+                    <p className="font-headline-md text-on-surface mt-1">{formatMoney(claim.claimedAmount)}</p>
                   </div>
                   <div>
-                    <p className="font-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Location</p>
-                    <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined text-error text-[18px]">location_on</span>
-                      <p className="font-body-lg text-on-surface">{mom.location || 'N/A'}</p>
-                    </div>
+                    <p className="font-label-sm text-outline uppercase">Reimbursable Amount</p>
+                    <p className="font-headline-md text-primary mt-1">{formatMoney(claim.approvedAmount ?? Math.min(claim.claimedAmount, 1000))}</p>
+                    {claim.claimedAmount > 1000 && <p className="text-xs text-tertiary mt-1">Capped at ₱1,000.00</p>}
                   </div>
                   <div>
-                    <p className="font-label-sm text-on-surface-variant uppercase tracking-wider mb-1">Source File</p>
-                    <p className="font-body-sm text-on-surface font-semibold">{mom.fileName || 'Template Form'}</p>
+                    <p className="font-label-sm text-outline uppercase">Date Filed</p>
+                    <p className="font-body-base text-on-surface mt-1">{formatDateTime(claim.submittedAt || claim.createdAt)}</p>
                   </div>
                 </div>
               </CardContent>
@@ -232,9 +233,10 @@ export function ClaimDetail() {
               <table className="w-full text-left">
                 <thead className="bg-surface-container-low">
                   <tr>
-                    <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Date</th>
+                    <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Date of Purchase</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Category</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Vendor / Purpose</th>
+                    <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">OR Number</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider">Payment</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider text-right">Amount</th>
                     <th className="px-4 py-3 font-label-sm text-on-surface-variant uppercase tracking-wider text-center">Receipt</th>
@@ -245,7 +247,12 @@ export function ClaimDetail() {
                     const hasReceipt = Boolean(item.receiptUrl);
                     return (
                       <tr key={item.id} className="hover:bg-primary/5 transition-colors">
-                        <td className="px-4 py-3 font-mono-data text-xs">{item.expenseDate}</td>
+                        <td className="px-4 py-3 font-mono-data text-xs">
+                          {item.expenseDate}
+                          {Math.floor((Date.now() - new Date(`${item.expenseDate}T00:00:00`).getTime()) / (1000 * 60 * 60 * 24)) > 30 && (
+                            <span className="block text-[11px] text-tertiary mt-1">Receipt over 30 days old</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                             {item.category}
@@ -255,6 +262,7 @@ export function ClaimDetail() {
                           <p className="font-bold text-on-surface">{item.vendor || 'N/A'}</p>
                           <p className="text-on-surface-variant text-[12px]">{item.businessPurpose}</p>
                         </td>
+                        <td className="px-4 py-3 font-mono-data text-xs text-on-surface-variant">{item.orNumber || '—'}</td>
                         <td className="px-4 py-3 text-xs text-on-surface-variant">{item.paymentMethod || 'Personal Card'}</td>
                         <td className="px-4 py-3 font-mono-data text-right font-bold text-xs">{formatMoney(item.amount)}</td>
                         <td className="px-4 py-3 text-center">
@@ -277,7 +285,7 @@ export function ClaimDetail() {
                   })}
                   {items.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-8 text-center text-on-surface-variant">
+                      <td colSpan={7} className="px-6 py-8 text-center text-on-surface-variant">
                         No line items found.
                       </td>
                     </tr>
@@ -335,6 +343,70 @@ export function ClaimDetail() {
               )}
             </div>
           </Card>
+
+          {mom && (
+            <Card className="overflow-hidden">
+              <CardHeader className="bg-surface-container-low/60 border-b border-outline-variant">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-primary">description</span>
+                    <h3 className="font-headline-md text-on-surface">Complete Minutes of Meeting</h3>
+                  </div>
+                  <p className="text-body-sm text-outline mt-1">The complete supporting record for this reimbursement.</p>
+                </div>
+                {mom.fileUrl && (
+                  <a
+                    href={uploadUrl(mom.fileUrl)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-outline-variant bg-white text-sm font-semibold text-primary hover:bg-primary/5"
+                  >
+                    <span className="material-symbols-outlined text-[17px]">download</span>
+                    Download attachment
+                  </a>
+                )}
+              </CardHeader>
+              <CardContent className="p-0">
+                <dl className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-px bg-outline-variant border-b border-outline-variant">
+                  {[
+                    ['Company', mom.companyName || claim.client || '—'],
+                    ['Purpose', mom.purposeOfMeeting || '—'],
+                    ['Date', mom.meetingDate ? formatDateTime(mom.meetingDate) : '—'],
+                    ['Location', mom.location || '—'],
+                    ['Contact person', mom.contactPerson || '—'],
+                    ['Contact email', mom.contactPersonEmail || '—'],
+                    ['Meeting type', mom.meetingType || '—'],
+                    ['Category', mom.category || '—'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="bg-white p-4">
+                      <dt className="text-[11px] font-bold uppercase tracking-wider text-outline">{label}</dt>
+                      <dd className="text-sm font-medium text-on-surface mt-1">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <div className="p-6 sm:p-8 space-y-8">
+                  <section>
+                    <h4 className="font-headline-sm text-on-surface mb-3">Discussion</h4>
+                    <div className="text-body-base text-on-surface-variant whitespace-pre-wrap leading-7">
+                      {mom.description || mom.summary || 'No discussion was recorded.'}
+                    </div>
+                  </section>
+                  <section className="pt-6 border-t border-outline-variant">
+                    <h4 className="font-headline-sm text-on-surface mb-3">Agreements and decisions</h4>
+                    <div className="text-body-base text-on-surface-variant whitespace-pre-wrap leading-7">
+                      {mom.agreements || 'No separate agreements were recorded.'}
+                    </div>
+                  </section>
+                  <section className="pt-6 border-t border-outline-variant">
+                    <h4 className="font-headline-sm text-on-surface mb-3">Action items</h4>
+                    <div className="text-body-base text-on-surface-variant whitespace-pre-wrap leading-7">
+                      {mom.actionItems || 'No action items were recorded.'}
+                    </div>
+                  </section>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <div className="col-span-12 lg:col-span-4 flex flex-col gap-8">
@@ -456,7 +528,7 @@ export function ClaimDetail() {
 
               <p className="text-body-sm text-on-surface-variant">
                 Enter the release code provided by your custodian to confirm you received the
-                payout for <span className="font-semibold text-on-surface">{claim.ref}</span> ({formatMoney(claim.total)}).
+                payout for <span className="font-semibold text-on-surface">{claim.ref}</span> ({formatMoney(claim.paidAmount || claim.approvedAmount || Math.min(claim.total, 1000))}).
                 This completes your reimbursement.
               </p>
 

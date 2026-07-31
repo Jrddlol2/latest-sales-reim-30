@@ -7,27 +7,30 @@ import { KPICard } from '../../components/ui/KPICard';
 import { useAppContext } from '../../components/AppContext';
 import { ClaimStatus } from '../../types';
 import { formatMoney } from '../../lib/money';
+import { claimTypeIcon, getClaimAgingInfo, isCustodianProcessingClaim } from '../../lib/claimWorkflow';
 
 export function CustodianDashboard() {
   const navigate = useNavigate();
-  const { claims, users, lineItems } = useAppContext();
+  const { claims, users } = useAppContext();
 
-  const processingClaims = claims.filter(c => c.status === ClaimStatus.PROCESSING || c.status === ClaimStatus.READY_FOR_CLAIM);
+  const processingClaims = useMemo(
+    () => claims
+      .filter(isCustodianProcessingClaim)
+      .sort((a, b) =>
+        new Date(a.approvedAt || a.submittedAt || a.createdAt).getTime() -
+        new Date(b.approvedAt || b.submittedAt || b.createdAt).getTime()
+      ),
+    [claims]
+  );
   const readyForPickup = claims.filter(c => c.status === ClaimStatus.READY_FOR_CLAIM).length;
 
-  const missingReceiptsCount = useMemo(() => {
-    const processingClaimIds = new Set(processingClaims.map(c => c.id));
-    return lineItems.filter(li => processingClaimIds.has(li.claimId) && !li.receiptUrl).length;
-  }, [processingClaims, lineItems]);
-
-  const oldestItemDays = useMemo(() => {
-    if (processingClaims.length === 0) return null;
-    const oldest = processingClaims.reduce((min, c) => {
-      const created = new Date(c.createdAt).getTime();
-      return created < min ? created : min;
-    }, Date.now());
-    return (Date.now() - oldest) / (1000 * 60 * 60 * 24);
-  }, [processingClaims]);
+  const oldestItem = processingClaims[0];
+  const oldestRequestor = oldestItem
+    ? users.find(user => user.id === oldestItem.requestorId)
+    : undefined;
+  const oldestAging = oldestItem
+    ? getClaimAgingInfo(oldestItem.approvedAt || oldestItem.submittedAt, oldestItem.createdAt)
+    : null;
 
   const byType = useMemo(() => {
     const counts: Record<string, number> = { Reimbursement: 0, 'Cash Advance': 0, Liquidation: 0 };
@@ -75,15 +78,7 @@ export function CustodianDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <KPICard
-          title="Missing Receipts"
-          value={missingReceiptsCount.toString()}
-          icon="receipt_long"
-          iconColorClass={missingReceiptsCount > 0 ? 'bg-error-container text-on-error-container' : 'bg-primary-fixed text-on-primary-fixed-variant'}
-          trend={missingReceiptsCount > 0 ? 'Needs follow-up' : 'All receipts on file'}
-          trendColorClass={missingReceiptsCount > 0 ? 'text-error bg-error-container px-2 py-1 rounded-full' : 'text-primary bg-primary-fixed px-2 py-1 rounded-full'}
-        />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <KPICard
           title="Total Pending"
           value={processingClaims.length.toString()}
@@ -92,15 +87,22 @@ export function CustodianDashboard() {
           trend="Active Queue"
           trendColorClass="text-primary bg-primary-fixed px-2 py-1 rounded-full"
         />
-        <KPICard
-          title="Oldest Item in Queue"
-          value={oldestItemDays === null ? '—' : `${oldestItemDays.toFixed(1)} day${oldestItemDays.toFixed(1) === '1.0' ? '' : 's'}`}
-          prefix=""
-          icon="schedule"
-          iconColorClass="bg-tertiary-fixed text-on-tertiary-fixed-variant"
-          trend={oldestItemDays !== null && oldestItemDays > 3 ? 'Urgent' : oldestItemDays === null ? 'Queue empty' : 'On track'}
-          trendColorClass="text-tertiary bg-tertiary-fixed px-2 py-1 rounded-full"
-        />
+        <Card
+          className={`p-5 ${oldestItem ? 'cursor-pointer hover:border-tertiary transition-colors' : ''}`}
+          onClick={() => oldestItem && navigate(`/claims/${oldestItem.id}`)}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="font-label-sm text-outline uppercase tracking-wider">Oldest Item in Queue</p>
+              <p className="font-headline-md text-on-surface mt-2">{oldestAging?.text || '—'}</p>
+              <p className="font-mono-data text-xs text-primary mt-2 truncate">{oldestItem?.ref || 'Queue is empty'}</p>
+              <p className="text-xs text-outline mt-1 truncate">{oldestRequestor?.name || 'No requestor waiting'}</p>
+            </div>
+            <div className="w-11 h-11 rounded-full bg-tertiary-fixed text-on-tertiary-fixed-variant flex items-center justify-center">
+              <span className="material-symbols-outlined">schedule</span>
+            </div>
+          </div>
+        </Card>
       </div>
 
       <Card>
@@ -134,8 +136,9 @@ export function CustodianDashboard() {
           <table className="w-full text-left">
             <thead className="bg-surface-container-low text-label-sm text-outline uppercase">
               <tr>
-                <th className="px-6 py-4">Claim ID</th>
+                <th className="px-6 py-4">Ref &amp; Type</th>
                 <th className="px-6 py-4">Requestor</th>
+                <th className="px-6 py-4">In Queue</th>
                 <th className="px-6 py-4">Amount</th>
                 <th className="px-6 py-4">Status</th>
                 <th className="px-6 py-4 text-right">Action</th>
@@ -144,20 +147,27 @@ export function CustodianDashboard() {
             <tbody className="divide-y divide-outline-variant">
               {processingClaims.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-outline">
+                  <td colSpan={6} className="px-6 py-12 text-center text-outline">
                     <span className="material-symbols-outlined text-4xl mb-2 opacity-50">task_alt</span>
                     <p className="font-label-md">Queue is empty!</p>
                   </td>
                 </tr>
               ) : processingClaims.map(claim => {
                 const req = users.find(u => u.id === claim.requestorId) || users[0];
+                const aging = getClaimAgingInfo(claim.approvedAt || claim.submittedAt, claim.createdAt);
                 return (
-                  <tr key={claim.id} className="hover:bg-primary-container/5 transition-colors group cursor-pointer" onClick={(e) => {
+                  <tr key={claim.id} className={`hover:bg-primary-container/5 transition-colors group cursor-pointer ${claim.id === oldestItem?.id ? 'bg-tertiary-container/10' : ''}`} onClick={(e) => {
                     if (!(e.target as HTMLElement).closest('button')) {
                       navigate(`/claims/${claim.id}`);
                     }
                   }}>
-                    <td className="px-6 py-5 font-mono-data text-primary font-bold">{claim.ref}</td>
+                    <td className="px-6 py-5">
+                      <p className="font-mono-data text-primary font-bold">{claim.ref}</p>
+                      <p className="text-xs text-outline mt-0.5 inline-flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[14px]">{claimTypeIcon(claim.type)}</span>
+                        {claim.type}
+                      </p>
+                    </td>
                     <td className="px-6 py-5">
                       <div className="flex items-center gap-3">
                         {req.avatarUrl ? (
@@ -171,12 +181,15 @@ export function CustodianDashboard() {
                         </div>
                       </div>
                     </td>
+                    <td className="px-6 py-5">
+                      <span className={`inline-flex px-2 py-1 rounded-md text-xs font-bold whitespace-nowrap ${aging.color}`}>{aging.text}</span>
+                    </td>
                     <td className="px-6 py-5 font-mono-data text-sm font-bold">{formatMoney(claim.total)}</td>
                     <td className="px-6 py-5">
                       <StatusBadge status={claim.status} />
                     </td>
                     <td className="px-6 py-5 text-right">
-                      <Button size="sm" className="gap-2 ml-auto" onClick={() => navigate('/disbursements')}>
+                      <Button size="sm" className="gap-2 ml-auto" onClick={() => navigate(`/claims/${claim.id}`)}>
                         <span className="material-symbols-outlined text-[16px]">fact_check</span>
                         Review
                       </Button>

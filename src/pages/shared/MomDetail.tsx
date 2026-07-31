@@ -32,9 +32,36 @@ export function MomDetail() {
   const docType: MomDocumentType = mom.documentType === 'LOA' ? 'LOA' : 'MoM';
   const linkedClaim = mom.claimId ? claims.find(c => c.id === mom.claimId) : undefined;
   const fileUrl = uploadUrl(mom.fileUrl);
+  const showAttachment = Boolean(fileUrl);
 
   const internalParticipants = mom.participantsInternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
   const externalParticipants = mom.participantsExternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
+  const exportWord = () => {
+    const escape = (value?: string) => String(value || '-')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escape(mom.companyName)}</title>
+      <style>body{font-family:Arial,sans-serif;color:#172033;line-height:1.5;margin:40px}h1{color:#034fc7}h2{font-size:14px;text-transform:uppercase;color:#667085;border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:24px}table{border-collapse:collapse;width:100%}td{padding:7px;border-bottom:1px solid #eee;vertical-align:top}td:first-child{font-weight:bold;width:180px}</style>
+      </head><body><h1>${escape(DOCUMENT_TYPE_LABEL[docType])}</h1>
+      <h2>Meeting Details</h2><table>
+      <tr><td>Company</td><td>${escape(mom.companyName)}</td></tr>
+      <tr><td>Date of Meeting</td><td>${escape(mom.meetingDate?.split('T')[0])}</td></tr>
+      <tr><td>Location of Meeting</td><td>${escape(mom.location)}</td></tr>
+      <tr><td>Purpose</td><td>${escape(mom.purposeOfMeeting)}</td></tr>
+      <tr><td>Contact Person</td><td>${escape(mom.contactPerson)}</td></tr>
+      <tr><td>Contact Email</td><td>${escape(mom.contactPersonEmail)}</td></tr>
+      <tr><td>Prepared By</td><td>${escape(mom.preparedBy)}</td></tr></table>
+      <h2>Discussion</h2><p>${escape(mom.description || mom.summary)}</p>
+      <h2>Agreements</h2><p>${escape(mom.agreements)}</p>
+      <h2>Action Items</h2><p>${escape(mom.actionItems)}</p>
+      </body></html>`;
+    const blob = new Blob([html], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${(mom.companyName || 'meeting-minutes').replace(/[^a-z0-9]+/gi, '-')}.doc`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
@@ -44,8 +71,8 @@ export function MomDetail() {
         <span className="text-on-surface font-semibold">{mom.companyName || 'Untitled meeting'}</span>
       </nav>
 
-      <Card>
-        <CardHeader className="flex-col md:flex-row items-start md:items-center gap-4">
+      <Card className="overflow-hidden">
+        <CardHeader className="flex-col xl:flex-row items-start xl:items-center gap-5 bg-surface-container-low/60 border-b border-outline-variant">
           <div>
             <h2 className="text-headline-md font-semibold text-brand-slate">
               {mom.companyName || 'Unknown Company'}
@@ -54,7 +81,11 @@ export function MomDetail() {
               {mom.typeOfAccount || mom.preparedBy} &bull; {dateStr}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button className="gap-2" onClick={exportWord}>
+              <span className="material-symbols-outlined text-[18px]">download</span>
+              Export document
+            </Button>
             <span
               title={DOCUMENT_TYPE_LABEL[docType]}
               className={`inline-flex items-center gap-1 px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider ${docType === 'LOA' ? 'bg-tertiary-container/50 text-tertiary' : 'bg-primary-container/40 text-on-primary-container'}`}
@@ -73,7 +104,7 @@ export function MomDetail() {
             )}
           </div>
         </CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <CardContent className={showAttachment ? "grid grid-cols-1 md:grid-cols-2 gap-8" : "block"}>
 
           <div className="space-y-6">
             <section>
@@ -84,7 +115,7 @@ export function MomDetail() {
                   <dd className="text-body-base font-medium mt-1">{mom.purposeOfMeeting || '-'}</dd>
                 </div>
                 <div>
-                  <dt className="text-label-sm text-outline">Location</dt>
+                  <dt className="text-label-sm text-outline">Location of Meeting</dt>
                   <dd className="text-body-base font-medium mt-1">{mom.location || '-'}</dd>
                 </div>
                 <div>
@@ -178,7 +209,7 @@ export function MomDetail() {
             </section>
           </div>
 
-          <div className="space-y-6">
+          {showAttachment && <div className="space-y-6">
              <section className="h-full flex flex-col">
                 <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Attached Document</h3>
 
@@ -223,7 +254,7 @@ export function MomDetail() {
                   </div>
                 )}
              </section>
-          </div>
+          </div>}
 
         </CardContent>
       </Card>
