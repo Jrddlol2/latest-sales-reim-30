@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { ClaimStatus, Claim } from '../../types';
@@ -9,13 +9,14 @@ import { useToast } from './ToastContext';
 interface ApproverActionButtonsProps {
   claim: Claim;
   size?: 'sm' | 'md';
+  compact?: boolean;
 }
 
 // Approve/Return/Reject for a claim awaiting this approver's decision. Shared
 // by ApprovalQueue (row actions) and ClaimDetail (full-context review) so the
 // decision rules (per-type button visibility, required reason text) live in
 // exactly one place.
-export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButtonsProps) {
+export function ApproverActionButtons({ claim, size = 'sm', compact = false }: ApproverActionButtonsProps) {
   const { currentUser, updateClaimStatus } = useAppContext();
   const { addToast } = useToast();
 
@@ -24,8 +25,10 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
   const [reviewMeetingDate, setReviewMeetingDate] = useState('');
   const [reviewMeetingTime, setReviewMeetingTime] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const menuRef = useRef<HTMLDetailsElement>(null);
 
   const handleAction = (action: 'approve' | 'reject' | 'return') => {
+    menuRef.current?.removeAttribute('open');
     setComment('');
     setReviewMeetingDate('');
     setReviewMeetingTime('');
@@ -98,17 +101,43 @@ export function ApproverActionButtons({ claim, size = 'sm' }: ApproverActionButt
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
-        <Button size={size} variant="outline" className="text-primary border-primary hover:bg-primary/10" onClick={() => handleAction('approve')}>Approve</Button>
-        {/* Each entity's decision vocabulary is server-enforced and differs:
-            a reimbursement claim takes Approve/Reject/Return; a Cash Advance
-            has no "return to revise" concept (Approve/Reject only); a
-            Liquidation has no "reject" concept once cash is already out
-            with the requestor (Approve/Return only). */}
-        {claim.type !== 'Cash Advance' && (
-          <Button size={size} variant="outline" className="text-tertiary border-tertiary hover:bg-tertiary/10" onClick={() => handleAction('return')}>Return</Button>
-        )}
-        {claim.type !== 'Liquidation' && (
-          <Button size={size} variant="outline" className="text-error border-error hover:bg-error/10" onClick={() => handleAction('reject')}>Reject</Button>
+        {compact ? (
+          <details ref={menuRef} className="relative">
+            <summary className="list-none inline-flex h-9 cursor-pointer items-center gap-1 rounded-lg border border-primary px-3 text-xs font-semibold text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+              Actions
+              <span aria-hidden="true" className="material-symbols-outlined text-[17px]">expand_more</span>
+            </summary>
+            <div className="mt-2 ml-auto w-40 overflow-hidden rounded-lg border border-outline-variant bg-white p-1.5 text-left shadow-lg">
+              <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/10" onClick={() => handleAction('approve')}>
+                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">check_circle</span>Approve
+              </button>
+              {claim.type !== 'Cash Advance' && (
+                <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold text-tertiary hover:bg-tertiary/10" onClick={() => handleAction('return')}>
+                  <span aria-hidden="true" className="material-symbols-outlined text-[18px]">undo</span>Return
+                </button>
+              )}
+              {claim.type !== 'Liquidation' && (
+                <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold text-error hover:bg-error/10" onClick={() => handleAction('reject')}>
+                  <span aria-hidden="true" className="material-symbols-outlined text-[18px]">cancel</span>Reject
+                </button>
+              )}
+            </div>
+          </details>
+        ) : (
+          <>
+            <Button size={size} variant="outline" className="text-primary border-primary hover:bg-primary/10" onClick={() => handleAction('approve')}>Approve</Button>
+            {/* Each entity's decision vocabulary is server-enforced and differs:
+                a reimbursement claim takes Approve/Reject/Return; a Cash Advance
+                has no "return to revise" concept (Approve/Reject only); a
+                Liquidation has no "reject" concept once cash is already out
+                with the requestor (Approve/Return only). */}
+            {claim.type !== 'Cash Advance' && (
+              <Button size={size} variant="outline" className="text-tertiary border-tertiary hover:bg-tertiary/10" onClick={() => handleAction('return')}>Return</Button>
+            )}
+            {claim.type !== 'Liquidation' && (
+              <Button size={size} variant="outline" className="text-error border-error hover:bg-error/10" onClick={() => handleAction('reject')}>Reject</Button>
+            )}
+          </>
         )}
       </div>
 

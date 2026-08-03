@@ -4,7 +4,7 @@
  */
 
 import { useState, lazy, Suspense, type ReactNode } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { AppProvider, useAppContext } from './components/AppContext';
 import { ToastProvider } from './components/shared/ToastContext';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
@@ -16,10 +16,10 @@ import { CardSkeleton } from './components/shared/states/Skeleton';
 
 // Route-level code-splitting: every page below Layout is its own chunk,
 // fetched on first navigation rather than bundled into the initial load.
-// Dashboard/AdminDashboard stay out of this (they're the landing page for
-// every role, so lazy-loading them would just move the wait, not remove it).
+// Dashboard is the common landing page. Admin analytics is kept in its own
+// chunk because its charting dependency is not needed by other roles.
 import { Dashboard } from './pages/Dashboard';
-import { AdminDashboard } from './pages/admin/AdminDashboard';
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
 
 const ClaimsList = lazy(() => import('./pages/shared/ClaimsList').then(m => ({ default: m.ClaimsList })));
 const Payouts = lazy(() => import('./pages/shared/Payouts').then(m => ({ default: m.Payouts })));
@@ -62,8 +62,34 @@ function RouteErrorBoundary({ children }: { children: ReactNode }) {
   return <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>;
 }
 
+function RequireRoles({ roles, children }: { roles: UserRole[]; children: ReactNode }) {
+  const { currentUser } = useAppContext();
+  if (roles.includes(currentUser.role)) return <>{children}</>;
+
+  return (
+    <div className="mx-auto max-w-xl p-6">
+      <div className="rounded-[14px] border border-brand-border bg-surface-container-lowest p-8 text-center shadow-sm">
+        <span aria-hidden="true" className="material-symbols-outlined text-[40px] text-outline">lock</span>
+        <h1 className="mt-3 font-headline-md text-on-surface">This page is not available for your role</h1>
+        <p className="mt-2 text-body-md text-on-surface-variant">
+          Your prototype account does not have permission to open this module.
+        </p>
+        <Link
+          to="/"
+          className="mt-6 inline-flex h-10 items-center justify-center rounded-[10px] bg-primary px-5 font-label-md text-on-primary"
+        >
+          Return to dashboard
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 function RoleBasedRouter() {
   const { currentUser } = useAppContext();
+  const requestRoles = [UserRole.REQUESTOR, UserRole.APPROVER];
+  const receiptRoles = [UserRole.REQUESTOR, UserRole.APPROVER, UserRole.FINANCE];
+  const claimDetailRoles = [UserRole.REQUESTOR, UserRole.APPROVER, UserRole.CUSTODIAN, UserRole.FINANCE, UserRole.ADMIN];
 
   return (
     <Suspense fallback={<RouteFallback />}>
@@ -76,39 +102,39 @@ function RoleBasedRouter() {
         )}
         
         {/* Requestor / General */}
-        <Route path="/claims" element={<ClaimsList />} />
-        <Route path="/payouts" element={<Payouts />} />
-        <Route path="/claims/new" element={<SubmitClaim />} />
-        <Route path="/claims/:id" element={<ClaimDetail />} />
-        <Route path="/moms" element={<MOMs />} />
-        <Route path="/moms/new" element={<CreateMom />} />
-        <Route path="/moms/:id" element={<MomDetail />} />
-        <Route path="/receipts" element={<Receipts />} />
+        <Route path="/claims" element={<RequireRoles roles={[...requestRoles, UserRole.FINANCE]}><ClaimsList /></RequireRoles>} />
+        <Route path="/payouts" element={<RequireRoles roles={requestRoles}><Payouts /></RequireRoles>} />
+        <Route path="/claims/new" element={<RequireRoles roles={requestRoles}><SubmitClaim /></RequireRoles>} />
+        <Route path="/claims/:id" element={<RequireRoles roles={claimDetailRoles}><ClaimDetail /></RequireRoles>} />
+        <Route path="/moms" element={<RequireRoles roles={requestRoles}><MOMs /></RequireRoles>} />
+        <Route path="/moms/new" element={<RequireRoles roles={requestRoles}><CreateMom /></RequireRoles>} />
+        <Route path="/moms/:id" element={<RequireRoles roles={requestRoles}><MomDetail /></RequireRoles>} />
+        <Route path="/receipts" element={<RequireRoles roles={receiptRoles}><Receipts /></RequireRoles>} />
         
         {/* Shared */}
-        <Route path="/calendar" element={<Calendar />} />
+        <Route path="/calendar" element={<RequireRoles roles={requestRoles}><Calendar /></RequireRoles>} />
         <Route path="/support" element={<Support />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/settings" element={<Settings />} />
         
         {/* Approver */}
-        <Route path="/approvals" element={<ApprovalQueue />} />
+        <Route path="/approvals" element={<RequireRoles roles={[UserRole.APPROVER]}><ApprovalQueue /></RequireRoles>} />
         
         {/* Custodian */}
-        <Route path="/disbursements" element={<ProcessingQueue />} />
-        <Route path="/ready-to-claim" element={<ReadyToClaimQueue />} />
-        <Route path="/transactions" element={<TransactionHistory />} />
-        <Route path="/custodian/analytics" element={<CustodianAnalytics />} />
-        <Route path="/finance/analytics" element={<FinanceAnalytics />} />
+        <Route path="/disbursements" element={<RequireRoles roles={[UserRole.CUSTODIAN]}><ProcessingQueue /></RequireRoles>} />
+        <Route path="/ready-to-claim" element={<RequireRoles roles={[UserRole.CUSTODIAN]}><ReadyToClaimQueue /></RequireRoles>} />
+        <Route path="/transactions" element={<RequireRoles roles={[UserRole.CUSTODIAN, UserRole.FINANCE]}><TransactionHistory /></RequireRoles>} />
+        <Route path="/custodian/analytics" element={<RequireRoles roles={[UserRole.CUSTODIAN]}><CustodianAnalytics /></RequireRoles>} />
+        <Route path="/finance/analytics" element={<RequireRoles roles={[UserRole.FINANCE]}><FinanceAnalytics /></RequireRoles>} />
         
         {/* Admin */}
-        <Route path="/admin/users" element={<UserAccounts />} />
-        <Route path="/admin/companies" element={<CompanyDirectory />} />
-        <Route path="/admin/import" element={<HistoricalImport />} />
-        <Route path="/admin/reports" element={<AdminReporting />} />
-        <Route path="/admin/activity" element={<SystemActivity />} />
-        <Route path="/admin/audit" element={<Navigate to="/admin/activity?tab=audit" replace />} />
-        <Route path="/admin/emails" element={<Navigate to="/admin/activity?tab=messages" replace />} />
+        <Route path="/admin/users" element={<RequireRoles roles={[UserRole.ADMIN]}><UserAccounts /></RequireRoles>} />
+        <Route path="/admin/companies" element={<RequireRoles roles={[UserRole.ADMIN]}><CompanyDirectory /></RequireRoles>} />
+        <Route path="/admin/import" element={<RequireRoles roles={[UserRole.ADMIN]}><HistoricalImport /></RequireRoles>} />
+        <Route path="/admin/reports" element={<RequireRoles roles={[UserRole.ADMIN]}><AdminReporting /></RequireRoles>} />
+        <Route path="/admin/activity" element={<RequireRoles roles={[UserRole.ADMIN]}><SystemActivity /></RequireRoles>} />
+        <Route path="/admin/audit" element={<RequireRoles roles={[UserRole.ADMIN]}><Navigate to="/admin/activity?tab=audit" replace /></RequireRoles>} />
+        <Route path="/admin/emails" element={<RequireRoles roles={[UserRole.ADMIN]}><Navigate to="/admin/activity?tab=messages" replace /></RequireRoles>} />
         
         {/* Catch all */}
         <Route path="*" element={<Navigate to="/" replace />} />

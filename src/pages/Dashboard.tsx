@@ -1,10 +1,11 @@
+import { lazy } from 'react';
 import { useAppContext } from '../components/AppContext';
-import { RequestorDashboard } from './requestor/RequestorDashboard';
-import { ApproverDashboard } from './approver/ApproverDashboard';
-import { CustodianDashboard } from './custodian/CustodianDashboard';
-import { AdminDashboard } from './admin/AdminDashboard';
-import { FinanceDashboard } from './finance/FinanceDashboard';
 import { UserRole } from '../types';
+
+const RequestorDashboard = lazy(() => import('./requestor/RequestorDashboard').then(module => ({ default: module.RequestorDashboard })));
+const ApproverDashboard = lazy(() => import('./approver/ApproverDashboard').then(module => ({ default: module.ApproverDashboard })));
+const CustodianDashboard = lazy(() => import('./custodian/CustodianDashboard').then(module => ({ default: module.CustodianDashboard })));
+const FinanceDashboard = lazy(() => import('./finance/FinanceDashboard').then(module => ({ default: module.FinanceDashboard })));
 
 export function Dashboard() {
   const { currentUser } = useAppContext();
@@ -18,8 +19,6 @@ export function Dashboard() {
       return <CustodianDashboard />;
     case UserRole.FINANCE:
       return <FinanceDashboard />;
-    case UserRole.ADMIN:
-      return <AdminDashboard />;
     default:
       return <div>Unknown Role</div>;
   }

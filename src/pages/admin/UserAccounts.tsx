@@ -3,7 +3,7 @@ import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input, Select, Label } from '../../components/ui/Input';
 import { Pagination } from '../../components/ui/Pagination';
-import { Portal } from '../../components/shared/Portal';
+import { Modal } from '../../components/shared/Modal';
 import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { updateUser, ApiError } from '../../lib/api';
@@ -111,11 +111,11 @@ export function UserAccounts() {
       </div>
 
       <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
           <div className="min-w-[240px] flex-1 max-w-xl"><Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, email, department, or title..." /></div>
-          <Select className="w-40" value={roleFilter} onChange={e => setRoleFilter(e.target.value)} aria-label="Filter users by role"><option value="">All roles</option>{Object.values(UserRole).map(r => <option key={r} value={r}>{r}</option>)}</Select>
-          <Button variant="outline" className="gap-2" onClick={() => setShowFilters(open => !open)}><span className="material-symbols-outlined text-[18px]">filter_list</span>Filters{departmentFilter || statusFilter ? ' (active)' : ''}</Button>
-          <Select className="w-40" value={sortOrder} onChange={e => setSortOrder(e.target.value as typeof sortOrder)} aria-label="Sort user accounts"><option value="name">Name A–Z</option><option value="department">Department</option><option value="role">Role</option></Select>
+          <Select containerClassName="w-full sm:w-40 sm:flex-none" value={roleFilter} onChange={e => setRoleFilter(e.target.value)} aria-label="Filter users by role"><option value="">All roles</option>{Object.values(UserRole).map(r => <option key={r} value={r}>{r}</option>)}</Select>
+          <Button variant="outline" className="gap-2 sm:flex-none" onClick={() => setShowFilters(open => !open)}><span className="material-symbols-outlined text-[18px]">filter_list</span>Filters{departmentFilter || statusFilter ? ' (active)' : ''}</Button>
+          <Select containerClassName="w-full sm:w-40 sm:flex-none" value={sortOrder} onChange={e => setSortOrder(e.target.value as typeof sortOrder)} aria-label="Sort user accounts"><option value="name">Name A–Z</option><option value="department">Department</option><option value="role">Role</option></Select>
           {(search || hasFilters || sortOrder !== 'name') && <button className="text-xs font-semibold text-primary hover:underline" onClick={() => { setSearch(''); setRoleFilter(''); setDepartmentFilter(''); setStatusFilter(''); setSortOrder('name'); }}>Clear all</button>}
         </div>
         {showFilters && <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-outline-variant pt-4">
@@ -195,13 +195,12 @@ export function UserAccounts() {
       </Card>
 
       {editing && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-surface-container-lowest rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+        <Modal isOpen onClose={() => setEditing(null)} titleId="user-editor-title" className="max-w-lg">
+            <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
               <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-                <h3 className="font-headline-sm text-on-surface">Edit {editing.name}</h3>
-                <button onClick={() => setEditing(null)} className="text-outline hover:text-on-surface">
-                  <span className="material-symbols-outlined">close</span>
+                <h3 id="user-editor-title" className="font-headline-sm text-on-surface">Edit {editing.name}</h3>
+                <button aria-label="Close user editor" onClick={() => setEditing(null)} className="text-outline hover:text-on-surface">
+                  <span aria-hidden="true" className="material-symbols-outlined">close</span>
                 </button>
               </div>
 
@@ -251,8 +250,7 @@ export function UserAccounts() {
                 </Button>
               </div>
             </div>
-          </div>
-        </Portal>
+        </Modal>
       )}
     </div>
   );

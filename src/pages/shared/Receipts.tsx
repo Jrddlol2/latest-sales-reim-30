@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Portal } from '../../components/shared/Portal';
+import { Modal } from '../../components/shared/Modal';
 
 import { Card, CardContent } from '../../components/ui/Card';
 import { formatMoney } from '../../lib/money';
@@ -535,12 +535,13 @@ export function Receipts() {
         </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left min-w-[900px]">
+            <table className="w-full text-left min-w-[980px]">
               <thead className="bg-surface-container-low text-outline font-label-sm uppercase tracking-wider">
                 <tr>
                   <th className="px-5 py-3">Expense</th>
                   {(isFinance || (isApprover && scope === 'team')) && <th className="px-5 py-3">Requestor</th>}
-                  <th className="px-5 py-3">Claim / OR</th>
+                  <th className="px-5 py-3">Claim</th>
+                  <th className="px-5 py-3">OR Number</th>
                   <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Category</th>
                   <th className="px-5 py-3">Date of Purchase</th>
@@ -573,8 +574,8 @@ export function Receipts() {
                     )}
                     <td className="px-5 py-4">
                       <p className="font-mono-data text-xs text-primary">{receipt.claimRef || '—'}</p>
-                      <p className="font-mono-data text-[11px] text-outline mt-1">{receipt.orNumber ? `OR ${receipt.orNumber}` : 'No OR number'}</p>
                     </td>
+                    <td className="px-5 py-4 font-mono-data text-xs text-on-surface-variant whitespace-nowrap">{receipt.orNumber || 'No OR number'}</td>
                     <td className="px-5 py-4">
                       {receipt.claimStatus ? <StatusBadge status={receipt.claimStatus} /> : <span className="text-xs text-outline">Not linked</span>}
                     </td>
@@ -607,16 +608,15 @@ export function Receipts() {
 
       {/* Preview Modal */}
       {selectedReceipt && (
-        <Portal>
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-surface-container-lowest rounded-xl max-w-2xl w-full p-6 shadow-2xl space-y-4">
+        <Modal isOpen onClose={() => setSelectedReceipt(null)} titleId="receipt-preview-title" className="max-w-2xl">
+          <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b border-outline-variant pb-3">
               <div>
-                <h3 className="font-headline-sm text-on-surface">{selectedReceipt.fileName}</h3>
+                <h3 id="receipt-preview-title" className="font-headline-sm text-on-surface">{selectedReceipt.fileName}</h3>
                 <p className="text-xs text-outline">{selectedReceipt.vendor} • {selectedReceipt.date}</p>
               </div>
-              <button onClick={() => setSelectedReceipt(null)} className="text-outline hover:text-on-surface">
-                <span className="material-symbols-outlined">close</span>
+              <button aria-label="Close receipt preview" onClick={() => setSelectedReceipt(null)} className="text-outline hover:text-on-surface">
+                <span aria-hidden="true" className="material-symbols-outlined">close</span>
               </button>
             </div>
             <div className="bg-surface-container-low border border-outline-variant rounded-lg p-8 flex flex-col items-center justify-center min-h-[260px]">
@@ -670,8 +670,7 @@ export function Receipts() {
               </div>
             </div>
           </div>
-        </div>
-        </Portal>
+        </Modal>
       )}
     </div>
   );

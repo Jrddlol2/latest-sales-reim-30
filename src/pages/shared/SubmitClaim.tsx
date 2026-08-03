@@ -8,6 +8,7 @@ import { cn } from '../../components/ui/Button';
 import { useAppContext } from '../../components/AppContext';
 import { DynamicFieldRenderer } from '../../components/shared/DynamicFieldRenderer';
 import { useToast } from '../../components/shared/ToastContext';
+import { ConfirmModal } from '../../components/shared/ConfirmModal';
 import { ClaimStatus, ClaimType, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
 import { submitClaimFlow, submitCashAdvanceFlow, submitLiquidationFlow, DraftLineItem } from '../../lib/api';
 import { formatMoney } from '../../lib/money';
@@ -49,6 +50,9 @@ export function SubmitClaim() {
     { expenseDate: '', amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Meals' }
   ]);
   const [dateValidationAttempted, setDateValidationAttempted] = useState(false);
+  const [dateBlockMessage, setDateBlockMessage] = useState('');
+  const invalidDateInputRefs = React.useRef<Array<HTMLInputElement | null>>([]);
+  const clientEmailInputRef = React.useRef<HTMLInputElement>(null);
   const [momCore, setMomCore] = useState({
     client: '', purpose: '', meetingDate: '', location: '', contactPerson: '', contactPersonEmail: '',
     discussion: '', actionItems: '', ccClient: false,
@@ -100,11 +104,21 @@ export function SubmitClaim() {
       lineItemsLocal[invalidReimbursementDateIndex]?.expenseDate,
       filingDate,
     );
-    addToast(`Cannot proceed — expense row ${invalidReimbursementDateIndex + 1}: ${message}`, 'error');
+    setDateBlockMessage(`Expense row ${invalidReimbursementDateIndex + 1}: ${message}`);
     return true;
   };
 
+  const closeDateBlockDialog = () => {
+    setDateBlockMessage('');
+    window.setTimeout(() => invalidDateInputRefs.current[invalidReimbursementDateIndex]?.focus(), 0);
+  };
+
   const handleNext = () => {
+    if (step === 2 && momCore.ccClient && !momCore.contactPersonEmail.trim()) {
+      addToast('Enter the client email to send claim status notifications.', 'error');
+      window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
+      return;
+    }
     if (step === 1 && (claimType === 'Reimbursement' || claimType === 'Transport Reimbursement') && lineItemsLocal.length === 0) {
       addToast('Please add at least one line item', 'error');
       return;
@@ -289,11 +303,11 @@ export function SubmitClaim() {
 
       if (claimType === 'Cash Advance') {
         setCashAdvanceAmount(5000);
-        setCashAdvancePurpose('Client site visit — travel and meals advance');
+        setCashAdvancePurpose('Client site visit — transportation and meals advance');
       } else if (claimType === 'Liquidation') {
         if (!cashAdvanceId && myCashAdvances.length > 0) setCashAdvanceId(myCashAdvances[0].id);
         setLineItemsLocal([
-          { expenseDate: today(), amount: 1200, paymentMethod: 'Personal Card', vendor: 'Grand Hotel', category: 'Travel', businessPurpose: 'Accommodation during client visit', receiptFile: mockReceipt('receipt_1.png'), receiptUrl: URL.createObjectURL(mockReceipt('receipt_1.png')) },
+          { expenseDate: today(), amount: 1200, paymentMethod: 'Personal Card', vendor: 'Grand Hotel', category: 'Transportation', businessPurpose: 'Accommodation during client visit', receiptFile: mockReceipt('receipt_1.png'), receiptUrl: URL.createObjectURL(mockReceipt('receipt_1.png')) },
         ]);
         setClaimCustomFields(fillCustomFields('claim'));
       } else if (claimType === 'Transport Reimbursement') {
@@ -341,6 +355,12 @@ export function SubmitClaim() {
    */
   const send = async (isDraft: boolean) => {
     if (!isDraft && isReimbursement && showReimbursementDateError()) return;
+    if (claimType === 'Reimbursement' && momCore.ccClient && !momCore.contactPersonEmail.trim()) {
+      addToast('Enter the client email to send claim status notifications.', 'error');
+      setStep(2);
+      window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
+      return;
+    }
     setLoading(true);
     try {
       if (claimType === 'Cash Advance') {
@@ -427,7 +447,20 @@ export function SubmitClaim() {
           </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => { setClaimType('Reimbursement'); setStep(2); }}>
+          <Card
+            role="button"
+            tabIndex={0}
+            aria-label="Start a general reimbursement"
+            className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            onClick={() => { setClaimType('Reimbursement'); setStep(2); }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setClaimType('Reimbursement');
+                setStep(2);
+              }
+            }}
+          >
             <CardContent className="p-7">
               <div className="w-12 h-12 rounded-xl bg-primary-container/30 text-primary flex items-center justify-center mb-5">
                 <span className="material-symbols-outlined text-[28px]">receipt_long</span>
@@ -442,11 +475,25 @@ export function SubmitClaim() {
               <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">Includes meeting details and supporting minutes.</p>
             </CardContent>
           </Card>
-          <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => {
+          <Card
+            role="button"
+            tabIndex={0}
+            aria-label="Start a transport reimbursement"
+            className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            onClick={() => {
             setClaimType('Transport Reimbursement');
             setLineItemsLocal([{ expenseDate: '', amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Transportation' }]);
             setStep(1);
-          }}>
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setClaimType('Transport Reimbursement');
+                setLineItemsLocal([{ expenseDate: '', amount: 0, paymentMethod: 'Personal Card', vendor: '', category: 'Transportation' }]);
+                setStep(1);
+              }
+            }}
+          >
             <CardContent className="p-7">
               <div className="w-12 h-12 rounded-xl bg-secondary-container/60 text-on-secondary-container flex items-center justify-center mb-5">
                 <span className="material-symbols-outlined text-[28px]">local_taxi</span>
@@ -461,7 +508,20 @@ export function SubmitClaim() {
               <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">A faster receipt-based flow with no meeting minutes required.</p>
             </CardContent>
           </Card>
-          {!reimbursementIntent && <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => { setClaimType('Cash Advance'); setStep(1); }}>
+          {!reimbursementIntent && <Card
+            role="button"
+            tabIndex={0}
+            aria-label="Start a cash advance request"
+            className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            onClick={() => { setClaimType('Cash Advance'); setStep(1); }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setClaimType('Cash Advance');
+                setStep(1);
+              }
+            }}
+          >
             <CardContent className="p-7">
               <div className="w-12 h-12 rounded-xl bg-primary-container/30 text-primary flex items-center justify-center mb-5">
                 <span className="material-symbols-outlined text-[28px]">payments</span>
@@ -476,7 +536,20 @@ export function SubmitClaim() {
               <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">The released amount must be liquidated after the expense.</p>
             </CardContent>
           </Card>}
-          {!reimbursementIntent && <Card className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all" onClick={() => { setClaimType('Liquidation'); setStep(1); }}>
+          {!reimbursementIntent && <Card
+            role="button"
+            tabIndex={0}
+            aria-label="Start a liquidation"
+            className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            onClick={() => { setClaimType('Liquidation'); setStep(1); }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setClaimType('Liquidation');
+                setStep(1);
+              }
+            }}
+          >
             <CardContent className="p-7">
               <div className="w-12 h-12 rounded-xl bg-secondary-container/60 text-on-secondary-container flex items-center justify-center mb-5">
                 <span className="material-symbols-outlined text-[28px]">account_balance_wallet</span>
@@ -656,10 +729,17 @@ export function SubmitClaim() {
                       <tr key={idx} className="hover:bg-brand-row-hover transition-colors group">
                         <td className="px-3 py-3 sticky left-0 bg-white z-10 shadow-[1px_0_0_var(--color-brand-border)] group-hover:bg-brand-row-hover">
                           <Input
+                            ref={element => { invalidDateInputRefs.current[idx] = element; }}
+                            id={`expense-date-${idx}`}
                             type="date"
                             value={item.expenseDate || ''}
                             max={isReimbursement ? filingDate : undefined}
                             aria-invalid={dateValidationAttempted && isReimbursement && !validateReimbursementPurchaseDate(item.expenseDate, filingDate).valid}
+                            aria-describedby={
+                              dateValidationAttempted && isReimbursement && getReimbursementDateError(item.expenseDate, filingDate)
+                                ? `expense-date-error-${idx}`
+                                : undefined
+                            }
                             onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, expenseDate: e.target.value } : li))}
                             className={cn(
                               "py-1 px-2 text-xs",
@@ -667,8 +747,8 @@ export function SubmitClaim() {
                             )}
                           />
                           {dateValidationAttempted && isReimbursement && getReimbursementDateError(item.expenseDate, filingDate) && (
-                            <p className="text-error text-[11px] mt-1 max-w-[190px] flex items-start gap-1">
-                              <span className="material-symbols-outlined text-[13px] mt-px">error</span>
+                            <p id={`expense-date-error-${idx}`} className="text-error text-[11px] mt-1 max-w-[190px] flex items-start gap-1">
+                              <span aria-hidden="true" className="material-symbols-outlined text-[13px] mt-px">error</span>
                               {getReimbursementDateError(item.expenseDate, filingDate)}
                             </p>
                           )}
@@ -846,13 +926,6 @@ export function SubmitClaim() {
                     </div>
                     <section className="pt-6 border-t border-outline-variant space-y-5">
                       <div>
-                        <h5 className="font-headline-sm text-on-surface">Meeting classification</h5>
-                        <p className="text-body-sm text-outline mt-1">Add the account and reporting details used to categorize this meeting.</p>
-                      </div>
-                      <DynamicFieldRenderer entity="mom" values={momData} onChange={(key, value) => setMomData(p => ({ ...p, [key]: value }))} />
-                    </section>
-                    <section className="pt-6 border-t border-outline-variant space-y-5">
-                      <div>
                         <h5 className="font-headline-sm text-on-surface">Client contact</h5>
                         <p className="text-body-sm text-outline mt-1">Who attended on behalf of the client and where should updates be sent?</p>
                       </div>
@@ -861,21 +934,44 @@ export function SubmitClaim() {
                           <Label>Contact Person</Label>
                           <Input value={momCore.contactPerson} onChange={e => setMomCore(p => ({ ...p, contactPerson: e.target.value }))} />
                         </div>
+                        <DynamicFieldRenderer
+                          entity="mom"
+                          values={momData}
+                          onChange={(key, value) => setMomData(p => ({ ...p, [key]: value }))}
+                          includeKeys={['contact_person_designation']}
+                          containerClassName="contents"
+                        />
                         <div>
-                          <Label>Client Email</Label>
-                          <Input type="email" value={momCore.contactPersonEmail} onChange={e => setMomCore(p => ({ ...p, contactPersonEmail: e.target.value }))} />
+                          <Label required={momCore.ccClient}>Client Email</Label>
+                          <Input ref={clientEmailInputRef} type="email" required={momCore.ccClient} value={momCore.contactPersonEmail} onChange={e => setMomCore(p => ({ ...p, contactPersonEmail: e.target.value }))} />
                         </div>
                       </div>
-                      <label className="flex items-center gap-3 min-h-11 px-4 py-3 rounded-lg border border-outline-variant bg-surface-container-low cursor-pointer">
+                      <label className={`flex items-start gap-3 min-h-11 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${momCore.ccClient ? 'border-primary/40 bg-primary/8' : 'border-outline-variant bg-surface-container-low hover:border-primary/30'}`}>
                         <input
                           type="checkbox"
                           checked={momCore.ccClient}
-                          onChange={e => setMomCore(p => ({ ...p, ccClient: e.target.checked }))}
-                          disabled={!momCore.contactPersonEmail}
-                          className="h-4 w-4 accent-primary"
+                          onChange={e => {
+                            const checked = e.target.checked;
+                            setMomCore(p => ({ ...p, ccClient: checked }));
+                            if (checked && !momCore.contactPersonEmail.trim()) window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
+                          }}
+                          className="h-4 w-4 mt-0.5 accent-primary"
                         />
-                        <span className="text-body-sm text-on-surface">CC client on claim status notifications</span>
+                        <span className="min-w-0">
+                          <span className="flex items-center gap-1.5 text-body-sm font-semibold text-on-surface">
+                            <span aria-hidden="true" className="material-symbols-outlined text-[17px] text-primary">priority_high</span>
+                            CC client on claim status notifications
+                          </span>
+                          <span className="block text-xs text-outline mt-1">Important: enable this when the client should receive status updates. Client email becomes required.</span>
+                        </span>
                       </label>
+                    </section>
+                    <section className="pt-6 border-t border-outline-variant space-y-5">
+                      <div>
+                        <h5 className="font-headline-sm text-on-surface">Meeting classification</h5>
+                        <p className="text-body-sm text-outline mt-1">Add the account and reporting details used to categorize this meeting.</p>
+                      </div>
+                      <DynamicFieldRenderer entity="mom" values={momData} onChange={(key, value) => setMomData(p => ({ ...p, [key]: value }))} excludeKeys={['contact_person_designation']} />
                     </section>
                     <section className="pt-6 border-t border-outline-variant space-y-5">
                       <div>
@@ -954,6 +1050,21 @@ export function SubmitClaim() {
           ) : null}
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={Boolean(dateBlockMessage)}
+        onClose={closeDateBlockDialog}
+        onConfirm={closeDateBlockDialog}
+        title="Claim outside the filing window"
+        confirmLabel="Review purchase date"
+        variant="warning"
+        showCancel={false}
+      >
+        <p>{dateBlockMessage}</p>
+        <p className="mt-3">
+          Reimbursement receipts must be dated within {REIMBURSEMENT_FILING_WINDOW_DAYS} days of the filing date. Update the purchase date before continuing.
+        </p>
+      </ConfirmModal>
     </div>
   );
 }

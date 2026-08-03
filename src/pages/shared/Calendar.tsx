@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { Portal } from '../../components/shared/Portal';
+import { Modal } from '../../components/shared/Modal';
 import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { confirmReviewMeeting, declineReviewMeeting, rescheduleReviewMeeting } from '../../lib/api';
@@ -60,6 +60,15 @@ export function Calendar() {
 
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const agendaEvents = useMemo(
+    () => Object.entries(byDay)
+      .flatMap(([key, events]) => {
+        const day = Number(key.split('-')[2]);
+        return events.map(event => ({ day, event }));
+      })
+      .sort((a, b) => a.day - b.day),
+    [byDay],
+  );
 
   const step = (delta: number) => setCursor(c => {
     const m = c.month + delta;
@@ -149,8 +158,8 @@ export function Calendar() {
             <h3 className="font-label-md uppercase tracking-wider text-on-surface">{MONTHS[month]} {year}</h3>
             <div className="flex items-center gap-2">
               <span className="font-label-sm text-outline mr-2">{totalThisMonth} event{totalThisMonth === 1 ? '' : 's'}</span>
-              <button onClick={() => step(-1)} className="p-1.5 rounded-lg hover:bg-outline-variant transition-colors" title="Previous month">
-                <span className="material-symbols-outlined text-outline">chevron_left</span>
+              <button aria-label="Previous month" onClick={() => step(-1)} className="p-1.5 rounded-lg hover:bg-outline-variant transition-colors" title="Previous month">
+                <span aria-hidden="true" className="material-symbols-outlined text-outline">chevron_left</span>
               </button>
               <button
                 onClick={() => setCursor({ year: today.getFullYear(), month: today.getMonth() })}
@@ -160,14 +169,14 @@ export function Calendar() {
               >
                 Today
               </button>
-              <button onClick={() => step(1)} className="p-1.5 rounded-lg hover:bg-outline-variant transition-colors" title="Next month">
-                <span className="material-symbols-outlined text-outline">chevron_right</span>
+              <button aria-label="Next month" onClick={() => step(1)} className="p-1.5 rounded-lg hover:bg-outline-variant transition-colors" title="Next month">
+                <span aria-hidden="true" className="material-symbols-outlined text-outline">chevron_right</span>
               </button>
             </div>
           </div>
         </CardHeader>
         <div className="p-6">
-          <div className="grid grid-cols-7 gap-4">
+          <div className="hidden md:grid grid-cols-7 gap-4">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
               <div key={day} className="text-center font-label-sm text-outline uppercase pb-2 border-b border-outline-variant">{day}</div>
             ))}
@@ -208,23 +217,57 @@ export function Calendar() {
             })}
           </div>
 
+          <div className="md:hidden space-y-3">
+            {agendaEvents.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-outline-variant p-8 text-center text-body-sm text-outline">
+                No events scheduled for this month.
+              </div>
+            ) : agendaEvents.map(({ day, event }) => (
+              <button
+                key={`${event.kind}-${event.id}`}
+                type="button"
+                onClick={() => event.kind === 'review' ? openMeeting(event.review) : navigate(`/moms/${event.mom.id}`)}
+                className="flex w-full items-start gap-3 rounded-lg border border-outline-variant bg-surface-container-lowest p-4 text-left hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              >
+                <span className="flex h-11 w-11 flex-none flex-col items-center justify-center rounded-lg bg-surface-container-low text-primary">
+                  <span className="text-[11px] font-semibold uppercase">{MONTHS[month].slice(0, 3)}</span>
+                  <span className="font-headline-sm leading-none">{day}</span>
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-label-md text-on-surface">
+                    {event.kind === 'review' ? event.review.claimNumber || 'Claim review' : event.mom.companyName || 'Client meeting'}
+                  </span>
+                  <span className="mt-1 block text-body-sm text-on-surface-variant">
+                    {event.kind === 'review'
+                      ? `${event.review.meetingTime || 'Time not set'} · ${event.review.status}`
+                      : event.mom.purposeOfMeeting || 'Minutes of Meeting'}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+
           <div className="flex flex-wrap gap-4 mt-6 pt-4 border-t border-outline-variant text-xs text-on-surface-variant">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-100"></span> Client meeting</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-primary-container"></span> Confirmed</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-tertiary-container"></span> Pending confirmation</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-error-container"></span> Reschedule requested</span>
+            <span className="flex items-center gap-1.5"><span aria-hidden="true" className="w-3 h-3 rounded bg-blue-100"></span> Client meeting</span>
+            <span className="flex items-center gap-1.5"><span aria-hidden="true" className="w-3 h-3 rounded bg-primary-container"></span> Confirmed</span>
+            <span className="flex items-center gap-1.5"><span aria-hidden="true" className="w-3 h-3 rounded bg-tertiary-container"></span> Pending confirmation</span>
+            <span className="flex items-center gap-1.5"><span aria-hidden="true" className="w-3 h-3 rounded bg-error-container"></span> Reschedule requested</span>
           </div>
         </div>
       </Card>
 
-      {current && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-surface-container-lowest rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <Modal
+        isOpen={Boolean(current)}
+        onClose={() => setSelected(null)}
+        titleId="review-meeting-dialog-title"
+        className="max-w-md"
+      >
+        {current && (
+            <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
               <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-                <h3 className="font-headline-sm text-on-surface">Review Meeting</h3>
-                <button onClick={() => setSelected(null)} className="text-outline hover:text-on-surface">
-                  <span className="material-symbols-outlined">close</span>
+                <h3 id="review-meeting-dialog-title" className="font-headline-sm text-on-surface">Review Meeting</h3>
+                <button aria-label="Close review meeting details" onClick={() => setSelected(null)} className="text-outline hover:text-on-surface">
+                  <span aria-hidden="true" className="material-symbols-outlined">close</span>
                 </button>
               </div>
 
@@ -289,12 +332,12 @@ export function Calendar() {
                 <div className="space-y-3 pt-2 border-t border-outline-variant">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-xs text-outline uppercase tracking-wider font-medium">Date</label>
-                      <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
+                      <label htmlFor="reschedule-date" className="text-xs text-outline uppercase tracking-wider font-medium">Review date</label>
+                      <input id="reschedule-date" type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
                     </div>
                     <div>
-                      <label className="text-xs text-outline uppercase tracking-wider font-medium">Time</label>
-                      <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
+                      <label htmlFor="reschedule-time" className="text-xs text-outline uppercase tracking-wider font-medium">Review time</label>
+                      <input id="reschedule-time" type="time" value={newTime} onChange={e => setNewTime(e.target.value)} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
                     </div>
                   </div>
                   <div className="flex justify-end gap-2">
@@ -307,9 +350,8 @@ export function Calendar() {
                 </div>
               )}
             </div>
-          </div>
-        </Portal>
-      )}
+        )}
+      </Modal>
     </div>
   );
 }

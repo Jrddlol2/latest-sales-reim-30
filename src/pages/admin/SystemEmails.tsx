@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Portal } from '../../components/shared/Portal';
+import { Modal } from '../../components/shared/Modal';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
 import { Button } from '../../components/ui/Button';
@@ -142,19 +142,18 @@ export function SystemEmails() {
       </Card>
 
       {selected && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-surface-container-lowest rounded-xl max-w-2xl w-full p-6 shadow-2xl space-y-6 max-h-[90vh] flex flex-col">
+        <Modal isOpen onClose={() => setSelected(null)} titleId="system-notification-title" className="max-w-2xl">
+            <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-6 flex flex-col">
               <div className="flex justify-between items-center border-b border-outline-variant pb-4 shrink-0">
                 <div className="flex items-center gap-3">
-                  <span className="material-symbols-outlined text-primary text-[28px]">mail</span>
+                  <span aria-hidden="true" className="material-symbols-outlined text-primary text-[28px]">{selected.channel === 'Teams' ? 'forum' : 'mail'}</span>
                   <div>
-                    <h3 className="font-headline-sm text-on-surface">System Email Inspector</h3>
+                    <h3 id="system-notification-title" className="font-headline-sm text-on-surface">System Notification Inspector</h3>
                     <p className="text-xs text-outline">Logged on {formatDateTime(selected.timestamp)}</p>
                   </div>
                 </div>
-                <button onClick={() => setSelected(null)} className="text-outline hover:text-on-surface">
-                  <span className="material-symbols-outlined">close</span>
+                <button aria-label="Close notification details" onClick={() => setSelected(null)} className="text-outline hover:text-on-surface">
+                  <span aria-hidden="true" className="material-symbols-outlined">close</span>
                 </button>
               </div>
 
@@ -172,8 +171,7 @@ export function SystemEmails() {
                 <Button onClick={() => setSelected(null)}>Close</Button>
               </div>
             </div>
-          </div>
-        </Portal>
+        </Modal>
       )}
     </div>
   );

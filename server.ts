@@ -22,6 +22,7 @@ import {
   getReimbursementDateError,
   getTodayIsoDate,
 } from './src/lib/reimbursementPolicy';
+import { normalizeExpenseCategory } from './src/lib/expenseCategories';
 
 const LIQUIDATION_DEADLINE_DAYS = 7;
 
@@ -45,7 +46,7 @@ let delegations: ApproverDelegation[] = [];
 // System Settings (In-Memory)
 let systemSettings = {
   expenseCategories: [
-    'Client Meals', 'Travel', 'Accommodation', 'Transportation',
+    'Client Meals', 'Accommodation', 'Transportation',
     'Office Supplies', 'Software Subscriptions', 'Training', 'Miscellaneous'
   ],
   highValueThreshold: 15000,
@@ -117,7 +118,7 @@ const SEED_COMPANIES: { name: string; industry: string; notes: string; address?:
   { name: 'Maxs Restaurant Corp', industry: 'Food & Beverage', notes: 'Restaurant chain; catering and corporate events account.' },
   { name: 'JG Summit', industry: 'Conglomerate', notes: 'Diversified holdings spanning aviation, food, and petrochemicals.' },
   { name: 'Robinsons Land Corp', industry: 'Real Estate', notes: 'Mall and mixed-use property developer.' },
-  { name: 'Cebu Pacific Air', industry: 'Aviation', notes: 'Airline partner for travel and logistics arrangements.' },
+  { name: 'Cebu Pacific Air', industry: 'Aviation', notes: 'Airline partner for transportation and logistics arrangements.' },
   { name: 'Metrobank', industry: 'Banking & Finance', notes: 'Corporate banking and treasury services relationship.' },
   { name: 'Internal / Partner', industry: 'Internal', notes: 'Catch-all bucket for internal or not-yet-classified partner meetings.' },
   // Referenced by name only in the hand-written demo MOM records further
@@ -316,22 +317,6 @@ Please do not reply.
 Sales Reimbursement System
 Business Support Management Assistant`;
 
-  const email: Email = {
-    id: uuidv4(),
-    recipient_id: recipientId,
-    from: fromLine,
-    to: toEmail,
-    subject,
-    body: finalBody,
-    read: false,
-    timestamp: emailTimestamp,
-    channel: 'Email'
-  };
-  emails.push(email);
-
-  // Mock Teams delivery for internal recipients. This intentionally lives in
-  // a separate activity stream so it does not double the user's unread-email
-  // badge while still giving admins one place to inspect both channels.
   if (recipient) {
     teamsMessages.push({
       id: uuidv4(),
@@ -340,34 +325,72 @@ Business Support Management Assistant`;
       to: recipient.email,
       subject,
       body,
-      read: true,
+      read: false,
       timestamp: emailTimestamp,
       channel: 'Teams',
+    });
+  } else {
+    emails.push({
+      id: uuidv4(),
+      recipient_id: recipientId,
+      from: fromLine,
+      to: toEmail,
+      subject,
+      body: finalBody,
+      read: false,
+      timestamp: emailTimestamp,
+      channel: 'Email'
     });
   }
 
   if (ccId) {
     const ccRecipient = users.find(u => u.id === ccId);
     if (ccRecipient) {
-      emails.push({
+      teamsMessages.push({
         id: uuidv4(),
         recipient_id: ccRecipient.id,
-        from: fromLine,
+        from: 'Microsoft Teams',
         to: ccRecipient.email,
         subject: `[CC] ${subject}`,
-        body: finalBody,
+        body,
         read: false,
-        timestamp: emailTimestamp
+        timestamp: emailTimestamp,
+        channel: 'Teams',
       });
     }
   }
 
-  console.log(`\n--- MOCK EMAIL TRANSPORT ---`);
-  console.log(`To: ${email.to}`);
+  console.log(`\n--- MOCK ${recipient ? 'TEAMS' : 'EMAIL'} TRANSPORT ---`);
+  console.log(`To: ${toEmail}`);
   if (ccId) console.log(`CC: ${users.find(u => u.id === ccId)?.email}`);
-  console.log(`Subject: ${email.subject}`);
-  console.log(`Body:\n${email.body}`);
+  console.log(`Subject: ${subject}`);
+  console.log(`Body:\n${recipient ? body : finalBody}`);
   console.log(`----------------------------\n`);
+};
+
+const notifyClientCcSent = ({
+  recipientIds,
+  claimNumber,
+  clientName,
+  clientEmail,
+  eventLabel,
+}: {
+  recipientIds: Array<string | undefined>;
+  claimNumber: string;
+  clientName?: string;
+  clientEmail: string;
+  eventLabel: string;
+}) => {
+  const clientLabel = clientName?.trim()
+    ? `${clientName.trim()} (${clientEmail})`
+    : clientEmail;
+  const subject = `Client CC Sent - ${claimNumber} (${eventLabel})`;
+  const body = `A courtesy copy of the ${eventLabel.toLowerCase()} notification for ${claimNumber} was sent to ${clientLabel}.
+
+This confirms that the client contact was CCed as requested.`;
+
+  [...new Set(recipientIds.filter((id): id is string => Boolean(id)))]
+    .forEach(recipientId => sendEmail(recipientId, subject, body));
 };
 
 // Simulated initial Entra ID sync: employment status defaults to Active, and
@@ -1339,11 +1362,30 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     });
   };
 
-  // Auth endpoints (Mock)
-  app.get('/api/users', (req, res) => res.json(users));
+  // Prototype account picker. It intentionally exposes only the fields needed
+  // to choose a demo identity; the full directory remains authenticated.
+  app.get('/api/demo-users', (_req, res) => {
+    res.json(users.map(({ id, name, email, role, department, job_title, avatar_url }) => ({
+      id,
+      name,
+      email,
+      role,
+      department,
+      job_title,
+      avatar_url,
+    })));
+  });
+
+  app.get('/api/users', (req, res) => {
+    const user = getUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    res.json(users);
+  });
 
   // Admin settings endpoints
   app.get('/api/admin/settings', (req, res) => {
+    const user = getUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
     res.json(systemSettings);
   });
 
@@ -1354,7 +1396,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     }
     const { expenseCategories, highValueThreshold, paymentMethods, categoryLimits } = req.body;
     if (expenseCategories && Array.isArray(expenseCategories)) {
-      systemSettings.expenseCategories = expenseCategories;
+      systemSettings.expenseCategories = Array.from(new Set(expenseCategories.map(normalizeExpenseCategory).filter(Boolean)));
     }
     if (typeof highValueThreshold === 'number') {
       systemSettings.highValueThreshold = highValueThreshold;
@@ -1367,7 +1409,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       const cleaned: Record<string, number> = {};
       for (const [cat, val] of Object.entries(categoryLimits)) {
         const num = Number(val);
-        if (Number.isFinite(num) && num > 0) cleaned[cat] = num;
+        if (Number.isFinite(num) && num > 0) cleaned[normalizeExpenseCategory(cat)] = num;
       }
       systemSettings.categoryLimits = cleaned;
     }
@@ -2032,7 +2074,7 @@ ${user.name}`;
 
     let itemsToCreate: any[] = [];
     let claimTotal = 0;
-    let mainCategory = expense_category || 'Multiple Categories';
+    let mainCategory = normalizeExpenseCategory(expense_category || 'Multiple Categories');
     let mainReceipt = receipt_url || '';
 
     if (line_items && Array.isArray(line_items) && line_items.length > 0) {
@@ -2047,7 +2089,7 @@ ${user.name}`;
         }
         
         itemsToCreate.push({
-          category: item.category,
+          category: normalizeExpenseCategory(item.category),
           amount: numericAmount,
           receipt_url: item.receipt_url,
           or_number: item.or_number,
@@ -2082,7 +2124,7 @@ ${user.name}`;
       if (!receipt_url) return res.status(400).json({ error: 'Receipt image or PDF is required.' });
       
       itemsToCreate.push({
-        category: expense_category,
+        category: normalizeExpenseCategory(expense_category),
         amount: numericAmount,
         receipt_url: receipt_url,
         or_number: or_number,
@@ -2091,7 +2133,7 @@ ${user.name}`;
           (isTransportReimbursement ? 'Business transport reimbursement' : `Sales reimbursement for meeting with ${mom?.client || 'client'}`)
       });
       claimTotal = numericAmount;
-      mainCategory = expense_category;
+      mainCategory = normalizeExpenseCategory(expense_category);
       mainReceipt = receipt_url;
     }
 
@@ -2215,6 +2257,13 @@ You'll receive another email as soon as ${approverName} makes a decision.`
           undefined,
           { plain: true, recipientName: mom.contact_person || undefined, fromLabel: `${user.name} via Sales Reimbursement System` }
         );
+        notifyClientCcSent({
+          recipientIds: [user.id, currentApproverId],
+          claimNumber,
+          clientName: mom.contact_person,
+          clientEmail: mom.contact_person_email,
+          eventLabel: 'Submission',
+        });
       }
     }
 
@@ -2415,7 +2464,7 @@ Please log in to the system and confirm or decline this new time.`
 
     let itemsToCreate: any[] = [];
     let claimTotal = 0;
-    let mainCategory = expense_category || 'Multiple Categories';
+    let mainCategory = normalizeExpenseCategory(expense_category || 'Multiple Categories');
     let mainReceipt = receipt_url || '';
 
     if (line_items && Array.isArray(line_items) && line_items.length > 0) {
@@ -2428,7 +2477,7 @@ Please log in to the system and confirm or decline this new time.`
         if (dateError) return res.status(400).json({ error: `Expense row ${index + 1}: ${dateError}` });
         
         itemsToCreate.push({
-          category: item.category,
+          category: normalizeExpenseCategory(item.category),
           amount: numericAmount,
           receipt_url: item.receipt_url,
           or_number: item.or_number,
@@ -2461,7 +2510,7 @@ Please log in to the system and confirm or decline this new time.`
       if (!receipt_url) return res.status(400).json({ error: 'Receipt image or PDF is required.' });
       
       itemsToCreate.push({
-        category: expense_category,
+        category: normalizeExpenseCategory(expense_category),
         amount: numericAmount,
         receipt_url: receipt_url,
         or_number: or_number,
@@ -2470,7 +2519,7 @@ Please log in to the system and confirm or decline this new time.`
           (isTransportReimbursement ? 'Business transport reimbursement' : `Sales reimbursement for meeting with ${mom?.client || 'client'}`)
       });
       claimTotal = numericAmount;
-      mainCategory = expense_category;
+      mainCategory = normalizeExpenseCategory(expense_category);
       mainReceipt = receipt_url;
     }
 
@@ -2742,6 +2791,13 @@ ${actionText}`;
         undefined,
         { plain: true, recipientName: claimMom.contact_person || undefined, fromLabel: `${user.name} via Sales Reimbursement System` }
       );
+      notifyClientCcSent({
+        recipientIds: [claim.requestor_id, user.id],
+        claimNumber,
+        clientName: claimMom.contact_person,
+        clientEmail: claimMom.contact_person_email,
+        eventLabel: decision,
+      });
     }
 
     res.json(claim);
@@ -2941,7 +2997,11 @@ Manual reassignment may be needed.`);
     }
 
     const { payment_method } = req.body;
-    if (!payment_method || !systemSettings.paymentMethods.includes(payment_method)) {
+    const isReimbursement = claim.claim_type === 'Reimbursement' || claim.claim_type === 'Transport Reimbursement';
+    if (isReimbursement && payment_method !== 'Cash') {
+      return res.status(400).json({ error: 'Reimbursements are released in cash only.' });
+    }
+    if (!isReimbursement && (!payment_method || !systemSettings.paymentMethods.includes(payment_method))) {
       return res.status(400).json({ error: `Payment method must be one of: ${systemSettings.paymentMethods.join(', ')}` });
     }
     claim.payment_method = payment_method;
@@ -3034,7 +3094,7 @@ BSM Assistant | BSD - IT Security Business`;
 
     const base = user.role === UserRole.ADMIN
       ? [...emails, ...teamsMessages]
-      : emails.filter(e => e.recipient_id === user.id);
+      : [...emails, ...teamsMessages].filter(e => e.recipient_id === user.id);
     const sorted = [...base].sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     const { page, pageSize, search } = req.query;
@@ -3073,7 +3133,7 @@ BSM Assistant | BSD - IT Security Business`;
     
     const { ids } = req.body;
     if (Array.isArray(ids)) {
-      emails.forEach(e => {
+      [...emails, ...teamsMessages].forEach(e => {
         if (ids.includes(e.id) && (e.recipient_id === user.id || user.role === UserRole.ADMIN)) {
           e.read = true;
         }
@@ -3097,8 +3157,9 @@ BSM Assistant | BSD - IT Security Business`;
       calendarCount = reviewMeetings.filter(rm => (rm.requestor_id === user.id || rm.approver_id === user.id || reporteeIds.includes(rm.requestor_id)) && activeMeetingStatuses.includes(rm.status)).length;
     }
 
-    // emails: count of unread emails for the user
-    const emailsCount = emails.filter(e => e.recipient_id === user.id && !e.read).length;
+    // Keep the legacy response property name while counting every notification
+    // channel. Internal workflow notices are delivered through Teams.
+    const emailsCount = [...emails, ...teamsMessages].filter(e => e.recipient_id === user.id && !e.read).length;
 
     // inbox: (Approver only) count of pending-approval claims assigned to them,
     // their own returned claims, and Review Meetings awaiting their confirmation
@@ -3800,7 +3861,7 @@ You'll receive another email as soon as a decision is made.`
       liquidationId: l.id,
       expense_date,
       vendor,
-      category,
+      category: normalizeExpenseCategory(category),
       amount: numericAmount,
       payment_method,
       business_purpose,
@@ -3839,7 +3900,7 @@ You'll receive another email as soon as a decision is made.`
 
     if (expense_date !== undefined) item.expense_date = expense_date;
     if (vendor !== undefined) item.vendor = vendor;
-    if (category !== undefined) item.category = category;
+    if (category !== undefined) item.category = normalizeExpenseCategory(category);
     if (amount !== undefined) {
       const numericAmount = Number(amount);
       if (isNaN(numericAmount) || numericAmount <= 0) {
@@ -4575,7 +4636,7 @@ You'll receive another email as soon as a decision is made.`
         remarks: `Reimbursement for sales meeting with ${opts.mom.client} team.`,
         supporting_documents: 'Proposal_Draft_v1.pdf',
         release_code: isReleaseStage ? (opts.releaseCode || Math.random().toString(36).substring(2, 8).toUpperCase()) : undefined,
-        payment_method: isReleaseStage ? (opts.paymentMethod || 'GCash') : undefined,
+        payment_method: isReleaseStage ? 'Cash' : undefined,
         processed_by: isReleaseStage ? 'u3' : undefined,
         processing_date: isReleaseStage ? processedAt : undefined,
         approved_at: decision === 'Approved' ? approvedAt : undefined,
@@ -4738,7 +4799,7 @@ You'll receive another email as soon as a decision is made.`
                 sendEmail(
                   opts.requestorId,
                   `Reimbursement Completed - ${claimNumber}`,
-                  `Your reimbursement of PHP ${opts.amount} has been successfully paid out via ${claim.payment_method || 'GCash'}.`,
+                  `Your reimbursement of PHP ${opts.amount} has been successfully paid out via ${claim.payment_method || 'Cash'}.`,
                   undefined,
                   { timestamp: processedAt }
                 );
@@ -4766,7 +4827,7 @@ You'll receive another email as soon as a decision is made.`
       original_approver_id: 'u2',
       mom_id: mom1.id,
       status: ClaimStatus.DRAFT,
-      total_amount: 3200.00,
+      total_amount: 920.00,
       expense_category: 'Client Meals',
       receipt_url: '/receipt_placeholder.png',
       remarks: 'Dinner meeting with Ayala Land procurement team to discuss Q3 targets.',
@@ -4780,7 +4841,7 @@ You'll receive another email as soon as a decision is made.`
       expense_date: mom1.meeting_date,
       vendor: 'Max Restaurant',
       category: 'Client Meals',
-      amount: 3200.00,
+      amount: 920.00,
       payment_method: 'Cash',
       business_purpose: 'Group dinner with Ayala Land procurement staff.',
       receipt_url: '/receipt_placeholder.png'
@@ -4801,8 +4862,8 @@ You'll receive another email as soon as a decision is made.`
       approverId: 'u2',
       mom: mom2,
       status: ClaimStatus.PENDING_APPROVAL,
-      category: 'Travel',
-      amount: 4500.00,
+      category: 'Transportation',
+      amount: 980.00,
       createdDaysAgo: 3
     });
 
@@ -4814,7 +4875,7 @@ You'll receive another email as soon as a decision is made.`
       mom: mom3,
       status: ClaimStatus.RETURNED,
       category: 'Accommodation',
-      amount: 8500.00,
+      amount: 1150.00,
       createdDaysAgo: 5,
       approvedDaysAgo: 4
     });
@@ -4827,7 +4888,7 @@ You'll receive another email as soon as a decision is made.`
       mom: mom4,
       status: ClaimStatus.APPROVED,
       category: 'Transportation',
-      amount: 1500.00,
+      amount: 990.00,
       createdDaysAgo: 4,
       approvedDaysAgo: 3
     });
@@ -4840,7 +4901,7 @@ You'll receive another email as soon as a decision is made.`
       mom: mom5,
       status: ClaimStatus.PROCESSING,
       category: 'Client Meals',
-      amount: 6200.00,
+      amount: 1250.00,
       createdDaysAgo: 6,
       approvedDaysAgo: 5,
       processedDaysAgo: 4
@@ -4854,7 +4915,7 @@ You'll receive another email as soon as a decision is made.`
       mom: mom6,
       status: ClaimStatus.READY_FOR_CLAIM,
       category: 'Client Meals',
-      amount: 4800.00,
+      amount: 950.00,
       createdDaysAgo: 7,
       approvedDaysAgo: 6,
       processedDaysAgo: 5,
@@ -4868,13 +4929,13 @@ You'll receive another email as soon as a decision is made.`
       approverId: 'u2',
       mom: mom7,
       status: ClaimStatus.COMPLETED,
-      category: 'Travel',
-      amount: 12500.00,
+      category: 'Transportation',
+      amount: 1450.00,
       createdDaysAgo: 9,
       approvedDaysAgo: 8,
       processedDaysAgo: 7,
       releaseCode: 'PAID777',
-      paymentMethod: 'Bank Transfer'
+      paymentMethod: 'Cash'
     });
 
     // 8. Claim 8: Rejected - Alice Reyes
@@ -4885,7 +4946,7 @@ You'll receive another email as soon as a decision is made.`
       mom: mom8,
       status: ClaimStatus.REJECTED,
       category: 'Entertainment',
-      amount: 25000.00,
+      amount: 1600.00,
       createdDaysAgo: 11,
       approvedDaysAgo: 10
     });
@@ -4941,7 +5002,7 @@ You'll receive another email as soon as a decision is made.`
       id: ca2Id,
       requestorId: 'u5',
       amount: 5000.00,
-      purpose: 'Travel to Cebu',
+      purpose: 'Business transportation to Cebu',
       approverId: 'u2',
       status: CashAdvanceStatus.SUBMITTED,
       createdAt: rDate(3),
@@ -4951,7 +5012,7 @@ You'll receive another email as soon as a decision is made.`
     sendEmail(
       'u2',
       `Cash Advance Request Submitted - CADV-${ca2Id.substring(0,6)}`,
-      `A Cash Advance request for PHP 5000 has been submitted by Eve Garcia for your approval.\n\nPurpose: Travel to Cebu`,
+      `A Cash Advance request for PHP 5000 has been submitted by Eve Garcia for your approval.\n\nPurpose: Business transportation to Cebu`,
       undefined,
       { timestamp: rDate(2) }
     );
@@ -5277,21 +5338,21 @@ You'll receive another email as soon as a decision is made.`
     mkMomAndClaim('u13', 'u14', 'Marketing Materials', 15000, ClaimStatus.COMPLETED, 15);
     mkMomAndClaim('u13', 'u14', 'Event Hosting', 25000, ClaimStatus.PENDING_APPROVAL, 2);
     mkMomAndClaim('u15', 'u16', 'Software Licenses', 8500, ClaimStatus.PROCESSING, 5);
-    mkMomAndClaim('u15', 'u16', 'Cloud Hosting', 12000, ClaimStatus.COMPLETED, 20);
-    mkMomAndClaim('u15', 'u16', 'Team Lunch', 4500, ClaimStatus.REJECTED, 3);
+    mkMomAndClaim('u15', 'u16', 'Cloud Hosting', 1250, ClaimStatus.COMPLETED, 20);
+    mkMomAndClaim('u15', 'u16', 'Team Lunch', 980, ClaimStatus.REJECTED, 3);
     // Guarantees the default demo login (Olivia, u15) always has a payout to
     // test the release-code confirm flow with, without hunting through seed data.
-    mkMomAndClaim('u15', 'u16', 'Client Meals', 4200, ClaimStatus.READY_FOR_CLAIM, 6);
-    mkMomAndClaim('u17', 'u18', 'Office Supplies', 6000, ClaimStatus.READY_FOR_CLAIM, 7);
-    mkMomAndClaim('u17', 'u18', 'Equipment Repair', 9500, ClaimStatus.COMPLETED, 12);
+    mkMomAndClaim('u15', 'u16', 'Client Meals', 990, ClaimStatus.READY_FOR_CLAIM, 6);
+    mkMomAndClaim('u17', 'u18', 'Office Supplies', 1100, ClaimStatus.READY_FOR_CLAIM, 7);
+    mkMomAndClaim('u17', 'u18', 'Equipment Repair', 1350, ClaimStatus.COMPLETED, 12);
     // A few more still-undecided claims, spread across different approvers,
     // so there's real material for upcoming (not-yet-happened) review
     // meetings below -- otherwise almost nothing in this seed is still
     // awaiting a decision and the Calendar's current month looks empty.
-    mkMomAndClaim('u1', 'u2', 'Client Meals', 3800, ClaimStatus.PENDING_APPROVAL, 1);
-    mkMomAndClaim('u6', 'u2', 'Travel', 7200, ClaimStatus.PENDING_APPROVAL, 2);
-    mkMomAndClaim('u11', 'u10', 'Transportation', 2100, ClaimStatus.PENDING_APPROVAL, 3);
-    mkMomAndClaim('u20', 'u14', 'Event Hosting', 9800, ClaimStatus.PENDING_APPROVAL, 1);
+    mkMomAndClaim('u1', 'u2', 'Client Meals', 950, ClaimStatus.PENDING_APPROVAL, 1);
+    mkMomAndClaim('u6', 'u2', 'Transportation', 1250, ClaimStatus.PENDING_APPROVAL, 2);
+    mkMomAndClaim('u11', 'u10', 'Transportation', 875, ClaimStatus.PENDING_APPROVAL, 3);
+    mkMomAndClaim('u20', 'u14', 'Event Hosting', 1400, ClaimStatus.PENDING_APPROVAL, 1);
     }
 
     if (options.demoCashAdvances) {
@@ -5309,7 +5370,7 @@ You'll receive another email as soon as a decision is made.`
         name: 'Sales',
         requestors: ['u1', 'u5', 'u6', 'u11', 'u12'],
         approvers: ['u2', 'u7', 'u8', 'u10'],
-        categories: ['Client Meals', 'Travel', 'Accommodation', 'Transportation'],
+        categories: ['Client Meals', 'Accommodation', 'Transportation'],
         vendors: ['Max Restaurant', 'Grab', 'Makati Diamond Residences', 'Mary Grace Cafe', 'Globe Telecom'],
         clients: ['SM Prime Holdings', 'PLDT Inc', 'Jollibee Foods Corp', 'Bank of the Philippine Islands', 'Globe Telecom', 'San Miguel Corporation', 'Meralco', 'BDO Unibank']
       },
@@ -5555,7 +5616,7 @@ You'll receive another email as soon as a decision is made.`
               approvedDaysAgo: isCompleted || status === ClaimStatus.REJECTED ? approvedDaysAgo : undefined,
               processedDaysAgo: isCompleted ? processedDaysAgo : undefined,
               releaseCode: isCompleted ? Math.random().toString(36).substring(2, 8).toUpperCase() : undefined,
-              paymentMethod: isCompleted ? (Math.random() < 0.5 ? 'GCash' : 'Bank Transfer') : undefined,
+              paymentMethod: isCompleted ? 'Cash' : undefined,
               approvalComment: status === ClaimStatus.REJECTED ? 'Rejected: Budget exceeds departmental quota for this category.' : undefined
             });
           } else {
@@ -5834,7 +5895,11 @@ You'll receive another email as soon as a decision is made.`
     // Notify Admins
     const admins = users.filter(u => u.role === UserRole.ADMIN);
     admins.forEach(admin => {
-      sendEmail(admin.id, user.name, `New Support Request: ${subject}`, `A new support request has been created by ${user.name}.\n\nPriority: ${newRequest.priority}\nSubject: ${subject}\nDescription: ${description}`);
+      sendEmail(
+        admin.id,
+        `New Support Request: ${subject}`,
+        `A new support request has been created by ${user.name}.\n\nPriority: ${newRequest.priority}\nSubject: ${subject}\nDescription: ${description}`,
+      );
     });
     
     res.status(201).json(newRequest);
@@ -5866,10 +5931,10 @@ You'll receive another email as soon as a decision is made.`
     
     if (user.id === request.requestor_id) {
       if (request.assigned_admin_id) {
-         sendEmail(request.assigned_admin_id, user.name, `New message on Support Request: ${request.subject}`, message);
+         sendEmail(request.assigned_admin_id, `New message on Support Request: ${request.subject}`, `${user.name}: ${message}`);
       }
     } else {
-      sendEmail(request.requestor_id, user.name, `New message on Support Request: ${request.subject}`, message);
+      sendEmail(request.requestor_id, `New message on Support Request: ${request.subject}`, `${user.name}: ${message}`);
     }
     
     res.status(201).json(newMessage);
@@ -5890,7 +5955,7 @@ You'll receive another email as soon as a decision is made.`
       const oldStatus = request.status;
       request.status = req.body.status;
       if (oldStatus !== request.status && request.status === SupportRequestStatus.RESOLVED) {
-        sendEmail(request.requestor_id, 'System', `Support Request Resolved: ${request.subject}`, 'Your support request has been marked as resolved.');
+        sendEmail(request.requestor_id, `Support Request Resolved: ${request.subject}`, 'Your support request has been marked as resolved.');
       }
     }
     
@@ -5944,7 +6009,7 @@ You'll receive another email as soon as a decision is made.`
         mom_id: record.mom_id || '',
         status: ClaimStatus.COMPLETED,
         total_amount: record.total_amount,
-        expense_category: record.expense_category,
+        expense_category: normalizeExpenseCategory(record.expense_category),
         receipt_url: record.receipt_url || '',
         remarks: record.remarks || '',
         import_batch_id: batchId,
@@ -5961,7 +6026,7 @@ You'll receive another email as soon as a decision is made.`
             claim_id: claimId,
             expense_date: li.expense_date || new Date().toISOString().split('T')[0],
             vendor: li.vendor || 'Unknown',
-            category: li.category || 'Other',
+            category: normalizeExpenseCategory(li.category || 'Other'),
             amount: li.amount || 0,
             payment_method: li.payment_method || 'Corporate Card',
             business_purpose: li.business_purpose || 'Historical data import',

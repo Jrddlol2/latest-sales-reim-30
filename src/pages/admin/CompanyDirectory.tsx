@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Portal } from '../../components/shared/Portal';
+import { Modal } from '../../components/shared/Modal';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input, Label, Select } from '../../components/ui/Input';
@@ -223,19 +223,18 @@ export function CompanyDirectory() {
       </Card>
 
       {showModal && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-surface-container-lowest rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <Modal isOpen onClose={() => setShowModal(false)} titleId="company-editor-title" className="max-w-md">
+            <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
               <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-                <h3 className="font-headline-sm text-on-surface">{editing ? 'Edit Company' : 'Add New Company'}</h3>
+                <h3 id="company-editor-title" className="font-headline-sm text-on-surface">{editing ? 'Edit Company' : 'Add New Company'}</h3>
                 <div className="flex items-center gap-2">
                   {!editing && (
                     <Button size="sm" variant="outline" className="gap-1.5" onClick={autofillDemo}>
                       <span className="material-symbols-outlined text-[16px]">bolt</span> Autofill
                     </Button>
                   )}
-                  <button onClick={() => setShowModal(false)} className="text-outline hover:text-on-surface">
-                    <span className="material-symbols-outlined">close</span>
+                  <button aria-label="Close company editor" onClick={() => setShowModal(false)} className="text-outline hover:text-on-surface">
+                    <span aria-hidden="true" className="material-symbols-outlined">close</span>
                   </button>
                 </div>
               </div>
@@ -280,8 +279,7 @@ export function CompanyDirectory() {
                 </Button>
               </div>
             </div>
-          </div>
-        </Portal>
+        </Modal>
       )}
     </div>
   );

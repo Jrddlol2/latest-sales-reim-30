@@ -26,7 +26,7 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    fetch('/api/users')
+    fetch('/api/demo-users')
       .then(r => r.json())
       .then(setUsers)
       .catch(() => setError('Could not load accounts.'))

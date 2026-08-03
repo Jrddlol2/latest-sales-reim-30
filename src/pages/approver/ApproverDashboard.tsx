@@ -12,12 +12,24 @@ import { TeamMemberSpending } from '../../components/shared/TeamAnalytics';
 
 const DECISION_STATUSES: string[] = [ClaimStatus.APPROVED, ClaimStatus.REJECTED, ClaimStatus.RETURNED];
 const PENDING_STATUSES: string[] = [ClaimStatus.PENDING_APPROVAL, ClaimStatus.SUBMITTED];
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const TEAM_SPEND_STATUSES: string[] = [ClaimStatus.APPROVED, ClaimStatus.RELEASED, ClaimStatus.COMPLETED];
+
+function currentMonthValue() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatMonthValue(value: string) {
+  const [year, month] = value.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-PH', { month: 'long', year: 'numeric' })
+    .format(new Date(year, month - 1, 1));
+}
 
 export function ApproverDashboard() {
   const navigate = useNavigate();
   const { currentUser, claims, users, lineItems, statusHistory, delegations } = useAppContext();
   const [typeFilter, setTypeFilter] = useState<'All' | 'Reimbursement' | 'Cash Advance' | 'Liquidation'>('All');
+  const [teamSpendMonth, setTeamSpendMonth] = useState(currentMonthValue);
 
   const nameOf = (id: string) => users.find(u => u.id === id)?.name || 'someone';
 
@@ -71,16 +83,16 @@ export function ApproverDashboard() {
     [users, currentUser.id]
   );
   const teamMemberIds = useMemo(() => new Set(teamMembers.map(member => member.id)), [teamMembers]);
-  const oneWeekAgo = Date.now() - ONE_WEEK_MS;
-  const teamReimbursedThisWeek = claims
-    .filter(claim =>
-      teamMemberIds.has(claim.requestorId) &&
-      (claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement') &&
-      claim.paidAmount > 0 &&
-      Boolean(claim.paidAt) &&
-      new Date(claim.paidAt!).getTime() >= oneWeekAgo
-    )
-    .reduce((sum, claim) => sum + claim.paidAmount, 0);
+  const teamSpend = useMemo(() => claims
+    .filter(claim => {
+      if (!teamMemberIds.has(claim.requestorId) || !TEAM_SPEND_STATUSES.includes(claim.status)) return false;
+      const spendDate = claim.paidAt || claim.completedAt || claim.approvedAt || claim.createdAt;
+      return spendDate.slice(0, 7) === teamSpendMonth;
+    })
+    .reduce((sum, claim) => {
+      if (claim.status === ClaimStatus.APPROVED) return sum + (claim.approvedAmount ?? claim.total);
+      return sum + (claim.paidAmount || claim.approvedAmount || claim.total);
+    }, 0), [claims, teamMemberIds, teamSpendMonth]);
   const oldestPending = myPending[0];
   const oldestPendingAging = oldestPending
     ? getClaimAgingInfo(oldestPending.submittedAt, oldestPending.createdAt)
@@ -134,10 +146,30 @@ export function ApproverDashboard() {
           <p className="font-headline-lg text-on-surface">{oldestPendingAging?.text || '—'}</p>
           <p className="text-[12px] text-outline mt-1">{oldestPending?.ref || 'Queue is clear'}</p>
         </div>
-        <div className="bg-surface-container-lowest p-6 border border-outline-variant rounded-card shadow-sm">
-          <p className="font-label-sm text-outline uppercase mb-2">Team Reimbursed This Week</p>
-          <p className="font-headline-lg text-primary">{formatMoney(teamReimbursedThisWeek)}</p>
-          <p className="text-[12px] text-outline mt-1">Actual reimbursement payouts</p>
+        <div className="bg-surface-container-lowest p-5 border border-outline-variant rounded-card shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-label-sm text-outline uppercase mb-2">Total Team Spend</p>
+              <p className="font-headline-lg text-on-surface">{formatMoney(teamSpend)}</p>
+            </div>
+            <div className="flex items-center gap-1">
+              <span aria-hidden="true" className="material-symbols-outlined text-primary">groups</span>
+              <label
+                className="relative inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-outline-variant text-outline transition-colors hover:border-primary hover:text-primary focus-within:ring-2 focus-within:ring-primary/30"
+                title={`Filter month: ${formatMonthValue(teamSpendMonth)}`}
+              >
+                <span aria-hidden="true" className="material-symbols-outlined text-[19px]">calendar_month</span>
+                <input
+                  type="month"
+                  value={teamSpendMonth}
+                  onChange={event => setTeamSpendMonth(event.target.value || currentMonthValue())}
+                  aria-label={`Filter total team spend by month. Selected: ${formatMonthValue(teamSpendMonth)}`}
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                />
+              </label>
+            </div>
+          </div>
+          <p className="text-[11px] text-outline mt-2">Approved, released, or completed direct-report requests.</p>
         </div>
       </div>
 

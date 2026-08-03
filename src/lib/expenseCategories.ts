@@ -6,7 +6,6 @@
  */
 export const EXPENSE_CATEGORIES = [
   'Meals',
-  'Travel',
   'Supplies',
   'Lodging',
   'Transportation',
@@ -15,3 +14,8 @@ export const EXPENSE_CATEGORIES = [
 ] as const;
 
 export type ExpenseCategory = typeof EXPENSE_CATEGORIES[number];
+
+export function normalizeExpenseCategory(category?: string): string {
+  const value = (category || '').trim();
+  return value.toLowerCase() === 'travel' ? 'Transportation' : value;
+}

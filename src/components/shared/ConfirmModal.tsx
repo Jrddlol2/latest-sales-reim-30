@@ -1,7 +1,7 @@
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useId } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { Portal } from './Portal';
+import { Modal } from './Modal';
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -13,6 +13,8 @@ interface ConfirmModalProps {
   cancelLabel?: string;
   variant?: 'primary' | 'error' | 'warning';
   disabled?: boolean;
+  showCancel?: boolean;
+  closeOnBackdrop?: boolean;
 }
 
 export function ConfirmModal({
@@ -24,20 +26,12 @@ export function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'primary',
-  disabled = false
+  disabled = false,
+  showCancel = true,
+  closeOnBackdrop = false,
 }: ConfirmModalProps) {
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
-    }
-    return () => {
-      document.body.style.overflow = 'unset';
-    };
-  }, [isOpen]);
-
-  if (!isOpen) return null;
+  const titleId = useId();
+  const descriptionId = useId();
 
   const getVariantStyles = () => {
     if (variant === 'error') return 'bg-error text-white hover:bg-error/90';
@@ -46,31 +40,27 @@ export function ConfirmModal({
   };
 
   return (
-    <Portal>
-    {/* Stop clicks from bubbling. This modal is rendered through a Portal, and
-        React re-dispatches events up the COMPONENT tree, not the DOM tree — so
-        without this, clicking a plain control inside the modal (a <select>, an
-        input) would bubble to whatever clickable ancestor rendered the modal
-        (e.g. a table row with a row-click navigation) and fire it. */}
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 backdrop-blur-sm p-4 animate-in fade-in duration-200"
-      onClick={e => e.stopPropagation()}
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      titleId={titleId}
+      descriptionId={descriptionId}
+      closeOnBackdrop={closeOnBackdrop}
     >
-      <div className="w-full max-w-md animate-in slide-in-from-bottom-4 duration-300">
-        <Card className="shadow-lg">
-          <div className="p-6">
-            <h2 className="font-headline-md text-on-surface mb-4">{title}</h2>
-            <div className="text-body-md text-on-surface-variant mb-6">
-              {children}
-            </div>
-            <div className="flex justify-end gap-3 mt-6">
-              <Button variant="outline" onClick={onClose}>{cancelLabel}</Button>
-              <Button className={getVariantStyles()} onClick={onConfirm} disabled={disabled}>{confirmLabel}</Button>
-            </div>
+      <Card className="shadow-lg">
+        <div className="p-6">
+          <h2 id={titleId} className="font-headline-md text-on-surface mb-4">{title}</h2>
+          <div id={descriptionId} className="text-body-md text-on-surface-variant mb-6">
+            {children}
           </div>
-        </Card>
-      </div>
-    </div>
-    </Portal>
+          <div className="flex justify-end gap-3 mt-6">
+            {showCancel && <Button variant="outline" onClick={onClose}>{cancelLabel}</Button>}
+            <Button className={getVariantStyles()} onClick={onConfirm} disabled={disabled}>
+              {confirmLabel}
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </Modal>
   );
 }

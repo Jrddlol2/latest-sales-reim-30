@@ -4,7 +4,7 @@ import { Card, CardHeader } from '../../components/ui/Card';
 import { KPICard } from '../../components/ui/KPICard';
 import { Button } from '../../components/ui/Button';
 import { Select, Input, Label } from '../../components/ui/Input';
-import { Portal } from '../../components/shared/Portal';
+import { Modal } from '../../components/shared/Modal';
 import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { UserRole, ClaimStatus, SupportRequestStatus } from '../../types';
@@ -308,13 +308,12 @@ export function AdminDashboard() {
       </Card>
 
       {reassigningClaimId && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-surface-container-lowest rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <Modal isOpen onClose={() => setReassigningClaimId(null)} titleId="reassign-approver-title" className="max-w-md">
+            <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
               <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-                <h3 className="font-headline-sm text-on-surface">Reassign Approver</h3>
-                <button onClick={() => setReassigningClaimId(null)} className="text-outline hover:text-on-surface">
-                  <span className="material-symbols-outlined">close</span>
+                <h3 id="reassign-approver-title" className="font-headline-sm text-on-surface">Reassign Approver</h3>
+                <button aria-label="Close reassign approver dialog" onClick={() => setReassigningClaimId(null)} className="text-outline hover:text-on-surface">
+                  <span aria-hidden="true" className="material-symbols-outlined">close</span>
                 </button>
               </div>
               <div>
@@ -336,8 +335,7 @@ export function AdminDashboard() {
                 </Button>
               </div>
             </div>
-          </div>
-        </Portal>
+        </Modal>
       )}
     </div>
   );

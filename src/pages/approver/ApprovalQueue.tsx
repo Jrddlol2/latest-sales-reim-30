@@ -261,16 +261,16 @@ export function ApprovalQueue() {
           <span className="font-label-sm text-outline">{displayedClaims.length} records</span>
         </CardHeader>
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
+          <table className="w-full min-w-[1000px] text-left">
             <thead className="bg-surface-container-low text-outline font-label-sm uppercase tracking-wider">
               <tr>
-                <th className="px-6 py-4">Requestor</th>
-                <th className="px-6 py-4">Ref & Type</th>
-                <th className="px-6 py-4">Submitted</th>
-                <th className="px-6 py-4">Aging</th>
-                <th className="px-6 py-4">Amount</th>
-                <th className="px-6 py-4 text-center">Status</th>
-                <th className="px-6 py-4 text-right">Quick Actions</th>
+                <th className="px-4 py-3 2xl:px-6 2xl:py-4">Requestor</th>
+                <th className="px-4 py-3 2xl:px-6 2xl:py-4">Ref & Type</th>
+                <th className="px-4 py-3 2xl:px-6 2xl:py-4">Submitted</th>
+                <th className="px-4 py-3 2xl:px-6 2xl:py-4">Aging</th>
+                <th className="px-4 py-3 2xl:px-6 2xl:py-4">Amount</th>
+                <th className="px-4 py-3 text-center 2xl:px-6 2xl:py-4">Status</th>
+                <th className="px-4 py-3 text-right 2xl:px-6 2xl:py-4">Quick Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant">
@@ -290,12 +290,12 @@ export function ApprovalQueue() {
                       navigate(`/claims/${claim.id}`);
                     }
                   }}>
-                    <td className="px-6 py-4">
+                    <td className="px-4 py-3 2xl:px-6 2xl:py-4">
                       <div className="flex items-center gap-3">
                         {req.avatarUrl ? (
-                          <img src={req.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover" loading="lazy" width="40" height="40" />
+                          <img src={req.avatarUrl} alt="" className="w-9 h-9 2xl:w-10 2xl:h-10 rounded-full object-cover" loading="lazy" width="40" height="40" />
                         ) : (
-                          <div className="w-10 h-10 rounded-full bg-secondary-container flex items-center justify-center font-bold text-on-secondary-container">{req.name.split(' ').map(n=>n[0]).join('')}</div>
+                          <div className="w-9 h-9 2xl:w-10 2xl:h-10 rounded-full bg-secondary-container flex items-center justify-center font-bold text-on-secondary-container">{req.name.split(' ').map(n=>n[0]).join('')}</div>
                         )}
                         <div>
                           <p className="font-label-md text-on-surface flex items-center gap-2">
@@ -306,7 +306,7 @@ export function ApprovalQueue() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-4 py-3 2xl:px-6 2xl:py-4">
                       <p className="font-label-md text-on-surface flex items-center gap-2">
                         {claim.ref}
                         {claim.flaggedHighValue && <span className="px-2 py-0.5 rounded text-[12px] uppercase font-bold bg-error-container text-error">High Value</span>}
@@ -316,19 +316,19 @@ export function ApprovalQueue() {
                         {claim.type}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-on-surface-variant whitespace-nowrap">
+                    <td className="px-4 py-3 text-sm text-on-surface-variant whitespace-nowrap 2xl:px-6 2xl:py-4">
                       {formatDate(claim.submittedAt || claim.createdAt)}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-4 py-3 2xl:px-6 2xl:py-4">
                        <span className={`px-2 py-1 rounded-md text-xs font-bold ${aging.color}`}>
                           {aging.text}
                        </span>
                     </td>
-                    <td className="px-6 py-4 font-mono-data text-on-surface font-bold">{formatMoney(claim.total)}</td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-4 py-3 font-mono-data text-on-surface font-bold 2xl:px-6 2xl:py-4">{formatMoney(claim.total)}</td>
+                    <td className="px-4 py-3 text-center 2xl:px-6 2xl:py-4">
                       <StatusBadge status={claim.status} />
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-4 py-3 text-right align-top 2xl:px-6 2xl:py-4">
                       <div className="flex justify-end items-center gap-2">
                         {claim.approverStaleSince && claim.pendingTransferTo && (
                           <Button
@@ -345,7 +345,7 @@ export function ApprovalQueue() {
                             Transfer
                           </Button>
                         )}
-                        <ApproverActionButtons claim={claim} />
+                        <ApproverActionButtons claim={claim} compact />
                         <span className="material-symbols-outlined text-outline ml-2 group-hover:text-primary transition-colors">chevron_right</span>
                       </div>
                     </td>

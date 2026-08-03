@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Portal } from '../../components/shared/Portal';
+import { Modal } from '../../components/shared/Modal';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Input, Select, Label } from '../../components/ui/Input';
@@ -272,13 +272,12 @@ export function Support() {
 
       {/* New Ticket Modal */}
       {showNewTicketModal && (
-        <Portal>
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-surface-container-lowest rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+        <Modal isOpen onClose={() => setShowNewTicketModal(false)} titleId="new-support-ticket-title" className="max-w-lg">
+          <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-              <h3 className="font-headline-sm text-on-surface">Open Support Ticket</h3>
-              <button onClick={() => setShowNewTicketModal(false)} className="text-outline hover:text-on-surface">
-                <span className="material-symbols-outlined">close</span>
+              <h3 id="new-support-ticket-title" className="font-headline-sm text-on-surface">Open Support Ticket</h3>
+              <button aria-label="Close support ticket dialog" onClick={() => setShowNewTicketModal(false)} className="text-outline hover:text-on-surface">
+                <span aria-hidden="true" className="material-symbols-outlined">close</span>
               </button>
             </div>
 
@@ -324,8 +323,7 @@ export function Support() {
               <Button onClick={handleCreateTicket} disabled={busy}>Submit Ticket</Button>
             </div>
           </div>
-        </div>
-        </Portal>
+        </Modal>
       )}
     </div>
   );

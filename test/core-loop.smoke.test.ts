@@ -182,6 +182,120 @@ describe('core reimbursement loop (submit -> approve -> process -> ready -> comp
     expect(wrongCode.status).toBe(400);
   });
 
+  it('enforces cash-only release for reimbursement claims', async () => {
+    const mom = await api('/api/moms', REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({ client: 'Cash Policy Client', purpose: 'Cash policy test', meeting_date: '2026-01-17', status: 'Completed' }),
+    });
+    const submit = await api('/api/claims', REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({
+        mom_id: mom.body.id,
+        expense_category: 'Client Meals',
+        total_amount: 990,
+        receipt_url: '/receipt_placeholder.png',
+        expense_date: PURCHASE_DATE,
+        meeting_date: '2026-01-17',
+        meeting_time: '14:00',
+      }),
+    });
+    await api(`/api/claims/${submit.body.id}/approve`, APPROVER_ID, {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'Approved' }),
+    });
+    await api(`/api/claims/${submit.body.id}/claim-code`, CUSTODIAN_ID, {
+      method: 'PUT',
+      body: JSON.stringify({}),
+    });
+
+    const nonCash = await api(`/api/claims/${submit.body.id}/ready-for-claim`, CUSTODIAN_ID, {
+      method: 'POST',
+      body: JSON.stringify({ payment_method: 'GCash' }),
+    });
+    expect(nonCash.status).toBe(400);
+    expect(nonCash.body.error).toContain('cash only');
+
+    const cash = await api(`/api/claims/${submit.body.id}/ready-for-claim`, CUSTODIAN_ID, {
+      method: 'POST',
+      body: JSON.stringify({ payment_method: 'Cash' }),
+    });
+    expect(cash.status).toBe(200);
+    expect(cash.body.payment_method).toBe('Cash');
+  });
+
+  it('uses Teams for internal prototype notifications and protects the full user directory', async () => {
+    const requestorOutbox = await api('/api/outbox', REQUESTOR_ID);
+    expect(requestorOutbox.status).toBe(200);
+    expect(requestorOutbox.body.length).toBeGreaterThan(0);
+    expect(requestorOutbox.body.every((item: any) => item.channel === 'Teams')).toBe(true);
+
+    const publicDirectory = await fetch(`${baseUrl}/api/users`);
+    expect(publicDirectory.status).toBe(401);
+
+    const demoAccounts = await fetch(`${baseUrl}/api/demo-users`);
+    expect(demoAccounts.status).toBe(200);
+    const accounts = await demoAccounts.json();
+    expect(accounts.length).toBeGreaterThan(0);
+    expect(accounts[0]).not.toHaveProperty('reports_to');
+  });
+
+  it('confirms client CC delivery to both the requestor and approver', async () => {
+    const clientEmail = 'jane.client@example.com';
+    const mom = await api('/api/moms', REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({
+        client: 'Example Client',
+        contact_person: 'Jane Client',
+        contact_person_email: clientEmail,
+        cc_client: true,
+        purpose: 'Client CC confirmation test',
+        meeting_date: '2026-01-18',
+        status: 'Completed',
+      }),
+    });
+    expect(mom.status).toBe(200);
+
+    const submit = await api('/api/claims', REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({
+        mom_id: mom.body.id,
+        expense_category: 'Client Meals',
+        total_amount: 975,
+        receipt_url: '/receipt_placeholder.png',
+        expense_date: PURCHASE_DATE,
+        meeting_date: '2026-01-18',
+        meeting_time: '13:00',
+      }),
+    });
+    expect(submit.status).toBe(200);
+
+    const submissionSubject = `Client CC Sent - ${submit.body.claim_number} (Submission)`;
+    const [requestorOutbox, approverOutbox] = await Promise.all([
+      api('/api/outbox', REQUESTOR_ID),
+      api('/api/outbox', APPROVER_ID),
+    ]);
+    for (const outbox of [requestorOutbox, approverOutbox]) {
+      const confirmation = outbox.body.find((item: any) => item.subject === submissionSubject);
+      expect(confirmation).toMatchObject({ channel: 'Teams', read: false });
+      expect(confirmation.body).toContain(clientEmail);
+      expect(confirmation.body).toContain('client contact was CCed');
+    }
+
+    const approve = await api(`/api/claims/${submit.body.id}/approve`, APPROVER_ID, {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'Approved' }),
+    });
+    expect(approve.status).toBe(200);
+
+    const decisionSubject = `Client CC Sent - ${submit.body.claim_number} (Approved)`;
+    const [requestorAfterDecision, approverAfterDecision] = await Promise.all([
+      api('/api/outbox', REQUESTOR_ID),
+      api('/api/outbox', APPROVER_ID),
+    ]);
+    expect(requestorAfterDecision.body.some((item: any) => item.subject === decisionSubject)).toBe(true);
+    expect(approverAfterDecision.body.some((item: any) => item.subject === decisionSubject)).toBe(true);
+  });
+
   it('files Transport Reimbursement without a MOM and still requires a receipt', async () => {
     const missingReceipt = await api('/api/claims', REQUESTOR_ID, {
       method: 'POST',

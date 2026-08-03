@@ -22,6 +22,7 @@ describe('workspace API adapters', () => {
 
     expect(expense.receiptFileName).toBe('receipt-scan.pdf');
     expect(expense.orNumber).toBe('OR-12345');
+    expect(expense.category).toBe('Transportation');
   });
 
   it('uses real cash-advance history timestamps and explicit amounts', () => {

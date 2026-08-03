@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent } from '../../components/ui/Card';
@@ -14,6 +14,7 @@ export function CreateMom() {
   const { companies, refresh } = useAppContext();
   const { addToast } = useToast();
   const [saving, setSaving] = useState(false);
+  const clientEmailInputRef = useRef<HTMLInputElement>(null);
   const [documentType, setDocumentType] = useState<MomDocumentType>('MoM');
   const [customFields, setCustomFields] = useState<Record<string, string>>({});
   const [form, setForm] = useState({
@@ -42,6 +43,11 @@ export function CreateMom() {
   const save = async (status: 'Draft' | 'Completed') => {
     if (!form.client.trim() || !form.purpose.trim() || !form.meetingDate) {
       addToast('Client, purpose, and date of meeting are required.', 'error');
+      return;
+    }
+    if (form.ccClient && !form.contactPersonEmail.trim()) {
+      addToast('Enter the client email before enabling client notifications.', 'error');
+      window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
       return;
     }
     setSaving(true);
@@ -102,14 +108,6 @@ export function CreateMom() {
 
           <section className="pt-5 border-t border-outline-variant space-y-5">
             <div>
-              <h2 className="font-headline-sm text-on-surface">Meeting classification</h2>
-              <p className="text-body-sm text-outline mt-1">Add the account and reporting details used to categorize this meeting.</p>
-            </div>
-            <DynamicFieldRenderer entity="mom" values={customFields} onChange={(key, value) => setCustomFields(current => ({ ...current, [key]: value }))} />
-          </section>
-
-          <section className="pt-5 border-t border-outline-variant space-y-5">
-            <div>
               <h2 className="font-headline-sm text-on-surface">Client contact</h2>
               <p className="text-body-sm text-outline mt-1">Keep the attendee and notification details together.</p>
             </div>
@@ -118,15 +116,45 @@ export function CreateMom() {
                 <Label>Contact Person</Label>
                 <Input value={form.contactPerson} onChange={event => setForm(current => ({ ...current, contactPerson: event.target.value }))} />
               </div>
+              <DynamicFieldRenderer
+                entity="mom"
+                values={customFields}
+                onChange={(key, value) => setCustomFields(current => ({ ...current, [key]: value }))}
+                includeKeys={['contact_person_designation']}
+                containerClassName="contents"
+              />
               <div>
-                <Label>Client Email</Label>
-                <Input type="email" value={form.contactPersonEmail} onChange={event => setForm(current => ({ ...current, contactPersonEmail: event.target.value }))} />
+                <Label required={form.ccClient}>Client Email</Label>
+                <Input ref={clientEmailInputRef} type="email" required={form.ccClient} value={form.contactPersonEmail} onChange={event => setForm(current => ({ ...current, contactPersonEmail: event.target.value }))} />
               </div>
             </div>
-            <label className="flex items-center gap-3 min-h-11 px-4 py-3 rounded-lg border border-outline-variant bg-surface-container-low">
-              <input type="checkbox" checked={form.ccClient} onChange={event => setForm(current => ({ ...current, ccClient: event.target.checked }))} disabled={!form.contactPersonEmail} className="h-4 w-4 accent-primary" />
-              <span className="text-body-sm text-on-surface">CC client if this record is later used for a claim</span>
+            <label className={`flex items-start gap-3 min-h-11 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${form.ccClient ? 'border-primary/40 bg-primary/8' : 'border-outline-variant bg-surface-container-low hover:border-primary/30'}`}>
+              <input
+                type="checkbox"
+                checked={form.ccClient}
+                onChange={event => {
+                  const checked = event.target.checked;
+                  setForm(current => ({ ...current, ccClient: checked }));
+                  if (checked && !form.contactPersonEmail.trim()) window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
+                }}
+                className="h-4 w-4 mt-0.5 accent-primary"
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-1.5 text-body-sm font-semibold text-on-surface">
+                  <span aria-hidden="true" className="material-symbols-outlined text-[17px] text-primary">priority_high</span>
+                  CC client if this record is later used for a claim
+                </span>
+                <span className="block text-xs text-outline mt-1">Important: client email is required when this option is enabled.</span>
+              </span>
             </label>
+          </section>
+
+          <section className="pt-5 border-t border-outline-variant space-y-5">
+            <div>
+              <h2 className="font-headline-sm text-on-surface">Meeting classification</h2>
+              <p className="text-body-sm text-outline mt-1">Add the account and reporting details used to categorize this meeting.</p>
+            </div>
+            <DynamicFieldRenderer entity="mom" values={customFields} onChange={(key, value) => setCustomFields(current => ({ ...current, [key]: value }))} excludeKeys={['contact_person_designation']} />
           </section>
 
           <section className="pt-5 border-t border-outline-variant space-y-5">

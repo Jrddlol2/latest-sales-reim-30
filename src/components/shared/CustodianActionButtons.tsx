@@ -33,7 +33,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   const isReimbursement = claim.type === 'Reimbursement' || claim.type === 'Transport Reimbursement';
 
   const handleAction = (action: 'markReady' | 'release' | 'closeLiq' | 'return' | 'reject') => {
-    setPaymentMethod('');
+    setPaymentMethod(action === 'markReady' ? 'Cash' : '');
     setPaymentRef('');
     // Prefill the refund method with whatever the requestor declared at
     // submission (mapped onto claim.paymentMethod) — the custodian confirms it.
@@ -309,11 +309,19 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
                 <span className="font-mono-data font-bold text-primary">{formatMoney(claim.approvedAmount ?? Math.min(claim.total, 1000))}</span>
               </div>
               <div>
-                <label className="block text-label-md text-on-surface mb-1">Payment Method <span className="text-error">*</span></label>
-                <Select value={paymentMethod} onChange={e => { setPaymentMethod(e.target.value); setError(''); }} disabled={isSubmitting}>
-                  <option value="">Select a payment method...</option>
-                  {paymentMethods.map(m => <option key={m} value={m}>{m}</option>)}
-                </Select>
+                <label className="block text-label-md text-on-surface mb-1" htmlFor={`reimbursement-method-${claim.id}`}>
+                  Payment Method
+                </label>
+                <Input
+                  id={`reimbursement-method-${claim.id}`}
+                  value="Cash"
+                  readOnly
+                  aria-describedby={`reimbursement-method-help-${claim.id}`}
+                  className="bg-surface-container-low"
+                />
+                <p id={`reimbursement-method-help-${claim.id}`} className="mt-1 text-body-sm text-on-surface-variant">
+                  Prototype policy: reimbursements are released in cash only.
+                </p>
               </div>
               <div>
                 <label className="block text-label-md text-on-surface mb-1">Claim Code</label>

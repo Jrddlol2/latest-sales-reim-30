@@ -19,6 +19,7 @@ import {
   NotificationPrefs,
 } from '../types';
 import { getReimbursementDateError, getTodayIsoDate } from './reimbursementPolicy';
+import { normalizeExpenseCategory } from './expenseCategories';
 
 // --- transport ------------------------------------------------------------
 
@@ -205,7 +206,7 @@ export function fromServerExpense(e: any, claimId: string): ExpenseLineItem {
     claimId,
     expenseDate: (e.expense_date || '').split('T')[0],
     vendor: e.vendor || '',
-    category: e.category || '',
+    category: normalizeExpenseCategory(e.category),
     amount: Number(e.amount) || 0,
     paymentMethod: e.payment_method || '',
     businessPurpose: e.business_purpose || '',
@@ -1118,7 +1119,7 @@ export async function submitClaimFlow(input: SubmitClaimInput) {
       remarks: remarks || mom?.purpose || (claimType === 'Transport Reimbursement' ? 'Transport reimbursement' : ''),
       is_draft: Boolean(isDraft),
       line_items: uploaded.map((li) => ({
-        category: li.category,
+        category: normalizeExpenseCategory(li.category),
         amount: Number(li.amount) || 0,
         receipt_url: li.receiptUrl,
         or_number: li.orNumber || '',
@@ -1184,7 +1185,7 @@ export async function resubmitClaimFlow(input: ResubmitClaimInput) {
       claim_type: claimType,
       remarks: remarks || '',
       line_items: uploaded.map((li) => ({
-        category: li.category,
+        category: normalizeExpenseCategory(li.category),
         amount: Number(li.amount) || 0,
         receipt_url: li.receiptUrl,
         or_number: li.orNumber || '',
@@ -1257,7 +1258,7 @@ export async function submitLiquidationFlow(input: SubmitLiquidationInput) {
       body: JSON.stringify({
         expense_date: li.expenseDate,
         vendor: li.vendor,
-        category: li.category,
+        category: normalizeExpenseCategory(li.category),
         amount: Number(li.amount) || 0,
         payment_method: li.paymentMethod,
         business_purpose: li.businessPurpose || 'Liquidation expense',

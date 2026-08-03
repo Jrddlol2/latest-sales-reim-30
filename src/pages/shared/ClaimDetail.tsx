@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Portal } from '../../components/shared/Portal';
+import { useRef, useState } from 'react';
+import { Modal } from '../../components/shared/Modal';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -13,6 +13,7 @@ import { UserRole, ClaimStatus, ExpenseLineItem } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDateTime } from '../../lib/date';
 import { isCustodianProcessingClaim } from '../../lib/claimWorkflow';
+import { exportClaimPdf, exportClaimWord } from '../../lib/claimExport';
 
 export function ClaimDetail() {
   const { addToast } = useToast();
@@ -23,15 +24,34 @@ export function ClaimDetail() {
   const [confirmingReceipt, setConfirmingReceipt] = useState(false);
   const [receiptCode, setReceiptCode] = useState('');
   const [receiptError, setReceiptError] = useState('');
+  const receiptCodeRef = useRef<HTMLInputElement>(null);
   const [submittingReceipt, setSubmittingReceipt] = useState(false);
   const [revising, setRevising] = useState(false);
   const [reviseLineItems, setReviseLineItems] = useState<DraftLineItem[]>([]);
   const [submittingRevision, setSubmittingRevision] = useState(false);
+  const [exporting, setExporting] = useState<'pdf' | 'word' | null>(null);
 
   const claim = claims.find(c => c.id === id) || claims[0];
   const items = lineItems.filter(li => li.claimId === claim.id);
   const mom = moms.find(m => m.claimId === claim.id);
   const history = statusHistory.filter(h => h.claimId === claim.id).sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const requestorName = users.find(user => user.id === claim.requestorId)?.name || 'Unknown requestor';
+
+  const handleExport = async (format: 'pdf' | 'word') => {
+    setExporting(format);
+    try {
+      if (format === 'pdf') {
+        await exportClaimPdf(claim, items, mom, requestorName);
+      } else {
+        exportClaimWord(claim, items, mom, requestorName);
+      }
+      addToast(`Claim exported as ${format === 'pdf' ? 'PDF' : 'Word'}.`, 'success');
+    } catch (error: any) {
+      addToast(error?.message || 'Could not export this claim.', 'error');
+    } finally {
+      setExporting(null);
+    }
+  };
 
   // Only Approver can approve/reject, and only if they are not the requestor.
   // Reimbursement claims sit at Pending Approval; Cash Advances/Liquidations
@@ -130,8 +150,13 @@ export function ClaimDetail() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3 shrink-0">
-          <Button variant="outline" className="gap-2" onClick={() => window.print()}>
-            <span className="material-symbols-outlined text-[18px]">print</span> Print
+          <Button variant="outline" className="gap-2" onClick={() => handleExport('pdf')} disabled={exporting !== null}>
+            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">picture_as_pdf</span>
+            {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => handleExport('word')} disabled={exporting !== null}>
+            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">description</span>
+            Export Word
           </Button>
           {isApprover && <ApproverActionButtons claim={claim} size="md" />}
           {isCustodian && <CustodianActionButtons claim={claim} size="md" />}
@@ -463,14 +488,12 @@ export function ClaimDetail() {
 
       {/* Receipt Preview Modal */}
       {activeReceipt && (
-        <Portal>
-        
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-surface-container-lowest rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+        <Modal isOpen onClose={() => setActiveReceipt(null)} titleId="claim-receipt-title" className="max-w-lg">
+          <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-              <h3 className="font-headline-sm text-on-surface">Receipt Attachment</h3>
-              <button onClick={() => setActiveReceipt(null)} className="text-outline hover:text-on-surface">
-                <span className="material-symbols-outlined">close</span>
+              <h3 id="claim-receipt-title" className="font-headline-sm text-on-surface">Receipt Attachment</h3>
+              <button aria-label="Close receipt preview" onClick={() => setActiveReceipt(null)} className="text-outline hover:text-on-surface">
+                <span aria-hidden="true" className="material-symbols-outlined">close</span>
               </button>
             </div>
 
@@ -510,19 +533,23 @@ export function ClaimDetail() {
               <Button size="sm" onClick={() => setActiveReceipt(null)}>Close</Button>
             </div>
           </div>
-        </div>
-        </Portal>
+        </Modal>
       )}
 
       {/* Confirm Receipt Modal — requestor closes out the payout */}
       {confirmingReceipt && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-surface-container-lowest rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <Modal
+          isOpen
+          onClose={() => setConfirmingReceipt(false)}
+          titleId="confirm-receipt-title"
+          initialFocusRef={receiptCodeRef}
+          className="max-w-md"
+        >
+            <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
               <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-                <h3 className="font-headline-sm text-on-surface">Confirm Receipt of Funds</h3>
-                <button onClick={() => setConfirmingReceipt(false)} className="text-outline hover:text-on-surface">
-                  <span className="material-symbols-outlined">close</span>
+                <h3 id="confirm-receipt-title" className="font-headline-sm text-on-surface">Confirm Receipt of Funds</h3>
+                <button aria-label="Close receipt confirmation" onClick={() => setConfirmingReceipt(false)} className="text-outline hover:text-on-surface">
+                  <span aria-hidden="true" className="material-symbols-outlined">close</span>
                 </button>
               </div>
 
@@ -534,14 +561,17 @@ export function ClaimDetail() {
 
               <div>
                 <input
-                  autoFocus
+                  ref={receiptCodeRef}
+                  aria-label="Release code"
+                  aria-invalid={Boolean(receiptError)}
+                  aria-describedby={receiptError ? 'receipt-code-error' : undefined}
                   value={receiptCode}
                   onChange={e => { setReceiptCode(e.target.value); setReceiptError(''); }}
                   onKeyDown={e => { if (e.key === 'Enter') handleConfirmReceipt(); }}
                   placeholder="Release code"
                   className={`w-full bg-white border ${receiptError ? 'border-error' : 'border-[#CBD5E1]'} rounded-[6px] px-4 py-2.5 font-mono-data tracking-widest text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none uppercase`}
                 />
-                {receiptError && <p className="text-error text-xs mt-1">{receiptError}</p>}
+                {receiptError && <p id="receipt-code-error" role="alert" className="text-error text-xs mt-1">{receiptError}</p>}
               </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t border-outline-variant">
@@ -552,19 +582,17 @@ export function ClaimDetail() {
                 </Button>
               </div>
             </div>
-          </div>
-        </Portal>
+        </Modal>
       )}
 
       {/* Revise & Resubmit Modal — returned Reimbursements re-enter approval here */}
       {revising && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-surface-container-lowest rounded-xl max-w-3xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <Modal isOpen onClose={() => setRevising(false)} titleId="revise-claim-title" className="max-w-3xl">
+            <div className="bg-surface-container-lowest rounded-xl w-full p-6 shadow-2xl space-y-4">
               <div className="flex justify-between items-center border-b border-outline-variant pb-3">
-                <h3 className="font-headline-sm text-on-surface">Revise &amp; Resubmit {claim.ref}</h3>
-                <button onClick={() => setRevising(false)} className="text-outline hover:text-on-surface">
-                  <span className="material-symbols-outlined">close</span>
+                <h3 id="revise-claim-title" className="font-headline-sm text-on-surface">Revise &amp; Resubmit {claim.ref}</h3>
+                <button aria-label="Close claim revision" onClick={() => setRevising(false)} className="text-outline hover:text-on-surface">
+                  <span aria-hidden="true" className="material-symbols-outlined">close</span>
                 </button>
               </div>
 
@@ -598,7 +626,6 @@ export function ClaimDetail() {
                           >
                             <option value="">Select Category</option>
                             <option>Meals</option>
-                            <option>Travel</option>
                             <option>Supplies</option>
                             <option>Lodging</option>
                             <option>Transportation</option>
@@ -678,8 +705,7 @@ export function ClaimDetail() {
                 </Button>
               </div>
             </div>
-          </div>
-        </Portal>
+        </Modal>
       )}
     </div>
   );

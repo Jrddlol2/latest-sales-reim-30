@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -5,11 +6,15 @@ import { useAppContext } from '../../components/AppContext';
 import { uploadUrl } from '../../lib/api';
 import { formatDateTime } from '../../lib/date';
 import { DOCUMENT_TYPE_LABEL, MomDocumentType } from '../../types';
+import { exportMomPdf, exportMomWord } from '../../lib/momExport';
+import { useToast } from '../../components/shared/ToastContext';
 
 export function MomDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { moms, claims } = useAppContext();
+  const { addToast } = useToast();
+  const [exporting, setExporting] = useState<'pdf' | 'word' | null>(null);
 
   const mom = moms.find(m => m.id === id);
 
@@ -36,31 +41,17 @@ export function MomDetail() {
 
   const internalParticipants = mom.participantsInternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
   const externalParticipants = mom.participantsExternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
-  const exportWord = () => {
-    const escape = (value?: string) => String(value || '-')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escape(mom.companyName)}</title>
-      <style>body{font-family:Arial,sans-serif;color:#172033;line-height:1.5;margin:40px}h1{color:#034fc7}h2{font-size:14px;text-transform:uppercase;color:#667085;border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:24px}table{border-collapse:collapse;width:100%}td{padding:7px;border-bottom:1px solid #eee;vertical-align:top}td:first-child{font-weight:bold;width:180px}</style>
-      </head><body><h1>${escape(DOCUMENT_TYPE_LABEL[docType])}</h1>
-      <h2>Meeting Details</h2><table>
-      <tr><td>Company</td><td>${escape(mom.companyName)}</td></tr>
-      <tr><td>Date of Meeting</td><td>${escape(mom.meetingDate?.split('T')[0])}</td></tr>
-      <tr><td>Location of Meeting</td><td>${escape(mom.location)}</td></tr>
-      <tr><td>Purpose</td><td>${escape(mom.purposeOfMeeting)}</td></tr>
-      <tr><td>Contact Person</td><td>${escape(mom.contactPerson)}</td></tr>
-      <tr><td>Contact Email</td><td>${escape(mom.contactPersonEmail)}</td></tr>
-      <tr><td>Prepared By</td><td>${escape(mom.preparedBy)}</td></tr></table>
-      <h2>Discussion</h2><p>${escape(mom.description || mom.summary)}</p>
-      <h2>Agreements</h2><p>${escape(mom.agreements)}</p>
-      <h2>Action Items</h2><p>${escape(mom.actionItems)}</p>
-      </body></html>`;
-    const blob = new Blob([html], { type: 'application/msword' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${(mom.companyName || 'meeting-minutes').replace(/[^a-z0-9]+/gi, '-')}.doc`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+  const handleExport = async (format: 'pdf' | 'word') => {
+    setExporting(format);
+    try {
+      if (format === 'pdf') await exportMomPdf(mom);
+      else exportMomWord(mom);
+      addToast(`${DOCUMENT_TYPE_LABEL[docType]} exported as ${format === 'pdf' ? 'PDF' : 'Word'}.`, 'success');
+    } catch (error: any) {
+      addToast(error?.message || 'Could not export this document.', 'error');
+    } finally {
+      setExporting(null);
+    }
   };
 
   return (
@@ -82,9 +73,13 @@ export function MomDetail() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Button className="gap-2" onClick={exportWord}>
-              <span className="material-symbols-outlined text-[18px]">download</span>
-              Export document
+            <Button variant="outline" className="gap-2" onClick={() => handleExport('pdf')} disabled={exporting !== null}>
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">picture_as_pdf</span>
+              {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
+            </Button>
+            <Button className="gap-2" onClick={() => handleExport('word')} disabled={exporting !== null}>
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">description</span>
+              Export Word
             </Button>
             <span
               title={DOCUMENT_TYPE_LABEL[docType]}
