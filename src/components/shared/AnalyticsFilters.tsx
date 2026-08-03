@@ -43,19 +43,20 @@ export function AnalyticsFilters({ value, dimensions, onChange, loading = false 
   ].filter(Boolean) as Array<{ key: keyof AnalyticsFilterState; label: string }>;
 
   return (
-    <div className="rounded-xl border border-outline-variant bg-surface-container-low p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="min-w-[240px] flex-1 max-w-2xl">
+    <div className="rounded-xl border border-outline-variant bg-surface-container-low p-3">
+      <div className="flex flex-col md:flex-row md:items-center gap-2">
+        <div className="min-w-0 flex-1">
           <Input value={value.search} onChange={event => update('search', event.target.value)} placeholder="Search reference, requestor, client, or purpose..." />
         </div>
-        <Select className="w-52" value={value.dateBasis} onChange={event => update('dateBasis', event.target.value as AnalyticsFilterState['dateBasis'])} aria-label="Analytics date basis">
+        <Select containerClassName="w-full md:w-52 md:shrink-0" value={value.dateBasis} onChange={event => update('dateBasis', event.target.value as AnalyticsFilterState['dateBasis'])} aria-label="Analytics date basis">
           {DATE_BASIS_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
         </Select>
-        <Button variant="outline" className="gap-2" onClick={() => setShowFilters(open => !open)}>
+        <Button variant="outline" className="gap-2 shrink-0" onClick={() => setShowFilters(open => !open)}>
           <span className="material-symbols-outlined text-[18px]">filter_list</span>
           Filters{activeFilters.length ? ` (${activeFilters.length})` : ''}
         </Button>
-        {hasFilters && <Button size="sm" variant="ghost" disabled={loading} onClick={() => onChange({ ...DEFAULT_ANALYTICS_FILTERS })}>Clear all</Button>}
+        {hasFilters && <Button size="sm" variant="ghost" className="shrink-0" disabled={loading} onClick={() => onChange({ ...DEFAULT_ANALYTICS_FILTERS })}>Clear all</Button>}
+        {loading && <span role="status" className="shrink-0 text-xs text-outline">Updating…</span>}
       </div>
 
       {showFilters && (
@@ -83,7 +84,6 @@ export function AnalyticsFilters({ value, dimensions, onChange, loading = false 
           </button>
         ))}
       </div>}
-      <p className="text-xs text-outline mt-3">{loading ? 'Updating analytics…' : 'Filters update KPIs, charts, records, and exports together.'}</p>
     </div>
   );
 }
