@@ -123,6 +123,47 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes loginOrbDriftA {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-28px, 22px, 0) scale(1.04); }
+}
+
+@keyframes loginOrbDriftB {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(24px, -18px, 0) scale(0.96); }
+}
+
+@keyframes loginOrbDriftC {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(0.98); }
+  50% { transform: translate3d(18px, 26px, 0) scale(1.03); }
+}
+
+.login-orb-drift-a,
+.login-orb-drift-b,
+.login-orb-drift-c {
+  will-change: transform;
+}
+
+.login-orb-drift-a {
+  animation: loginOrbDriftA 20s ease-in-out -5s infinite;
+}
+
+.login-orb-drift-b {
+  animation: loginOrbDriftB 24s ease-in-out -12s infinite;
+}
+
+.login-orb-drift-c {
+  animation: loginOrbDriftC 28s ease-in-out -8s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-orb-drift-a,
+  .login-orb-drift-b,
+  .login-orb-drift-c {
+    animation: none;
+  }
+}
+
 .animate-in {
   animation-duration: 300ms;
   animation-fill-mode: forwards;

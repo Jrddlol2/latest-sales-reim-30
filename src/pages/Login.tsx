@@ -46,6 +46,7 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [demoOpen, setDemoOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -101,7 +102,10 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       return;
     }
     setNotice('Microsoft sign-in is awaiting your organization\'s Entra setup. Use a demo account below for now.');
-    document.getElementById('demo-access')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setDemoOpen(true);
+    window.setTimeout(() => {
+      document.getElementById('demo-access')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 0);
   };
 
   const continueAsDemo = () => {
@@ -128,55 +132,52 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   };
 
   return (
-    <main className="min-h-screen bg-[#f6f8fc] lg:grid lg:grid-cols-[minmax(420px,0.92fr)_minmax(560px,1.08fr)]">
+    <main className="min-h-screen bg-[#e4efff] lg:grid lg:grid-cols-[minmax(500px,1.2fr)_minmax(480px,0.8fr)]">
       <section className="relative hidden min-h-screen overflow-hidden bg-[#073b8f] px-12 py-10 text-white lg:flex lg:flex-col lg:justify-between 2xl:px-16 2xl:py-12">
         <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-          <div className="absolute -right-36 -top-28 h-[430px] w-[430px] rounded-full border border-white/10" />
-          <div className="absolute -right-16 -top-8 h-[300px] w-[300px] rounded-full border border-white/10" />
-          <div className="absolute -bottom-52 -left-40 h-[520px] w-[520px] rounded-full bg-[#1459bd]" />
-          <div className="absolute bottom-24 left-20 h-28 w-28 rounded-full bg-[#f3bd18]/90 blur-[1px]" />
+          <div className="login-orb-drift-a absolute -right-44 -top-40 h-[480px] w-[480px] rounded-full bg-[#5e9aeb]/[0.18] blur-[14px] shadow-[inset_0_0_80px_rgba(184,216,255,0.12)]" />
+          <div className="login-orb-drift-b absolute right-12 top-[23%] h-44 w-44 rounded-full bg-[#75b6ff]/[0.20] blur-[10px] shadow-[inset_0_0_38px_rgba(204,229,255,0.14)]" />
+          <div className="login-orb-drift-c absolute -bottom-56 -left-48 h-[520px] w-[520px] rounded-full bg-[#347ad5]/[0.34] blur-[18px] shadow-[inset_0_0_90px_rgba(137,190,255,0.10)]" />
         </div>
 
         <div className="relative z-10">
-          <img src="/logo/logo.png" alt="Microgenesis" className="h-auto w-[230px] object-contain object-left" />
+          <img src="/logo/logo.png" alt="Microgenesis" className="h-auto w-[205px] object-contain object-left" />
         </div>
 
-        <div className="relative z-10 max-w-xl pb-8">
-          <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-blue-50">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#ffd13b]" />
-            Sales operations
-          </p>
-          <h1 className="max-w-lg text-[40px] font-semibold leading-[1.12] tracking-[-0.025em] 2xl:text-[48px]">
-            Reimbursements that move as fast as your team.
+        <div className="relative z-10 max-w-md pb-8">
+          <p className="mb-4 text-sm font-medium text-blue-200">Internal business system</p>
+          <h1 className="text-[38px] font-semibold leading-[1.14] tracking-[-0.025em] 2xl:text-[44px]">
+            Sales Reimbursement System
           </h1>
-          <p className="mt-5 max-w-lg text-[16px] leading-7 text-blue-100">
-            Submit expenses, route approvals, and track every payment from one secure workspace.
+          <p className="mt-5 max-w-sm text-[16px] leading-7 text-blue-100">
+            Submit, approve, and track employee reimbursements in one workspace.
           </p>
-
-          <div className="mt-10 grid max-w-lg grid-cols-3 gap-3 border-t border-white/15 pt-7 text-sm text-blue-100">
-            <div><span className="material-symbols-outlined mb-2 block text-[23px] text-white">verified_user</span>Secure access</div>
-            <div><span className="material-symbols-outlined mb-2 block text-[23px] text-white">route</span>Clear workflow</div>
-            <div><span className="material-symbols-outlined mb-2 block text-[23px] text-white">monitoring</span>Live tracking</div>
-          </div>
         </div>
 
-        <p className="relative z-10 text-xs text-blue-200">Microgenesis Business Systems</p>
+        <div className="relative z-10 border-t border-white/15 pt-5 text-xs text-blue-200">
+          <p>Microgenesis Business Systems</p>
+          <p className="mt-1 text-blue-300">Authorized employees only</p>
+        </div>
       </section>
 
-      <section className="flex min-h-screen items-center justify-center px-5 py-8 sm:px-8 lg:px-12">
-        <div className="w-full max-w-[520px]">
+      <section className="relative flex min-h-screen items-center justify-center overflow-hidden px-5 py-6 sm:px-8 lg:px-10 lg:py-5">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+          <div className="login-orb-drift-b absolute -right-32 -top-40 h-[430px] w-[430px] rounded-full bg-[#2d7be8]/[0.14] blur-[18px] shadow-[inset_0_0_80px_rgba(255,255,255,0.35)]" />
+          <div className="login-orb-drift-a absolute -bottom-52 right-[8%] h-[390px] w-[390px] rounded-full bg-[#66a3f2]/[0.13] blur-[20px] shadow-[inset_0_0_80px_rgba(255,255,255,0.38)]" />
+        </div>
+
+        <div className="relative z-10 w-full max-w-[430px]">
           <div className="mb-8 flex items-center justify-between lg:hidden">
             <div>
               <p className="text-lg font-bold tracking-[-0.02em] text-[#073b8f]">MICROGENESIS</p>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-outline">Expense Management</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-outline">Sales Reimbursement System</p>
             </div>
-            <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-primary">Sales operations</span>
           </div>
 
-          <div className="rounded-2xl border border-[#dde3ee] bg-white p-6 shadow-[0_18px_55px_rgba(15,39,84,0.10)] sm:p-9 lg:p-5 2xl:p-9">
-            <div className="mb-7 lg:mb-4 2xl:mb-7">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-primary">Sales Reimbursement System</p>
-              <h2 className="text-[30px] font-semibold leading-9 tracking-[-0.025em] text-on-surface">Welcome back</h2>
+          <div className="rounded-xl border border-[#d9e0ea] bg-white p-6 shadow-[0_10px_30px_rgba(15,39,84,0.07)]">
+            <div className="mb-7">
+              <p className="mb-2 text-sm font-semibold text-primary">Sales Reimbursement System</p>
+              <h2 className="text-[28px] font-semibold leading-9 tracking-[-0.025em] text-on-surface">Welcome back</h2>
               <p className="mt-2 text-sm leading-6 text-outline">Sign in with your work account to continue.</p>
             </div>
 
@@ -195,11 +196,15 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
                 <button
                   type="button"
                   onClick={startMicrosoftSignIn}
-                  className="flex h-12 w-full items-center justify-center gap-3 rounded-lg border border-[#8c939d] bg-white px-4 text-[15px] font-semibold text-[#1f2328] transition hover:border-[#545b65] hover:bg-[#f8f9fb] focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+                  className="flex h-12 w-full items-center justify-center gap-3 rounded-lg bg-primary px-4 text-[15px] font-semibold text-white transition hover:bg-[#003da5] focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
                 >
                   <MicrosoftMark />
                   Sign in with Microsoft
                 </button>
+                <p className="mt-2.5 flex items-center justify-center gap-1.5 text-xs text-outline">
+                  <span className="material-symbols-outlined text-[15px]">lock</span>
+                  Use your Microgenesis work account.
+                </p>
 
                 {notice && (
                   <div className="mt-4 flex gap-2.5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm leading-5 text-blue-900" role="status">
@@ -209,40 +214,39 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
                 )}
 
                 {config?.demoLoginEnabled && (
-                  <div id="demo-access" className={`${notice ? 'mt-4' : 'mt-7 lg:mt-5 2xl:mt-7'} border-t border-[#e4e8ef] pt-6 lg:pt-4 2xl:pt-6`}>
-                    <div className="mb-4 flex items-start justify-between gap-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-semibold text-on-surface">Demo access</h3>
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-800">Development only</span>
-                        </div>
-                        <p className="mt-1 text-xs leading-5 text-outline">Preview a role while Microsoft access is being configured.</p>
-                      </div>
+                  <div id="demo-access" className={`${notice ? 'mt-4' : 'mt-6'} border-t border-[#e4e8ef] pt-5`}>
+                    <button
+                      type="button"
+                      onClick={() => setDemoOpen(open => !open)}
+                      aria-expanded={demoOpen}
+                      aria-controls="demo-access-panel"
+                      className="flex w-full items-center justify-between gap-4 rounded-lg p-2 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+                    >
+                      <span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-on-surface">Demo access</span>
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-800">Development only</span>
+                        </span>
+                        <span className="mt-1 block text-xs text-outline">Preview the system with a test role.</span>
+                      </span>
+                      <span className="material-symbols-outlined text-[20px] text-outline">{demoOpen ? 'expand_less' : 'expand_more'}</span>
+                    </button>
+
+                    {demoOpen && <div id="demo-access-panel" className="mt-4 rounded-lg border border-[#e1e6ee] bg-[#f8fafc] p-4">
+                    <label className="block text-xs font-semibold text-on-surface-variant" htmlFor="demo-role">Role</label>
+                    <div className="relative mt-2">
+                      <select
+                        id="demo-role"
+                        value={selectedRole}
+                        onChange={event => chooseRole(event.target.value)}
+                        className="h-11 w-full appearance-none rounded-lg border border-[#cbd2dc] bg-white pl-4 pr-10 text-sm font-medium text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                      >
+                        {roles.map(role => <option key={role} value={role}>{ROLE_META[role]?.label || role}</option>)}
+                      </select>
+                      <span className="material-symbols-outlined pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[20px] text-outline">expand_more</span>
                     </div>
 
-                    <fieldset>
-                      <legend className="mb-2 text-xs font-semibold text-on-surface-variant">Choose a role</legend>
-                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-                        {roles.map(role => {
-                          const meta = ROLE_META[role] || { label: role, icon: 'person' };
-                          const active = selectedRole === role;
-                          return (
-                            <button
-                              type="button"
-                              key={role}
-                              onClick={() => chooseRole(role)}
-                              aria-pressed={active}
-                              className={`flex min-h-16 flex-col items-center justify-center gap-1 rounded-lg border px-1.5 py-2 text-[11px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 lg:min-h-14 2xl:min-h-16 ${active ? 'border-primary bg-blue-50 text-primary' : 'border-[#dce1e9] text-outline hover:border-[#aeb7c5] hover:bg-slate-50'}`}
-                            >
-                              <span className="material-symbols-outlined text-[20px]">{meta.icon}</span>
-                              {meta.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </fieldset>
-
-                    <label className="mt-4 block text-xs font-semibold text-on-surface-variant lg:mt-3 2xl:mt-4" htmlFor="demo-account">Demo account</label>
+                    <label className="mt-4 block text-xs font-semibold text-on-surface-variant" htmlFor="demo-account">Demo account</label>
                     <div className="relative mt-2">
                       <select
                         id="demo-account"
@@ -264,18 +268,19 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
                       type="button"
                       onClick={continueAsDemo}
                       disabled={!selectedUserId}
-                      className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition hover:bg-[#003da5] focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 lg:mt-4 2xl:mt-5"
+                      className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-primary bg-white px-4 text-sm font-semibold text-primary transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Open demo in new tab
+                      Launch demo as {ROLE_META[selectedRole]?.label || selectedRole}
                       <span className="material-symbols-outlined text-[18px]">open_in_new</span>
                     </button>
+                    </div>}
                   </div>
                 )}
               </>
             )}
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-outline lg:hidden 2xl:flex">
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-outline lg:hidden">
             <span className="inline-flex items-center gap-1.5"><span className="material-symbols-outlined text-[16px]">lock</span>Authorized users only</span>
             <span>Need access? Contact your administrator.</span>
           </div>
