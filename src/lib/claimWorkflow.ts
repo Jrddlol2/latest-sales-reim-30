@@ -7,6 +7,46 @@ export function claimTypeIcon(type: ClaimType): string {
   return 'receipt_long';
 }
 
+export interface RequestAmountPresentation {
+  expenseLabel: 'Expense total' | 'Requested' | 'Amount spent';
+  expenseAmount: number;
+  reimbursementLabel: 'Paid' | 'Approved' | 'Released' | 'Pending' | 'Not applicable';
+  reimbursementAmount?: number;
+}
+
+/** Preserve the business meaning of amounts shown in mixed request tables. */
+export function getRequestAmountPresentation(claim: Claim): RequestAmountPresentation {
+  if (claim.type === 'Cash Advance') {
+    if (claim.paidAmount > 0) {
+      return { expenseLabel: 'Requested', expenseAmount: claim.claimedAmount, reimbursementLabel: 'Released', reimbursementAmount: claim.paidAmount };
+    }
+    if (claim.approvedAmount !== undefined) {
+      return { expenseLabel: 'Requested', expenseAmount: claim.claimedAmount, reimbursementLabel: 'Approved', reimbursementAmount: claim.approvedAmount };
+    }
+    return {
+      expenseLabel: 'Requested',
+      expenseAmount: claim.claimedAmount,
+      reimbursementLabel: [ClaimStatus.SUBMITTED, ClaimStatus.PENDING_APPROVAL].includes(claim.status) ? 'Pending' : 'Not applicable',
+    };
+  }
+
+  if (claim.type === 'Liquidation') {
+    return { expenseLabel: 'Amount spent', expenseAmount: claim.claimedAmount, reimbursementLabel: 'Not applicable' };
+  }
+
+  if (claim.paidAmount > 0) {
+    return { expenseLabel: 'Expense total', expenseAmount: claim.claimedAmount, reimbursementLabel: 'Paid', reimbursementAmount: claim.paidAmount };
+  }
+  if (claim.approvedAmount !== undefined) {
+    return { expenseLabel: 'Expense total', expenseAmount: claim.claimedAmount, reimbursementLabel: 'Approved', reimbursementAmount: claim.approvedAmount };
+  }
+  return {
+    expenseLabel: 'Expense total',
+    expenseAmount: claim.claimedAmount,
+    reimbursementLabel: [ClaimStatus.SUBMITTED, ClaimStatus.PENDING_APPROVAL, ClaimStatus.REVIEW_MEETING_SCHEDULED].includes(claim.status) ? 'Pending' : 'Not applicable',
+  };
+}
+
 export function getClaimAgingInfo(submittedAt: string | undefined, createdAt: string) {
   const start = new Date(submittedAt || createdAt).getTime();
   const days = Math.max(0, Math.floor((Date.now() - start) / (1000 * 60 * 60 * 24)));

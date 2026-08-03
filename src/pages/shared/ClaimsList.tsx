@@ -12,7 +12,7 @@ import { Pagination } from '../../components/ui/Pagination';
 import { ClaimStatus, UserRole } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDate } from '../../lib/date';
-import { claimTypeIcon, isFinanceVisibleClaim } from '../../lib/claimWorkflow';
+import { claimTypeIcon, getRequestAmountPresentation, isFinanceVisibleClaim } from '../../lib/claimWorkflow';
 
 const ACTIVE_STATUSES = [ClaimStatus.DRAFT, ClaimStatus.PENDING_APPROVAL, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM];
 
@@ -303,7 +303,7 @@ export function ClaimsList() {
           </div>
         </CardHeader>
         <div className="overflow-x-auto hidden md:block">
-          <table className="w-full text-left">
+          <table className="w-full min-w-[1040px] text-left">
             <thead className="bg-brand-table-header text-on-surface-variant font-label-sm uppercase tracking-wider">
               <tr>
                 <th className="px-6 py-4">ID</th>
@@ -312,12 +312,15 @@ export function ClaimsList() {
                 <th className="px-4 py-4">Client</th>
                 <th className="px-4 py-4">Location</th>
                 <th className="px-4 py-4">Submitted</th>
-                <th className="px-4 py-4">Amount</th>
+                <th className="px-3 py-4" title="Receipt total for reimbursements; requested amount for cash advances.">Expense Total</th>
+                <th className="px-3 py-4" title="Approved or paid reimbursement; approved or released amount for cash advances.">Reimbursed</th>
                 <th className="px-6 py-4">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-border font-body-base">
-              {paginatedClaims.map(claim => (
+              {paginatedClaims.map(claim => {
+                const amounts = getRequestAmountPresentation(claim);
+                return (
                 <tr key={claim.id} className="hover:bg-brand-row-hover transition-colors cursor-pointer" onClick={() => navigate(`/claims/${claim.id}`)}>
                   <td className="px-6 py-4 font-mono-data font-medium">{claim.ref}</td>
                   <td className="px-4 py-4">
@@ -330,15 +333,30 @@ export function ClaimsList() {
                   <td className="px-4 py-4 text-on-surface-variant">{claim.client || '—'}</td>
                   <td className="px-4 py-4 text-on-surface-variant">{claim.location || '—'}</td>
                   <td className="px-4 py-4 text-on-surface-variant whitespace-nowrap">{formatDate(claim.submittedAt || claim.createdAt)}</td>
-                  <td className="px-4 py-4 font-semibold">{formatMoney(claim.total)}</td>
+                  <td className="px-3 py-4 whitespace-nowrap">
+                    <span className="block font-mono-data font-semibold text-on-surface">{formatMoney(amounts.expenseAmount)}</span>
+                    {amounts.expenseLabel !== 'Expense total' && <span className="block text-[11px] text-outline">{amounts.expenseLabel}</span>}
+                  </td>
+                  <td className="px-3 py-4 whitespace-nowrap">
+                    {amounts.reimbursementAmount !== undefined ? (
+                      <>
+                        <span className="block font-mono-data font-bold text-primary">{formatMoney(amounts.reimbursementAmount)}</span>
+                        <span className="block text-[11px] font-semibold text-primary">{amounts.reimbursementLabel}</span>
+                      </>
+                    ) : (
+                      <span className={amounts.reimbursementLabel === 'Pending' ? 'text-sm font-semibold text-tertiary' : 'text-outline'}>
+                        {amounts.reimbursementLabel === 'Pending' ? 'Pending' : '—'}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-6 py-4">
                     <StatusBadge status={claim.status} />
                   </td>
                 </tr>
-              ))}
+              );})}
               {filteredClaims.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-6 py-8 text-center text-on-surface-variant">
+                  <td colSpan={9} className="px-6 py-8 text-center text-on-surface-variant">
                     No claims found.
                   </td>
                 </tr>
@@ -349,7 +367,12 @@ export function ClaimsList() {
         
         {/* Mobile View */}
         <div className="md:hidden divide-y divide-outline-variant">
-          {paginatedClaims.map(claim => (
+          {paginatedClaims.map(claim => {
+            const amounts = getRequestAmountPresentation(claim);
+            const reimbursementTitle = amounts.reimbursementAmount !== undefined
+              ? amounts.reimbursementLabel
+              : claim.type === 'Cash Advance' ? 'Released' : 'Reimbursed';
+            return (
             <div key={claim.id} className="p-4 flex flex-col gap-3 cursor-pointer hover:bg-surface-container-low transition-colors" onClick={() => navigate(`/claims/${claim.id}`)}>
               <div className="flex justify-between items-start">
                 <div className="flex flex-col">
@@ -362,15 +385,24 @@ export function ClaimsList() {
               {(claim.client || claim.location) && (
                 <p className="text-body-sm text-outline">{[claim.client, claim.location].filter(Boolean).join(' • ')}</p>
               )}
-              <div className="flex justify-between items-center mt-1">
-                <div>
-                  <span className="font-bold text-on-surface block">{formatMoney(claim.total)}</span>
-                  <span className="text-xs text-outline">{formatDate(claim.submittedAt || claim.createdAt)}</span>
+              <div className="flex justify-between items-end gap-4 mt-1">
+                <div className="flex flex-wrap gap-x-6 gap-y-2">
+                  <div>
+                    <span className="block text-[11px] text-outline">{amounts.expenseLabel}</span>
+                    <span className="font-mono-data font-bold text-on-surface block">{formatMoney(amounts.expenseAmount)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[11px] text-outline">{reimbursementTitle}</span>
+                    <span className="font-mono-data font-bold text-primary block">{amounts.reimbursementAmount !== undefined ? formatMoney(amounts.reimbursementAmount) : amounts.reimbursementLabel === 'Pending' ? 'Pending' : '—'}</span>
+                  </div>
                 </div>
-                <span className="material-symbols-outlined text-outline text-[18px]">chevron_right</span>
+                <div className="text-right shrink-0">
+                  <span className="text-xs text-outline">{formatDate(claim.submittedAt || claim.createdAt)}</span>
+                  <span className="material-symbols-outlined text-outline text-[18px] block">chevron_right</span>
+                </div>
               </div>
             </div>
-          ))}
+          );})}
           {filteredClaims.length === 0 && (
             <div className="p-8 text-center text-on-surface-variant">
               No claims found.

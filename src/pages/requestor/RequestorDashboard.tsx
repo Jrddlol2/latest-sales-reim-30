@@ -10,6 +10,7 @@ import { useAppContext } from '../../components/AppContext';
 import { ClaimStatus } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatLongDate } from '../../lib/date';
+import { getRequestAmountPresentation } from '../../lib/claimWorkflow';
 
 const ACTIVE_STATUSES = [ClaimStatus.DRAFT, ClaimStatus.PENDING_APPROVAL, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM];
 const LIQUIDATION_DEADLINE_DAYS = 7; // mirrors server.ts's LIQUIDATION_DEADLINE_DAYS
@@ -124,7 +125,7 @@ export function RequestorDashboard() {
                   <th className="px-6 py-4">ID</th>
                   <th className="px-4 py-4">Type</th>
                   <th className="px-4 py-4">Purpose</th>
-                  <th className="px-4 py-4">Amount</th>
+                  <th className="px-4 py-4">Amounts</th>
                   <th className="px-6 py-4">Status</th>
                 </tr>
               </thead>
@@ -136,17 +137,27 @@ export function RequestorDashboard() {
                       <p className="font-label-md">No claims submitted yet.</p>
                     </td>
                   </tr>
-                ) : myClaims.slice(0, 5).map(claim => (
+                ) : myClaims.slice(0, 5).map(claim => {
+                  const amounts = getRequestAmountPresentation(claim);
+                  const reimbursementTitle = amounts.reimbursementAmount !== undefined
+                    ? amounts.reimbursementLabel
+                    : claim.type === 'Cash Advance' ? 'Released' : 'Reimbursed';
+                  return (
                   <tr key={claim.id} className="hover:bg-brand-row-hover transition-colors cursor-pointer" onClick={() => navigate(`/claims/${claim.id}`)}>
                     <td className="px-6 py-4 font-mono-data font-medium">{claim.ref}</td>
                     <td className="px-4 py-4">{claim.type}</td>
                     <td className="px-4 py-4">{claim.purpose}</td>
-                    <td className="px-4 py-4 font-semibold">{formatMoney(claim.total)}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className="block text-[11px] text-outline">{amounts.expenseLabel}</span>
+                      <span className="block font-mono-data text-sm font-semibold text-on-surface">{formatMoney(amounts.expenseAmount)}</span>
+                      <span className="mt-1 block text-[11px] text-outline">{reimbursementTitle}</span>
+                      <span className="block font-mono-data text-sm font-bold text-primary">{amounts.reimbursementAmount !== undefined ? formatMoney(amounts.reimbursementAmount) : amounts.reimbursementLabel === 'Pending' ? 'Pending' : '—'}</span>
+                    </td>
                     <td className="px-6 py-4">
                       <StatusBadge status={claim.status} />
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           </div>
@@ -157,7 +168,12 @@ export function RequestorDashboard() {
               <div className="p-8 text-center text-on-surface-variant">
                 No claims found.
               </div>
-            ) : myClaims.slice(0, 5).map(claim => (
+            ) : myClaims.slice(0, 5).map(claim => {
+              const amounts = getRequestAmountPresentation(claim);
+              const reimbursementTitle = amounts.reimbursementAmount !== undefined
+                ? amounts.reimbursementLabel
+                : claim.type === 'Cash Advance' ? 'Released' : 'Reimbursed';
+              return (
               <div key={claim.id} className="p-4 flex flex-col gap-3 cursor-pointer hover:bg-surface-container-low transition-colors" onClick={() => navigate(`/claims/${claim.id}`)}>
                 <div className="flex justify-between items-start">
                   <div className="flex flex-col">
@@ -167,12 +183,21 @@ export function RequestorDashboard() {
                   <StatusBadge status={claim.status} />
                 </div>
                 <p className="text-body-base font-semibold">{claim.purpose}</p>
-                <div className="flex justify-between items-center mt-1">
-                  <span className="font-bold text-on-surface">{formatMoney(claim.total)}</span>
+                <div className="flex justify-between items-end gap-4 mt-1">
+                  <div className="flex flex-wrap gap-x-6 gap-y-2">
+                    <div>
+                      <span className="block text-[11px] text-outline">{amounts.expenseLabel}</span>
+                      <span className="font-mono-data font-bold text-on-surface">{formatMoney(amounts.expenseAmount)}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-outline">{reimbursementTitle}</span>
+                      <span className="font-mono-data font-bold text-primary">{amounts.reimbursementAmount !== undefined ? formatMoney(amounts.reimbursementAmount) : amounts.reimbursementLabel === 'Pending' ? 'Pending' : '—'}</span>
+                    </div>
+                  </div>
                   <span className="material-symbols-outlined text-outline text-[18px]">chevron_right</span>
                 </div>
               </div>
-            ))}
+            );})}
           </div>
         </Card>
 
