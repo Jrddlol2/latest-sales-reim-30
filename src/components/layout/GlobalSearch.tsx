@@ -190,8 +190,6 @@ export function GlobalSearch() {
         onChange={event => { setQuery(event.target.value); setOpen(true); }}
         onKeyDown={handleInputKeyDown}
       />
-      <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-outline-variant bg-surface px-1.5 py-0.5 text-[10px] font-medium text-outline xl:block">Ctrl K</kbd>
-
       {open && (
         <div id="global-search-results" role="listbox" className="fixed left-3 right-3 top-[64px] z-30 mt-2 overflow-hidden rounded-xl border border-outline-variant bg-surface shadow-xl sm:absolute sm:left-0 sm:right-0 sm:top-full">
           {query.trim().length < 2 ? (
