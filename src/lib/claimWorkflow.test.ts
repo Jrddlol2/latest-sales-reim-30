@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Claim, ClaimStatus } from '../types';
-import { getRequestAmountPresentation } from './claimWorkflow';
+import { getRequestAmountPresentation, isFinanceVisibleClaim } from './claimWorkflow';
 
 const claim = (overrides: Partial<Claim>): Claim => ({
   id: 'c1', ref: 'REIM-1', requestorId: 'u1', status: ClaimStatus.PENDING_APPROVAL,
@@ -25,5 +25,30 @@ describe('getRequestAmountPresentation', () => {
     expect(getRequestAmountPresentation(claim({ type: 'Cash Advance', claimedAmount: 10000, total: 10000, status: ClaimStatus.RELEASED, approvedAmount: 10000, paidAmount: 10000 }))).toEqual({
       expenseLabel: 'Requested', expenseAmount: 10000, reimbursementLabel: 'Released', reimbursementAmount: 10000,
     });
+  });
+});
+
+describe('isFinanceVisibleClaim', () => {
+  it.each([
+    ClaimStatus.DRAFT,
+    ClaimStatus.SUBMITTED,
+    ClaimStatus.PENDING_APPROVAL,
+    ClaimStatus.REJECTED,
+    ClaimStatus.RETURNED,
+  ])('excludes pre-Finance status %s', status => {
+    expect(isFinanceVisibleClaim(claim({ status }))).toBe(false);
+  });
+
+  it.each([
+    ClaimStatus.APPROVED,
+    ClaimStatus.PROCESSING,
+    ClaimStatus.READY_FOR_CLAIM,
+    ClaimStatus.COMPLETED,
+    ClaimStatus.RELEASED,
+    ClaimStatus.LIQUIDATED,
+    ClaimStatus.REVIEWED,
+    ClaimStatus.CLOSED,
+  ])('includes approved-onward status %s', status => {
+    expect(isFinanceVisibleClaim(claim({ status }))).toBe(true);
   });
 });

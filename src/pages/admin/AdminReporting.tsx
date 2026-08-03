@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AnalyticsFilters } from '../../components/shared/AnalyticsFilters';
 import { useToast } from '../../components/shared/ToastContext';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
@@ -17,26 +17,25 @@ import {
 import { formatDate } from '../../lib/date';
 import { formatAxisMoney, formatMoney } from '../../lib/money';
 import { ClaimStatus } from '../../types';
+import { CHART_ANIMATION_PROPS, CHART_AXIS_PROPS, CHART_COLORS, CHART_GRID_PROPS, calculatePercentChange } from '../../lib/chartTheme';
+import { ChartEmptyState, ChartLegend, ChartTooltip, MetricSkeleton, TrendBadge, formatCompactChartValue } from '../../components/shared/ChartPrimitives';
 
-const COLOR_PRIMARY = '#004ac6';
-const COLOR_SECONDARY = '#565e74';
-const COLOR_TERTIARY = '#943700';
 const PAGE_SIZE = 20;
 
 const STATUS_COLOR: Partial<Record<ClaimStatus, string>> = {
-  [ClaimStatus.DRAFT]: '#9ca3af',
-  [ClaimStatus.SUBMITTED]: COLOR_SECONDARY,
-  [ClaimStatus.PENDING_APPROVAL]: COLOR_SECONDARY,
-  [ClaimStatus.APPROVED]: COLOR_PRIMARY,
-  [ClaimStatus.PROCESSING]: COLOR_PRIMARY,
-  [ClaimStatus.READY_FOR_CLAIM]: COLOR_PRIMARY,
-  [ClaimStatus.RELEASED]: COLOR_PRIMARY,
-  [ClaimStatus.REVIEWED]: COLOR_PRIMARY,
-  [ClaimStatus.COMPLETED]: '#0d9488',
-  [ClaimStatus.LIQUIDATED]: '#0d9488',
-  [ClaimStatus.CLOSED]: '#0d9488',
-  [ClaimStatus.RETURNED]: COLOR_TERTIARY,
-  [ClaimStatus.REJECTED]: '#ba1a1a',
+  [ClaimStatus.DRAFT]: CHART_COLORS.muted,
+  [ClaimStatus.SUBMITTED]: CHART_COLORS.secondary,
+  [ClaimStatus.PENDING_APPROVAL]: CHART_COLORS.secondary,
+  [ClaimStatus.APPROVED]: CHART_COLORS.primary,
+  [ClaimStatus.PROCESSING]: CHART_COLORS.primary,
+  [ClaimStatus.READY_FOR_CLAIM]: CHART_COLORS.primary,
+  [ClaimStatus.RELEASED]: CHART_COLORS.primary,
+  [ClaimStatus.REVIEWED]: CHART_COLORS.primary,
+  [ClaimStatus.COMPLETED]: CHART_COLORS.success,
+  [ClaimStatus.LIQUIDATED]: CHART_COLORS.success,
+  [ClaimStatus.CLOSED]: CHART_COLORS.success,
+  [ClaimStatus.RETURNED]: CHART_COLORS.tertiary,
+  [ClaimStatus.REJECTED]: CHART_COLORS.error,
 };
 
 interface ReportingProps {
@@ -89,7 +88,7 @@ export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
   };
 
   const metrics = summary?.metrics;
-  const categoryData = summary?.breakdowns.byCategory || [];
+  const categoryData = (summary?.breakdowns.byCategory || []).slice(0, 8);
   const departmentData = (summary?.breakdowns.byDepartment || []).slice(0, 10);
   const requestorData = (summary?.breakdowns.byRequestor || []).slice(0, 10);
   const statusData = summary?.breakdowns.byStatus || [];
@@ -117,6 +116,10 @@ export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
     });
     return months;
   }, [summary]);
+  const currentMonth = monthlyMovement.at(-1) || { claimed: 0, paid: 0 };
+  const previousMonth = monthlyMovement.at(-2) || { claimed: 0, paid: 0 };
+  const claimedChange = calculatePercentChange(currentMonth.claimed, previousMonth.claimed);
+  const paidChange = calculatePercentChange(currentMonth.paid, previousMonth.paid);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-12">
@@ -157,22 +160,22 @@ export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="p-6 bg-surface-container-low">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Claimed / Reported</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{loading ? '…' : formatMoney(metrics?.claimedAmount || 0)}</p>
+          <p className="font-mono-data text-2xl font-bold text-on-surface">{loading ? <MetricSkeleton label="Loading claimed amount" /> : formatMoney(metrics?.claimedAmount || 0)}</p>
           <p className="text-[12px] text-outline mt-1">{metrics?.recordCount || 0} filtered records</p>
         </Card>
         <Card className="p-6 bg-surface-container-low">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Approved / Reviewed</p>
-          <p className="font-mono-data text-2xl font-bold text-primary">{loading ? '…' : formatMoney(metrics?.approvedAmount || 0)}</p>
+          <p className="font-mono-data text-2xl font-bold text-primary">{loading ? <MetricSkeleton label="Loading approved amount" /> : formatMoney(metrics?.approvedAmount || 0)}</p>
           <p className="text-[12px] text-outline mt-1">Accepted for processing</p>
         </Card>
         <Card className="p-6 bg-surface-container-low">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Paid / Released</p>
-          <p className="font-mono-data text-2xl font-bold text-tertiary">{loading ? '…' : formatMoney(metrics?.paidAmount || 0)}</p>
+          <p className="font-mono-data text-2xl font-bold text-tertiary">{loading ? <MetricSkeleton label="Loading paid amount" /> : formatMoney(metrics?.paidAmount || 0)}</p>
           <p className="text-[12px] text-outline mt-1">Actual company cash movement</p>
         </Card>
         <Card className="p-6 bg-surface-container-low">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Outstanding</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{loading ? '…' : formatMoney(metrics?.outstandingAmount || 0)}</p>
+          <p className="font-mono-data text-2xl font-bold text-on-surface">{loading ? <MetricSkeleton label="Loading outstanding amount" /> : formatMoney(metrics?.outstandingAmount || 0)}</p>
           <p className="text-[12px] text-outline mt-1">
             {metrics?.avgApprovalTurnaroundDays == null
               ? 'No complete approval intervals'
@@ -185,7 +188,7 @@ export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
         <CardHeader className="bg-surface-container-low border-b border-outline-variant">
           <div>
             <h3 className="font-headline-sm text-on-surface">
-              {audience === 'finance' ? 'Cash exposure and releases' : 'Submission and payout movement'}
+              {audience === 'finance' ? 'Monthly obligations and releases' : 'Monthly claimed and paid'}
             </h3>
             <p className="text-xs text-outline mt-1">
               {audience === 'finance'
@@ -193,24 +196,25 @@ export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
                 : 'Track demand entering the system against value successfully paid out.'}
             </p>
           </div>
+          <div className="hidden flex-col items-end gap-1.5 lg:flex">
+            <TrendBadge value={claimedChange} context="claimed vs prior month" />
+            <TrendBadge value={paidChange} context="paid vs prior month" />
+          </div>
         </CardHeader>
         <CardContent className="p-6 h-80">
+          <div className="h-full" role="img" aria-label={`Six-month claimed and paid movement. Latest claimed ${formatMoney(currentMonth.claimed)} and paid ${formatMoney(currentMonth.paid)}.`}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={monthlyMovement} margin={{ top: 8, right: 8, left: 4, bottom: 0 }}>
-              <defs>
-                <linearGradient id={`claimed-${audience}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={COLOR_PRIMARY} stopOpacity={0.24} />
-                  <stop offset="95%" stopColor={COLOR_PRIMARY} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="month" axisLine={false} tickLine={false} stroke="#565e74" fontSize={12} />
-              <YAxis axisLine={false} tickLine={false} stroke="#565e74" fontSize={12} tickFormatter={formatAxisMoney} width={72} />
-              <Tooltip formatter={(value: number, key: string) => [formatMoney(value), key === 'claimed' ? 'Claimed' : 'Paid']} />
-              <Area type="monotone" dataKey="claimed" stroke={COLOR_PRIMARY} strokeWidth={2.5} fill={`url(#claimed-${audience})`} />
-              <Area type="monotone" dataKey="paid" stroke="#0d9488" strokeWidth={2.5} fill="transparent" />
-            </AreaChart>
+            <BarChart data={monthlyMovement} margin={{ top: 8, right: 8, left: 4, bottom: 8 }} accessibilityLayer>
+              <CartesianGrid {...CHART_GRID_PROPS} vertical={false} />
+              <XAxis dataKey="month" {...CHART_AXIS_PROPS} />
+              <YAxis {...CHART_AXIS_PROPS} tickFormatter={formatAxisMoney} width={72} />
+              <Tooltip content={<ChartTooltip labels={{ claimed: 'Claimed', paid: 'Paid' }} valueTypes={{ claimed: 'currency', paid: 'currency' }} />} />
+              <Legend verticalAlign="bottom" content={<ChartLegend />} />
+              <Bar dataKey="claimed" name="Claimed" fill={CHART_COLORS.primary} radius={[5, 5, 0, 0]} maxBarSize={34} {...CHART_ANIMATION_PROPS} />
+              <Bar dataKey="paid" name="Paid" fill={CHART_COLORS.success} radius={[5, 5, 0, 0]} maxBarSize={34} {...CHART_ANIMATION_PROPS} />
+            </BarChart>
           </ResponsiveContainer>
+          </div>
         </CardContent>
       </Card>
 
@@ -219,21 +223,21 @@ export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
           title={audience === 'finance' ? 'Expense exposure by category' : 'Reported expenses by category'}
           data={categoryData}
           dataKey="amount"
-          color={COLOR_PRIMARY}
+          color={CHART_COLORS.primary}
           emptyText="No expense lines match these filters."
         />
         <MetricBarCard
           title={audience === 'finance' ? 'Obligations by department' : 'Adoption and value by department'}
           data={departmentData}
           dataKey="claimedAmount"
-          color={COLOR_SECONDARY}
+          color={CHART_COLORS.secondary}
           emptyText="No department activity matches these filters."
         />
         <MetricBarCard
           title={audience === 'finance' ? 'Highest-value requestors' : 'Top requestors by claimed value'}
           data={requestorData}
           dataKey="claimedAmount"
-          color={COLOR_TERTIARY}
+          color={CHART_COLORS.tertiary}
           emptyText="No requestor activity matches these filters."
         />
         <Card>
@@ -245,17 +249,18 @@ export function AdminReporting({ audience = 'admin' }: ReportingProps = {}) {
           </CardHeader>
           <CardContent className="p-6 h-80">
             {statusData.length === 0 ? (
-              <EmptyChart text="No statuses match these filters." />
+              <ChartEmptyState message="No statuses match the current filters." />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={statusData} layout="vertical" margin={{ left: 8 }}>
-                  <XAxis type="number" stroke="#565e74" fontSize={12} allowDecimals={false} />
-                  <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={11} width={115} interval={0} />
-                  <Tooltip formatter={(value: any) => [value, 'Records']} />
-                  <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                <BarChart data={statusData} layout="vertical" margin={{ left: 8, right: 40 }} accessibilityLayer>
+                  <XAxis type="number" {...CHART_AXIS_PROPS} allowDecimals={false} />
+                  <YAxis type="category" dataKey="name" {...CHART_AXIS_PROPS} fontSize={11} width={115} interval={0} />
+                  <Tooltip content={<ChartTooltip labels={{ count: 'Records' }} valueTypes={{ count: 'count' }} defaultValueType="count" />} />
+                  <Bar dataKey="count" name="Records" radius={[0, 4, 4, 0]} {...CHART_ANIMATION_PROPS}>
                     {statusData.map(entry => (
-                      <Cell key={entry.name} fill={STATUS_COLOR[entry.name as ClaimStatus] || '#9ca3af'} />
+                      <Cell key={entry.name} fill={STATUS_COLOR[entry.name as ClaimStatus] || CHART_COLORS.muted} />
                     ))}
+                    {statusData.length <= 8 && <LabelList dataKey="count" position="right" formatter={value => formatCompactChartValue(value, 'count')} className="fill-on-surface font-mono-data text-[11px]" />}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -343,24 +348,22 @@ function MetricBarCard({
       </CardHeader>
       <CardContent className="p-6 h-80">
         {data.length === 0 ? (
-          <EmptyChart text={emptyText} />
+          <ChartEmptyState message={emptyText} />
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} layout="vertical" margin={{ left: 8 }}>
-              <XAxis type="number" stroke="#565e74" fontSize={12} tickFormatter={value => formatAxisMoney(value)} />
-              <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={11} width={115} interval={0} />
-              <Tooltip formatter={(value: any) => [formatMoney(value), 'Amount']} />
-              <Bar dataKey={dataKey} fill={color} radius={[0, 4, 4, 0]} />
+            <BarChart data={data} layout="vertical" margin={{ left: 8, right: 68 }} accessibilityLayer>
+              <XAxis type="number" {...CHART_AXIS_PROPS} tickFormatter={formatAxisMoney} />
+              <YAxis type="category" dataKey="name" {...CHART_AXIS_PROPS} fontSize={11} width={115} interval={0} />
+              <Tooltip content={<ChartTooltip labels={{ [dataKey]: 'Amount' }} valueTypes={{ [dataKey]: 'currency' }} />} />
+              <Bar dataKey={dataKey} name="Amount" fill={color} radius={[0, 4, 4, 0]} {...CHART_ANIMATION_PROPS}>
+                {data.length <= 8 && <LabelList dataKey={dataKey} position="right" formatter={value => formatCompactChartValue(value, 'currency')} className="fill-on-surface font-mono-data text-[11px]" />}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         )}
       </CardContent>
     </Card>
   );
-}
-
-function EmptyChart({ text }: { text: string }) {
-  return <div className="h-full flex items-center justify-center text-center text-sm text-outline">{text}</div>;
 }
 
 export function FinanceAnalytics() {

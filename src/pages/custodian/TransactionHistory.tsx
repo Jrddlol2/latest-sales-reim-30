@@ -65,9 +65,9 @@ export function TransactionHistory() {
       <div className="flex justify-between items-end">
         <div>
           <span className="font-label-sm text-primary font-bold tracking-wider uppercase">
-            {currentUser.role === UserRole.FINANCE ? 'Finance Records' : 'Custodian Tools'}
+            {currentUser.role === UserRole.FINANCE ? 'Finance Archive' : 'Custodian Tools'}
           </span>
-          <h1 className="font-display text-display text-on-surface mt-1">Transaction History</h1>
+          <h1 className="font-display text-display text-on-surface mt-1">{currentUser.role === UserRole.FINANCE ? 'Paid & Completed' : 'Transaction History'}</h1>
         </div>
       </div>
 

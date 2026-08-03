@@ -2,13 +2,12 @@ import { useMemo, useState } from 'react';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Select } from '../../components/ui/Input';
 import { useAppContext } from '../../components/AppContext';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, LabelList, ReferenceLine } from 'recharts';
 import { formatMoney, formatAxisMoney } from '../../lib/money';
 import { Claim, ClaimStatus, ClaimType, StatusHistory } from '../../types';
 import { isCustodianProcessingClaim } from '../../lib/claimWorkflow';
-
-const COLOR_PRIMARY = '#004ac6';
-const COLOR_SECONDARY = '#565e74';
+import { CHART_ANIMATION_PROPS, CHART_AXIS_PROPS, CHART_COLORS, CHART_GRID_PROPS, calculatePercentChange } from '../../lib/chartTheme';
+import { ChartEmptyState, ChartTooltip, TrendBadge, formatCompactChartValue } from '../../components/shared/ChartPrimitives';
 
 /** The status that means "the custodian is done with this one", per type --
  *  Cash Advance's final custodian action is Released (what happens to it
@@ -107,8 +106,13 @@ export function CustodianAnalytics() {
     return Object.entries(totals).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) })).sort((a, b) => b.amount - a.amount);
   }, [processedClaims]);
 
+  const volumeAverage = volumeOverTime.reduce((sum, month) => sum + month.amount, 0) / Math.max(volumeOverTime.length, 1);
+  const latestVolume = volumeOverTime.at(-1)?.amount || 0;
+  const previousVolume = volumeOverTime.at(-2)?.amount || 0;
+  const volumeChange = calculatePercentChange(latestVolume, previousVolume);
+
   return (
-    <div className="space-y-8 animate-in fade-in duration-500 pb-12">
+    <div className="space-y-6 animate-in fade-in duration-500 pb-10">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-display text-on-surface">Custodian Analytics</h1>
@@ -124,65 +128,62 @@ export function CustodianAnalytics() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
-        <Card className="p-6 bg-surface-container-low">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
+        <Card className="p-4 sm:p-5 border-l-4 border-l-primary">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Total Volume Processed</p>
-          <p className="font-mono-data text-2xl font-bold text-primary">{formatMoney(totalVolume)}</p>
+          <p className="font-mono-data text-xl sm:text-2xl font-bold text-primary">{formatMoney(totalVolume)}</p>
           <p className="text-[12px] text-outline mt-1">{processedClaims.length} transactions, all time</p>
         </Card>
 
-        <Card className="p-6 bg-surface-container-low">
+        <Card className="p-4 sm:p-5">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Active Queue</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{activeQueue.length}</p>
+          <p className="font-mono-data text-xl sm:text-2xl font-bold text-on-surface">{activeQueue.length}</p>
           <p className="text-[12px] text-outline mt-1">Awaiting custodian action</p>
         </Card>
 
-        <Card className="p-6 bg-surface-container-low">
+        <Card className="p-4 sm:p-5 border-l-4 border-l-tertiary">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Ready / Unconfirmed</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{formatMoney(readyValue)}</p>
+          <p className="font-mono-data text-xl sm:text-2xl font-bold text-on-surface">{formatMoney(readyValue)}</p>
           <p className="text-[12px] text-outline mt-1">{readyForClaim.length} awaiting requestor</p>
         </Card>
 
-        <Card className="p-6 bg-surface-container-low">
+        <Card className="p-4 sm:p-5">
           <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Avg Processing Time</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{avgProcessingDays === null ? '—' : `${avgProcessingDays.toFixed(1)} Day${avgProcessingDays.toFixed(1) === '1.0' ? '' : 's'}`}</p>
+          <p className="font-mono-data text-xl sm:text-2xl font-bold text-on-surface">{avgProcessingDays === null ? '—' : `${avgProcessingDays.toFixed(1)} Day${avgProcessingDays.toFixed(1) === '1.0' ? '' : 's'}`}</p>
           <p className="text-[12px] text-outline mt-1">Approved/Submitted → Released/Closed</p>
-        </Card>
-
-        <Card className="p-6 bg-surface-container-low">
-          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Reimbursements Completed</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{processedClaims.filter(c => c.type === 'Reimbursement').length}</p>
-          <p className="text-[12px] text-outline mt-1">All time</p>
-        </Card>
-
-        <Card className="p-6 bg-surface-container-low">
-          <p className="text-xs font-bold uppercase tracking-wider text-outline mb-1">Cash Advances Released</p>
-          <p className="font-mono-data text-2xl font-bold text-on-surface">{processedClaims.filter(c => c.type === 'Cash Advance').length}</p>
-          <p className="text-[12px] text-outline mt-1">All time</p>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <Card className="lg:col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="lg:col-span-2" aria-label={`Released volume for the last ${MONTHS_BACK} months. Latest month ${formatMoney(latestVolume)}.`}>
           <CardHeader className="bg-surface-container-low border-b border-outline-variant">
-            <h3 className="font-headline-sm text-on-surface">Volume Released — Last {MONTHS_BACK} Months</h3>
+            <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-headline-sm text-on-surface">Released volume</h3>
+                <p className="mt-1 text-xs text-outline">Last {MONTHS_BACK} months · Latest <span className="font-mono-data font-bold text-on-surface">{formatMoney(latestVolume)}</span></p>
+              </div>
+              <TrendBadge value={volumeChange} />
+            </div>
           </CardHeader>
-          <CardContent className="p-6 h-72">
+          <CardContent className="p-4 sm:p-6 h-64 sm:h-72">
+            <div className="h-full" role="img" aria-label={`Monthly released volume chart. Six-month average ${formatMoney(volumeAverage)}.`}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={volumeOverTime}>
                 <defs>
                   <linearGradient id="custodianVolume" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#004ac6" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#004ac6" stopOpacity={0.02} />
+                    <stop offset="5%" stopColor={CHART_COLORS.primary} stopOpacity={0.25} />
+                    <stop offset="95%" stopColor={CHART_COLORS.primary} stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="label" axisLine={false} tickLine={false} stroke="#565e74" fontSize={12} />
-                <YAxis axisLine={false} tickLine={false} stroke="#565e74" fontSize={12} tickFormatter={val => formatAxisMoney(val)} width={80} />
-                <Tooltip formatter={(value: any, name: any) => name === 'amount' ? [formatMoney(value), 'Volume'] : [value, 'Transactions']} />
-                <Area type="monotone" dataKey="amount" stroke={COLOR_PRIMARY} strokeWidth={2.5} fill="url(#custodianVolume)" />
+                <CartesianGrid {...CHART_GRID_PROPS} vertical={false} />
+                <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
+                <YAxis {...CHART_AXIS_PROPS} tickFormatter={formatAxisMoney} width={80} />
+                <Tooltip content={<ChartTooltip labels={{ amount: 'Released volume' }} valueTypes={{ amount: 'currency' }} />} />
+                <ReferenceLine y={volumeAverage} stroke={CHART_COLORS.secondary} strokeDasharray="5 5" label={{ value: `Avg ${formatAxisMoney(volumeAverage)}`, fill: CHART_COLORS.axis, fontSize: 11, position: 'insideTopRight' }} />
+                <Area type="monotone" dataKey="amount" name="Released volume" stroke={CHART_COLORS.primary} strokeWidth={2.5} fill="url(#custodianVolume)" {...CHART_ANIMATION_PROPS} />
               </AreaChart>
             </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
 
@@ -193,17 +194,19 @@ export function CustodianAnalytics() {
               <p className="text-xs text-outline mt-1">Transaction counts are presented on a shared scale.</p>
             </div>
           </CardHeader>
-          <CardContent className="p-6 h-72">
+          <CardContent className="p-4 sm:p-6 h-64 sm:h-72">
             {byType.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-outline">Nothing processed yet</div>
+              <ChartEmptyState message="Nothing has been processed in this timeframe yet." />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={byType} layout="vertical" margin={{ left: 8, right: 12 }}>
-                  <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" allowDecimals={false} axisLine={false} tickLine={false} stroke="#565e74" fontSize={12} />
-                  <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} stroke="#565e74" fontSize={11} width={135} />
-                  <Tooltip formatter={(value: any) => [`${value} transaction${value === 1 ? '' : 's'}`, 'Completed']} />
-                  <Bar dataKey="count" fill={COLOR_SECONDARY} radius={[0, 6, 6, 0]} barSize={22} />
+                <BarChart data={byType} layout="vertical" margin={{ left: 8, right: 40 }} accessibilityLayer>
+                  <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+                  <XAxis type="number" allowDecimals={false} {...CHART_AXIS_PROPS} />
+                  <YAxis type="category" dataKey="name" {...CHART_AXIS_PROPS} fontSize={11} width={135} />
+                  <Tooltip content={<ChartTooltip labels={{ count: 'Completed' }} valueTypes={{ count: 'count' }} defaultValueType="count" />} />
+                  <Bar dataKey="count" name="Completed" fill={CHART_COLORS.secondary} radius={[0, 6, 6, 0]} barSize={22} {...CHART_ANIMATION_PROPS}>
+                    <LabelList dataKey="count" position="right" formatter={value => formatCompactChartValue(value, 'count')} className="fill-on-surface font-mono-data text-[11px]" />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -214,16 +217,18 @@ export function CustodianAnalytics() {
           <CardHeader className="bg-surface-container-low border-b border-outline-variant">
             <h3 className="font-headline-sm text-on-surface">By Payment / Release Method</h3>
           </CardHeader>
-          <CardContent className="p-6 h-72">
+          <CardContent className="p-4 sm:p-6 h-64 sm:h-72">
             {byMethod.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-outline">No payment methods recorded yet</div>
+              <ChartEmptyState message="No payment or release method has been recorded yet." />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={byMethod} layout="vertical" margin={{ left: 8 }}>
-                  <XAxis type="number" stroke="#565e74" fontSize={12} tickFormatter={val => formatAxisMoney(val)} />
-                  <YAxis type="category" dataKey="name" stroke="#565e74" fontSize={12} width={110} interval={0} />
-                  <Tooltip formatter={(value: any) => [formatMoney(value), 'Volume']} />
-                  <Bar dataKey="amount" fill={COLOR_SECONDARY} radius={[0, 4, 4, 0]} />
+                <BarChart data={byMethod} layout="vertical" margin={{ left: 8, right: 68 }} accessibilityLayer>
+                  <XAxis type="number" {...CHART_AXIS_PROPS} tickFormatter={formatAxisMoney} />
+                  <YAxis type="category" dataKey="name" {...CHART_AXIS_PROPS} width={110} interval={0} />
+                  <Tooltip content={<ChartTooltip labels={{ amount: 'Released volume' }} valueTypes={{ amount: 'currency' }} />} />
+                  <Bar dataKey="amount" name="Released volume" fill={CHART_COLORS.secondary} radius={[0, 4, 4, 0]} {...CHART_ANIMATION_PROPS}>
+                    {byMethod.length <= 6 && <LabelList dataKey="amount" position="right" formatter={value => formatCompactChartValue(value, 'currency')} className="fill-on-surface font-mono-data text-[11px]" />}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}

@@ -65,9 +65,9 @@ const getNavItems = (role: UserRole): NavItem[] => {
   if (role === UserRole.FINANCE) {
     return [
       ...common,
-      { label: 'Financial Records', icon: 'description', path: '/claims', section: 'Financials' },
-      { label: 'Expenses & Receipts', icon: 'receipt_long', path: '/receipts', section: 'Financials' },
-      { label: 'Transaction History', icon: 'history', path: '/transactions', section: 'Financials' },
+      { label: 'Approved Records', icon: 'description', path: '/claims', section: 'Financials' },
+      { label: 'Financial Receipts', icon: 'receipt_long', path: '/receipts', section: 'Financials' },
+      { label: 'Paid & Completed', icon: 'history', path: '/transactions', section: 'Financials' },
       { label: 'Analytics', icon: 'monitoring', path: '/finance/analytics', section: 'Insights' },
       { label: 'Notifications', icon: 'notifications', path: '/notifications', section: 'Account', badgeKey: 'notifications' },
       { label: 'Support', icon: 'help', path: '/support', section: 'Account' },

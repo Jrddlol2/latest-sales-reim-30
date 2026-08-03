@@ -81,6 +81,22 @@ export function isCustodianProcessingClaim(claim: Claim): boolean {
       claim.varianceType === 'RefundDue');
 }
 
+/**
+ * Finance joins the workflow only after a financial decision has been made.
+ * Keep this list shared by Finance records, receipts, search, and dashboards so
+ * pre-approval work cannot leak back into one of those surfaces.
+ */
+export const FINANCE_VISIBLE_STATUSES: readonly ClaimStatus[] = [
+  ClaimStatus.APPROVED,
+  ClaimStatus.PROCESSING,
+  ClaimStatus.READY_FOR_CLAIM,
+  ClaimStatus.COMPLETED,
+  ClaimStatus.RELEASED,
+  ClaimStatus.LIQUIDATED,
+  ClaimStatus.REVIEWED,
+  ClaimStatus.CLOSED,
+];
+
 export function isFinanceVisibleClaim(claim: Claim): boolean {
-  return claim.status !== ClaimStatus.DRAFT;
+  return FINANCE_VISIBLE_STATUSES.includes(claim.status);
 }

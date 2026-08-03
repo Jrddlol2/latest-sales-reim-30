@@ -62,6 +62,32 @@ let systemSettings = {
 
 const REIMBURSEMENT_CAP = 1000;
 
+const FINANCE_REIMBURSEMENT_STATUSES = new Set<string>([
+  ClaimStatus.APPROVED,
+  ClaimStatus.PROCESSING,
+  ClaimStatus.READY_FOR_CLAIM,
+  ClaimStatus.COMPLETED,
+]);
+const FINANCE_CASH_ADVANCE_STATUSES = new Set<string>([
+  CashAdvanceStatus.APPROVED,
+  CashAdvanceStatus.RELEASED,
+  CashAdvanceStatus.LIQUIDATED,
+]);
+const FINANCE_LIQUIDATION_STATUSES = new Set<string>([
+  LiquidationStatus.REVIEWED,
+  LiquidationStatus.CLOSED,
+]);
+
+/** Finance is a read-only downstream consumer, so pre-decision work is out of scope. */
+function isFinanceVisibleFinancialRecord(
+  type: 'Reimbursement' | 'Transport Reimbursement' | 'Cash Advance' | 'Liquidation',
+  status: string,
+): boolean {
+  if (type === 'Cash Advance') return FINANCE_CASH_ADVANCE_STATUSES.has(status);
+  if (type === 'Liquidation') return FINANCE_LIQUIDATION_STATUSES.has(status);
+  return FINANCE_REIMBURSEMENT_STATUSES.has(status);
+}
+
 let claimCounter = 123;
 
 /**
@@ -778,7 +804,7 @@ export async function createApp() {
     originalApproverId?: string
   ) => {
     if (user.role === UserRole.ADMIN) return true;
-    if (user.role === UserRole.FINANCE) return status !== 'Draft';
+    if (user.role === UserRole.FINANCE) return isFinanceVisibleFinancialRecord(type, status);
     if (user.role === UserRole.REQUESTOR) return requestorId === user.id;
     if (user.role === UserRole.APPROVER) {
       const isReportee = users.some(candidate => candidate.id === requestorId && candidate.reports_to === user.id);
@@ -1752,9 +1778,12 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       // MOM client-meeting content is out of scope for that role.
       relevantMoms = [];
     } else if (user.role === UserRole.FINANCE) {
-      // Finance is read-only and only sees documents that became part of a
-      // submitted financial record. Standalone personal minutes stay private.
-      relevantMoms = moms.filter(m => !!m.claim_id);
+      // MOM content follows the linked record's Finance boundary; merely
+      // submitting a request does not make meeting content Finance-visible.
+      relevantMoms = moms.filter(m => {
+        const claim = claims.find(candidate => candidate.id === m.claim_id);
+        return Boolean(claim && isFinanceVisibleFinancialRecord(claim.claim_type || 'Reimbursement', claim.status));
+      });
     } else if (user.role === UserRole.REQUESTOR) {
       relevantMoms = moms.filter(m => m.requestor_id === user.id);
     } else if (user.role === UserRole.APPROVER) {
@@ -1795,7 +1824,8 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     if (user.role === UserRole.ADMIN) {
       hasAccess = true;
     } else if (user.role === UserRole.FINANCE) {
-      hasAccess = !!mom.claim_id;
+      const linkedClaim = claims.find(candidate => candidate.id === mom.claim_id);
+      hasAccess = Boolean(linkedClaim && isFinanceVisibleFinancialRecord(linkedClaim.claim_type || 'Reimbursement', linkedClaim.status));
     } else if (user.role === UserRole.REQUESTOR) {
       hasAccess = mom.requestor_id === user.id;
     } else if (user.role === UserRole.APPROVER) {
@@ -1833,7 +1863,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     // 1. Flatten claim expenses
     for (const exp of expenses) {
       const claim = claims.find(c => c.id === exp.claim_id);
-      if (user.role === UserRole.FINANCE && claim?.status === ClaimStatus.DRAFT) continue;
+      if (user.role === UserRole.FINANCE && (!claim || !isFinanceVisibleFinancialRecord(claim.claim_type || 'Reimbursement', claim.status))) continue;
       const reqUser = claim ? users.find(u => u.id === claim.requestor_id) : undefined;
       const claimNo = claim ? (claim.claim_number || `REIM-${claim.id.substring(0, 6)}`) : 'Unknown';
       
@@ -1858,7 +1888,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     // 2. Flatten liquidation expenses
     for (const item of liquidationLineItems) {
       const liq = liquidations.find(l => l.id === item.liquidationId);
-      if (user.role === UserRole.FINANCE && liq?.status === LiquidationStatus.DRAFT) continue;
+      if (user.role === UserRole.FINANCE && (!liq || !isFinanceVisibleFinancialRecord('Liquidation', liq.status))) continue;
       const reqUser = liq ? users.find(u => u.id === liq.requestorId) : undefined;
       const liqNo = liq ? `LIQ-${liq.id.substring(0, 6)}` : 'Unknown';
 
@@ -2033,7 +2063,7 @@ ${user.name}`;
       // ProcessingQueue.tsx would never be reachable in practice.
       filtered = claims.filter(c => [ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(c.status) || c.requestor_id === user.id);
     } else if (user.role === UserRole.FINANCE) {
-      filtered = claims.filter(c => c.status !== ClaimStatus.DRAFT);
+      filtered = claims.filter(c => isFinanceVisibleFinancialRecord(c.claim_type || 'Reimbursement', c.status));
     } else if (user.role === UserRole.ADMIN) {
       filtered = claims; // Admin sees all
     }
@@ -2095,7 +2125,7 @@ ${user.name}`;
     if (user.role === UserRole.ADMIN) {
       hasAccess = true;
     } else if (user.role === UserRole.FINANCE) {
-      hasAccess = claim.status !== ClaimStatus.DRAFT;
+      hasAccess = isFinanceVisibleFinancialRecord(claim.claim_type || 'Reimbursement', claim.status);
     } else if (user.role === UserRole.REQUESTOR) {
       hasAccess = claim.requestor_id === user.id;
     } else if (user.role === UserRole.APPROVER) {
@@ -3509,7 +3539,7 @@ BSM Assistant | BSD - IT Security Business`;
       const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
       filtered = cashAdvances.filter(ca => ca.approverId === user.id || ca.requestorId === user.id || reporteeIds.includes(ca.requestorId) || isActiveDelegateFor(user.id, ca.approverId));
     } else if (user.role === UserRole.FINANCE) {
-      filtered = cashAdvances.filter(ca => ca.status !== CashAdvanceStatus.DRAFT);
+      filtered = cashAdvances.filter(ca => isFinanceVisibleFinancialRecord('Cash Advance', ca.status));
     } else {
       filtered = cashAdvances; // Custodian and Admin see all
     }
@@ -3543,7 +3573,7 @@ BSM Assistant | BSD - IT Security Business`;
       const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
       hasAccess = ca.approverId === user.id || ca.requestorId === user.id || reporteeIds.includes(ca.requestorId) || isActiveDelegateFor(user.id, ca.approverId);
     } else if (user.role === UserRole.FINANCE) {
-      hasAccess = ca.status !== CashAdvanceStatus.DRAFT;
+      hasAccess = isFinanceVisibleFinancialRecord('Cash Advance', ca.status);
     } else {
       hasAccess = true; // Custodian and Admin see all
     }
@@ -3800,7 +3830,7 @@ You'll receive another email as soon as a decision is made.`
         return l.requestorId === user.id || approverId === user.id || reporteeIds.includes(l.requestorId) || isActiveDelegateFor(user.id, approverId);
       });
     } else if (user.role === UserRole.FINANCE) {
-      filtered = liquidations.filter(l => l.status !== LiquidationStatus.DRAFT);
+      filtered = liquidations.filter(l => isFinanceVisibleFinancialRecord('Liquidation', l.status));
     } else {
       filtered = liquidations; // Custodian and Admin see all
     }
@@ -3836,7 +3866,7 @@ You'll receive another email as soon as a decision is made.`
       const relatedCa = cashAdvances.find(c => c.id === l.cashAdvanceId);
       hasAccess = l.requestorId === user.id || relatedCa?.approverId === user.id || reporteeIds.includes(l.requestorId) || isActiveDelegateFor(user.id, relatedCa?.approverId);
     } else if (user.role === UserRole.FINANCE) {
-      hasAccess = l.status !== LiquidationStatus.DRAFT;
+      hasAccess = isFinanceVisibleFinancialRecord('Liquidation', l.status);
     } else {
       hasAccess = true; // Custodian and Admin see all
     }

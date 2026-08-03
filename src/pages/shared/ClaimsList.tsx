@@ -12,7 +12,8 @@ import { Pagination } from '../../components/ui/Pagination';
 import { ClaimStatus, UserRole } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDate } from '../../lib/date';
-import { claimTypeIcon, getRequestAmountPresentation, isFinanceVisibleClaim } from '../../lib/claimWorkflow';
+import { claimTypeIcon, FINANCE_VISIBLE_STATUSES, getRequestAmountPresentation, isFinanceVisibleClaim } from '../../lib/claimWorkflow';
+import { buildFinancialRecordsCsv } from '../../lib/financialRecordsCsv';
 
 const ACTIVE_STATUSES = [ClaimStatus.DRAFT, ClaimStatus.PENDING_APPROVAL, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM];
 
@@ -91,6 +92,19 @@ export function ClaimsList() {
     setDateTo('');
   };
 
+  const exportFinancialRecords = () => {
+    const csv = buildFinancialRecordsCsv(filteredClaims, users);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `financial-records-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
@@ -101,17 +115,30 @@ export function ClaimsList() {
     <div className="animate-in fade-in duration-500">
       <div className="flex justify-between items-end mb-8">
         <div>
-          <h2 className="font-display text-display text-on-surface">{isFinance ? 'Financial Records' : 'My Requests'}</h2>
+          <h2 className="font-display text-display text-on-surface">{isFinance ? 'Approved Records' : 'My Requests'}</h2>
           <p className="text-body-md text-outline mt-1">
             {isFinance
-              ? 'View company-wide submitted claims, advances, and liquidations.'
+              ? 'View approved-onward reimbursements, cash advances, and liquidations.'
               : 'Track your submitted claims, advances, and liquidations.'}
           </p>
         </div>
-        {!isFinance && <Button className="gap-2" onClick={() => navigate('/claims/new')}>
-          <span className="material-symbols-outlined text-[20px]">add</span>
-          New Claim
-        </Button>}
+        {isFinance ? (
+          <Button
+            variant="outline"
+            className="gap-2 shrink-0"
+            onClick={exportFinancialRecords}
+            disabled={filteredClaims.length === 0}
+            aria-label="Export filtered financial records to CSV"
+          >
+            <span className="material-symbols-outlined text-[18px]">download</span>
+            Export CSV
+          </Button>
+        ) : (
+          <Button className="gap-2" onClick={() => navigate('/claims/new')}>
+            <span className="material-symbols-outlined text-[20px]">add</span>
+            New Claim
+          </Button>
+        )}
       </div>
 
       {isApprover && (
@@ -182,15 +209,9 @@ export function ClaimsList() {
                 onChange={e => setStatusFilter(e.target.value)}
               >
                 <option value="">All Statuses</option>
-                <option value="Draft">Draft</option>
-                <option value="Submitted">Submitted</option>
-                <option value="Pending Approval">Pending Approval</option>
-                <option value="Approved">Approved</option>
-                <option value="Processing">Processing</option>
-                <option value="Ready for Claim">Ready for Claim</option>
-                <option value="Completed">Completed</option>
-                <option value="Returned for Revision">Returned</option>
-                <option value="Rejected">Rejected</option>
+                {(isFinance ? FINANCE_VISIBLE_STATUSES : Object.values(ClaimStatus)).map(status => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
               </Select>
               <Select
                 aria-label="Filter by claim type"

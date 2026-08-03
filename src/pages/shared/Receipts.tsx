@@ -12,6 +12,7 @@ import { useAppContext } from '../../components/AppContext';
 import { uploadUrl } from '../../lib/api';
 import { ClaimStatus, UserRole } from '../../types';
 import { TeamAnalytics } from '../../components/shared/TeamAnalytics';
+import { FINANCE_VISIBLE_STATUSES, isFinanceVisibleClaim } from '../../lib/claimWorkflow';
 
 interface ReceiptRecord {
   id: string;
@@ -94,7 +95,10 @@ export function Receipts() {
   };
 
   const scopedReceipts = isFinance
-    ? derivedReceipts
+    ? derivedReceipts.filter(receipt => {
+        const parentClaim = claims.find(claim => claim.id === receipt.claimId);
+        return Boolean(parentClaim && isFinanceVisibleClaim(parentClaim));
+      })
     : !isApprover
       ? derivedReceipts
       : derivedReceipts.filter(receipt => {
@@ -104,6 +108,7 @@ export function Receipts() {
         });
   const scopedLineItems = lineItems.filter(item => {
     const parentClaim = claims.find(c => c.id === item.claimId);
+    if (isFinance) return Boolean(parentClaim && isFinanceVisibleClaim(parentClaim));
     if (!isRequestorInScope(parentClaim?.requestorId)) return false;
     return !(isApprover && scope === 'team' && parentClaim?.status === ClaimStatus.DRAFT);
   });
@@ -226,8 +231,12 @@ export function Receipts() {
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-display text-on-surface">Expenses &amp; Receipts</h1>
-          <p className="text-body-md text-outline mt-1">Review individual expenses, linked claims, and the supporting receipts behind them.</p>
+          <h1 className="font-display text-display text-on-surface">{isFinance ? 'Financial Receipts' : 'Expenses & Receipts'}</h1>
+          <p className="text-body-md text-outline mt-1">
+            {isFinance
+              ? 'Review supporting evidence for approved, processing, paid, and completed records.'
+              : 'Review individual expenses, linked claims, and the supporting receipts behind them.'}
+          </p>
         </div>
       </div>
 
@@ -353,7 +362,7 @@ export function Receipts() {
                   <div className="flex flex-wrap gap-2">
                     <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setReceiptStatus('missing')}>Missing receipts</button>
                     <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={applyThisMonth}>This month</button>
-                    <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setClaimStatusFilter(ClaimStatus.PENDING_APPROVAL)}>Pending claims</button>
+                    <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setClaimStatusFilter(isFinance ? ClaimStatus.PROCESSING : ClaimStatus.PENDING_APPROVAL)}>{isFinance ? 'In processing' : 'Pending claims'}</button>
                     <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setAmountMin('1000')}>High-value expenses</button>
                   </div>
                 </div>
@@ -363,7 +372,7 @@ export function Receipts() {
                     <Label>Claim status</Label>
                     <Select value={claimStatusFilter} onChange={e => setClaimStatusFilter(e.target.value)}>
                       <option value="">All Statuses</option>
-                      {Object.values(ClaimStatus).map(status => <option key={status} value={status}>{status}</option>)}
+                      {(isFinance ? FINANCE_VISIBLE_STATUSES : Object.values(ClaimStatus)).map(status => <option key={status} value={status}>{status}</option>)}
                     </Select>
                   </div>
                   <div>

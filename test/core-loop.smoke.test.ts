@@ -401,7 +401,7 @@ describe('core reimbursement loop (submit -> approve -> process -> ready -> comp
     expect(detail.body.history[0].reason).toContain('OR number');
   });
 
-  it('gives Finance company-wide read access without approval or processing authority', async () => {
+  it('gives Finance company-wide approved-onward access without approval or processing authority', async () => {
     const linkedMom = await api('/api/moms', REQUESTOR_ID, {
       method: 'POST',
       body: JSON.stringify({ client: 'Finance View Client', purpose: 'Finance visibility test', meeting_date: '2026-01-18', status: 'Completed' }),
@@ -425,11 +425,14 @@ describe('core reimbursement loop (submit -> approve -> process -> ready -> comp
 
     const financeClaims = await api('/api/claims', FINANCE_ID);
     expect(financeClaims.status).toBe(200);
-    expect(financeClaims.body.some((claim: any) => claim.id === submitted.body.id)).toBe(true);
+    expect(financeClaims.body.some((claim: any) => claim.id === submitted.body.id)).toBe(false);
+
+    const hiddenDetail = await api(`/api/claims/${submitted.body.id}`, FINANCE_ID);
+    expect(hiddenDetail.status).toBe(403);
 
     const financeMoms = await api('/api/moms', FINANCE_ID);
     expect(financeMoms.status).toBe(200);
-    expect(financeMoms.body.some((mom: any) => mom.id === linkedMom.body.id)).toBe(true);
+    expect(financeMoms.body.some((mom: any) => mom.id === linkedMom.body.id)).toBe(false);
     expect(financeMoms.body.some((mom: any) => mom.id === standaloneMom.body.id)).toBe(false);
 
     const cannotApprove = await api(`/api/claims/${submitted.body.id}/approve`, FINANCE_ID, {
@@ -437,6 +440,18 @@ describe('core reimbursement loop (submit -> approve -> process -> ready -> comp
       body: JSON.stringify({ decision: 'Approved' }),
     });
     expect(cannotApprove.status).toBe(403);
+
+    const approved = await api(`/api/claims/${submitted.body.id}/approve`, APPROVER_ID, {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'Approved' }),
+    });
+    expect(approved.status).toBe(200);
+
+    const approvedFinanceClaims = await api('/api/claims', FINANCE_ID);
+    expect(approvedFinanceClaims.body.some((claim: any) => claim.id === submitted.body.id)).toBe(true);
+    expect((await api(`/api/claims/${submitted.body.id}`, FINANCE_ID)).status).toBe(200);
+    const approvedFinanceMoms = await api('/api/moms', FINANCE_ID);
+    expect(approvedFinanceMoms.body.some((mom: any) => mom.id === linkedMom.body.id)).toBe(true);
 
     const cannotEditMinutes = await api(`/api/moms/${linkedMom.body.id}`, FINANCE_ID, {
       method: 'PUT',
@@ -506,9 +521,18 @@ describe('core reimbursement loop (submit -> approve -> process -> ready -> comp
     );
 
     const financeLiquidations = await api('/api/liquidations', FINANCE_ID);
-    const listedLiquidation = financeLiquidations.body.find((item: any) => item.id === liquidation.body.id);
+    expect(financeLiquidations.body.some((item: any) => item.id === liquidation.body.id)).toBe(false);
+
+    const reviewedLiquidation = await api(`/api/liquidations/${liquidation.body.id}/review`, APPROVER_ID, {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'Approved' }),
+    });
+    expect(reviewedLiquidation.status).toBe(200);
+
+    const reviewedFinanceLiquidations = await api('/api/liquidations', FINANCE_ID);
+    const listedLiquidation = reviewedFinanceLiquidations.body.find((item: any) => item.id === liquidation.body.id);
     expect(listedLiquidation.history.map((entry: any) => entry.new_status)).toEqual(
-      expect.arrayContaining(['Draft', 'Submitted'])
+      expect.arrayContaining(['Draft', 'Submitted', 'Closed'])
     );
 
     const financeAnalytics = await api('/api/analytics/summary?type=Cash%20Advance&paymentMethod=Cash', FINANCE_ID);

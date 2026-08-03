@@ -8,31 +8,32 @@ import { useAppContext } from '../../components/AppContext';
 import { ClaimStatus } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDate } from '../../lib/date';
-import { claimTypeIcon } from '../../lib/claimWorkflow';
+import { claimTypeIcon, isFinanceVisibleClaim } from '../../lib/claimWorkflow';
 
 export function FinanceDashboard() {
   const navigate = useNavigate();
   const { claims, users } = useAppContext();
 
-  const pendingApproval = claims.filter(c =>
-    c.status === ClaimStatus.SUBMITTED || c.status === ClaimStatus.PENDING_APPROVAL
-  );
-  const inProcessing = claims.filter(c =>
+  const financeClaims = useMemo(() => claims.filter(isFinanceVisibleClaim), [claims]);
+  const inProcessing = financeClaims.filter(c =>
     c.status === ClaimStatus.APPROVED || c.status === ClaimStatus.PROCESSING
   );
-  const readyForClaim = claims.filter(c => c.status === ClaimStatus.READY_FOR_CLAIM);
+  const readyForClaim = financeClaims.filter(c => c.status === ClaimStatus.READY_FOR_CLAIM);
   const completedThisMonth = useMemo(() => {
     const now = new Date();
-    return claims.filter(c => {
+    return financeClaims.filter(c => {
       if (![ClaimStatus.COMPLETED, ClaimStatus.RELEASED, ClaimStatus.CLOSED, ClaimStatus.LIQUIDATED].includes(c.status)) return false;
       const date = new Date(c.processingDate || c.releaseDate || c.createdAt);
       return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
     });
-  }, [claims]);
+  }, [financeClaims]);
 
   const processingValue = inProcessing.reduce((sum, c) => sum + (c.approvedAmount || 0), 0);
   const readyValue = readyForClaim.reduce((sum, c) => sum + c.paidAmount, 0);
-  const recent = claims.slice(0, 8);
+  const recent = financeClaims
+    .slice()
+    .sort((a, b) => new Date(b.submittedAt || b.createdAt).getTime() - new Date(a.submittedAt || a.createdAt).getTime())
+    .slice(0, 8);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -40,7 +41,7 @@ export function FinanceDashboard() {
         <div>
           <span className="font-label-sm text-primary font-bold tracking-wider uppercase">View-only</span>
           <h1 className="font-display text-display text-on-surface mt-1">Finance Overview</h1>
-          <p className="text-body-md text-outline mt-1">Company-wide financial visibility without processing or approval controls.</p>
+          <p className="text-body-md text-outline mt-1">Company-wide visibility from approval through payment and closure, without action controls.</p>
         </div>
         <Button variant="outline" className="gap-2" onClick={() => navigate('/finance/analytics')}>
           <span className="material-symbols-outlined text-[18px]">monitoring</span>
@@ -49,7 +50,7 @@ export function FinanceDashboard() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard title="Awaiting Approval" value={pendingApproval.length.toString()} icon="approval" iconColorClass="bg-secondary-container text-on-secondary-container" />
+        <KPICard title="Approved Records" value={financeClaims.length.toString()} icon="fact_check" iconColorClass="bg-secondary-container text-on-secondary-container" />
         <KPICard title="In Processing" value={formatMoney(processingValue)} icon="payments" iconColorClass="bg-primary-fixed text-on-primary-fixed-variant" trend={`${inProcessing.length} record${inProcessing.length === 1 ? '' : 's'}`} />
         <KPICard title="Ready for Claim" value={formatMoney(readyValue)} icon="key" iconColorClass="bg-tertiary-fixed text-on-tertiary-fixed-variant" trend={`${readyForClaim.length} awaiting confirmation`} />
         <KPICard title="Closed This Month" value={completedThisMonth.length.toString()} icon="task_alt" iconColorClass="bg-primary-container text-on-primary-container" />

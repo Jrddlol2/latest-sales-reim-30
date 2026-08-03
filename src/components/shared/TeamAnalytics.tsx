@@ -1,8 +1,10 @@
 import { Claim, ExpenseLineItem, User } from '../../types';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, LabelList, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { formatAxisMoney, formatMoney } from '../../lib/money';
 import { calculateTeamAnalytics } from '../../lib/teamAnalytics';
 import { Card } from '../ui/Card';
+import { CHART_ANIMATION_PROPS, CHART_AXIS_PROPS, CHART_COLORS, CHART_GRID_PROPS } from '../../lib/chartTheme';
+import { ChartEmptyState, ChartLegend, ChartTooltip, formatCompactChartValue } from './ChartPrimitives';
 
 interface TeamAnalyticsProps {
   members: User[];
@@ -122,35 +124,42 @@ export function TeamAnalytics({
               <h4 className="font-label-lg text-on-surface">Team spend and payouts</h4>
               <p className="text-xs text-outline mt-1">Receipt-supported spend compared with actual company reimbursements</p>
             </div>
-            <div className="h-72">
+            <div className="h-72" role="img" aria-label="Receipt-supported team spend compared with amounts paid for up to eight team members.">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={analytics.members.slice(0, 8)} layout="vertical" margin={{ left: 8, right: 12 }}>
-                  <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" axisLine={false} tickLine={false} fontSize={11} stroke="#667085" tickFormatter={formatAxisMoney} />
-                  <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} fontSize={11} stroke="#667085" width={112} />
-                  <Tooltip formatter={(value: number, key: string) => [formatMoney(value), key === 'receiptSpend' ? 'Supported spend' : 'Paid']} />
-                  <Bar dataKey="receiptSpend" fill="#004ac6" radius={[0, 5, 5, 0]} barSize={13} />
-                  <Bar dataKey="paidAmount" fill="#0d9488" radius={[0, 5, 5, 0]} barSize={13} />
+                <BarChart data={analytics.members.slice(0, 8)} layout="vertical" margin={{ left: 8, right: analytics.members.length <= 4 ? 68 : 12 }} accessibilityLayer>
+                  <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+                  <XAxis type="number" {...CHART_AXIS_PROPS} fontSize={11} tickFormatter={formatAxisMoney} />
+                  <YAxis type="category" dataKey="name" {...CHART_AXIS_PROPS} fontSize={11} width={112} />
+                  <Tooltip content={<ChartTooltip labels={{ receiptSpend: 'Supported spend', paidAmount: 'Paid' }} valueTypes={{ receiptSpend: 'currency', paidAmount: 'currency' }} />} />
+                  <Legend verticalAlign="bottom" content={<ChartLegend />} />
+                  <Bar dataKey="receiptSpend" name="Supported spend" fill={CHART_COLORS.primary} radius={[0, 5, 5, 0]} barSize={13} {...CHART_ANIMATION_PROPS}>
+                    {analytics.members.length <= 4 && <LabelList dataKey="receiptSpend" position="right" formatter={value => formatCompactChartValue(value, 'currency')} className="fill-on-surface font-mono-data text-[10px]" />}
+                  </Bar>
+                  <Bar dataKey="paidAmount" name="Paid" fill={CHART_COLORS.success} radius={[0, 5, 5, 0]} barSize={13} {...CHART_ANIMATION_PROPS}>
+                    {analytics.members.length <= 4 && <LabelList dataKey="paidAmount" position="right" formatter={value => formatCompactChartValue(value, 'currency')} className="fill-on-surface font-mono-data text-[10px]" />}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
           <div className="xl:col-span-2 p-6 bg-surface-container-low/20">
             <div className="mb-4">
-              <h4 className="font-label-lg text-on-surface">Category mix</h4>
-              <p className="text-xs text-outline mt-1">Where receipt-backed team spend is concentrated</p>
+              <h4 className="font-label-lg text-on-surface">Category distribution</h4>
+              <p className="text-xs text-outline mt-1">Top receipt-backed categories, ranked by value</p>
             </div>
             {analytics.categories.length === 0 ? (
-              <div className="h-72 flex items-center justify-center text-sm text-outline">No team receipts are available.</div>
+              <div className="h-72"><ChartEmptyState message="No team receipts are available for this view." /></div>
             ) : (
-              <div className="h-72">
+              <div className="h-72" role="img" aria-label="Receipt-supported team spending across the top six categories.">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={analytics.categories.slice(0, 6)} margin={{ top: 8, right: 4, bottom: 8, left: 4 }}>
-                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={10} stroke="#667085" interval={0} angle={-18} textAnchor="end" height={54} />
-                    <YAxis axisLine={false} tickLine={false} fontSize={11} stroke="#667085" tickFormatter={formatAxisMoney} width={58} />
-                    <Tooltip formatter={(value: number) => [formatMoney(value), 'Supported spend']} />
-                    <Bar dataKey="amount" fill="#943700" radius={[6, 6, 0, 0]} barSize={28} />
+                  <BarChart data={analytics.categories.slice(0, 6)} layout="vertical" margin={{ top: 4, right: 64, bottom: 4, left: 4 }} accessibilityLayer>
+                    <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+                    <XAxis type="number" {...CHART_AXIS_PROPS} fontSize={11} tickFormatter={formatAxisMoney} />
+                    <YAxis type="category" dataKey="name" {...CHART_AXIS_PROPS} fontSize={10} interval={0} width={96} />
+                    <Tooltip content={<ChartTooltip labels={{ amount: 'Supported spend' }} valueTypes={{ amount: 'currency' }} />} />
+                    <Bar dataKey="amount" name="Supported spend" fill={CHART_COLORS.tertiary} radius={[0, 5, 5, 0]} barSize={20} {...CHART_ANIMATION_PROPS}>
+                      <LabelList dataKey="amount" position="right" formatter={value => formatCompactChartValue(value, 'currency')} className="fill-on-surface font-mono-data text-[10px]" />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>

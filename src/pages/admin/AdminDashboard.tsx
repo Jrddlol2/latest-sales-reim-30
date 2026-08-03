@@ -9,12 +9,15 @@ import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { UserRole, ClaimStatus, SupportRequestStatus } from '../../types';
 import { fetchAuditHistory, runFallbackCheck, reassignApprover } from '../../lib/api';
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
+import { CHART_COLORS } from '../../lib/chartTheme';
 
-// Distinct per-slice palette so every status reads as its own colour in the
-// donut (the reporting page's semantic map intentionally repeats colours,
-// which would blur adjacent slices here).
-const DONUT_COLORS = ['#004ac6', '#2563eb', '#0ea5e9', '#7c3aed', '#f59e0b', '#943700', '#ba1a1a', '#16a34a', '#64748b', '#db2777'];
+function statusDistributionColor(status: string): string {
+  if ([ClaimStatus.COMPLETED, ClaimStatus.CLOSED, ClaimStatus.LIQUIDATED].includes(status as ClaimStatus)) return CHART_COLORS.success;
+  if (status === ClaimStatus.REJECTED) return CHART_COLORS.error;
+  if (status === ClaimStatus.RETURNED) return CHART_COLORS.tertiary;
+  if ([ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.RELEASED, ClaimStatus.REVIEWED].includes(status as ClaimStatus)) return CHART_COLORS.primary;
+  return CHART_COLORS.secondary;
+}
 
 interface AuditEntry {
   id: string;
@@ -90,11 +93,6 @@ export function AdminDashboard() {
   }, [claims]);
 
   const statusTotal = useMemo(() => statusBreakdown.reduce((acc, [, n]) => acc + n, 0), [statusBreakdown]);
-  const statusChartData = useMemo(
-    () => statusBreakdown.map(([status, count]) => ({ name: status, value: count })),
-    [statusBreakdown]
-  );
-
   // Org-change fallback (docs/hierarchy-sync-design.md §5): a claim whose
   // approver went stale and nobody transferred it within the fallback window
   // needs an admin to step in. This is normally a cron; there's no scheduler
@@ -185,52 +183,31 @@ export function AdminDashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <Card className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h4 className="font-headline-md text-on-surface">Claims by Status</h4>
+          <div className="flex justify-between items-start mb-5">
+            <div>
+              <h4 className="font-headline-md text-on-surface">Claims by status</h4>
+              <p className="mt-1 text-xs text-outline">Distribution of all {statusTotal} claims across their current workflow state.</p>
+            </div>
             <span className="material-symbols-outlined text-primary">bar_chart</span>
           </div>
           {statusBreakdown.length === 0 ? (
             <p className="text-body-sm text-outline">No claims in the system yet.</p>
           ) : (
-            <div className="flex flex-col sm:flex-row items-center gap-6">
-              {/* Donut with the total in the middle */}
-              <div className="relative w-[180px] h-[180px] flex-shrink-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={statusChartData}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={58}
-                      outerRadius={85}
-                      paddingAngle={2}
-                      stroke="none"
-                    >
-                      {statusChartData.map((entry, i) => (
-                        <Cell key={entry.name} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      formatter={(value: number, name: string) => [`${value} (${Math.round((value / statusTotal) * 100)}%)`, name]}
-                      contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <span className="font-headline-md text-on-surface leading-none">{statusTotal}</span>
-                  <span className="text-[11px] text-outline uppercase tracking-wider mt-1">Total</span>
-                </div>
+            <div role="img" aria-label={`${statusTotal} claims grouped by status. The list provides each status count and share.`}>
+              <div className="mb-5 flex h-3 w-full overflow-hidden rounded-full bg-surface-container-high" aria-hidden="true">
+                {statusBreakdown.map(([status, count]) => (
+                  <span
+                    key={status}
+                    style={{ width: `${(count / statusTotal) * 100}%`, backgroundColor: statusDistributionColor(status) }}
+                  />
+                ))}
               </div>
-
-              {/* Readable legend/list: colour dot, status, count and share */}
-              <div className="flex-1 w-full space-y-2 min-w-0">
-                {statusBreakdown.map(([status, count], i) => (
-                  <div key={status} className="flex items-center justify-between gap-3">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+                {statusBreakdown.map(([status, count]) => (
+                  <div key={status} className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 hover:bg-surface-container-low">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }} />
-                      <span className="font-body-md text-on-surface-variant truncate">{status}</span>
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: statusDistributionColor(status) }} />
+                      <span className="text-sm text-on-surface-variant truncate">{status}</span>
                     </div>
                     <div className="flex items-baseline gap-2 flex-shrink-0">
                       <span className="font-label-md text-on-surface">{count}</span>

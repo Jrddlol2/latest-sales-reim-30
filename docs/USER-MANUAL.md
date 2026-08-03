@@ -203,7 +203,7 @@ then mark it closed.
 
 ## For Finance
 
-Finance is a view-only role with company-wide visibility into submitted financial records.
+Finance is a view-only role with company-wide visibility from approval onward. Drafts, submitted requests, pending approvals, pre-Finance rejections, and unreviewed liquidations are intentionally excluded.
 Use **Financial Records** to filter claims, cash advances, and liquidations by type, status,
 client, location, or submitted date. **Receipt Archive** provides receipt totals plus
 requestor, category, and date filters. **Transaction History** shows finalized activity,

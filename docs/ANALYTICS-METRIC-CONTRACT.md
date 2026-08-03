@@ -62,7 +62,7 @@ date-based result.
 ## Status and scope
 
 - Role visibility is applied before aggregation.
-- Drafts are excluded from Finance analytics.
+- Finance analytics starts at the financial-decision boundary: approved reimbursements and cash advances, plus reviewed liquidations. Draft, submitted, pending-approval, rejected, and pre-review returned records are excluded.
 - Team scope uses the current reporting hierarchy and active delegations where
   applicable.
 - Status history for reimbursements, cash advances, and liquidations must all be
