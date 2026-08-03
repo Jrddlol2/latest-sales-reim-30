@@ -48,6 +48,96 @@ Live UI checks confirmed:
 
 The in-app browser verified the login at 1280×720 and the main Finance and Custodian surfaces around 1351×768. A dedicated 1920×1080 acceptance pass is still recommended.
 
+## Technical architecture and integrations
+
+### Technology stack
+
+| Layer | Technology in use | Notes |
+|---|---|---|
+| Frontend | React 19, TypeScript, Vite 6 | Single-page application in `src/` |
+| Routing | React Router 7 | Role-aware routes and client-side route guards |
+| Styling | Tailwind CSS 4, `clsx`, `tailwind-merge` | Utility-first styling with shared UI primitives |
+| Charts | Recharts | Used for Finance, Custodian, Admin, and team analytics |
+| Backend | Node.js, Express 4, TypeScript | REST API concentrated in `server.ts` |
+| Development runtime | `tsx` plus Vite middleware | `npm run dev` starts Express and Vite together on port 3000 |
+| Production build | Vite and esbuild | Frontend builds to `dist`; Express bundles as `dist/server.cjs` |
+| File uploads | Multer | Images, PDF, DOC, and DOCX up to 10 MB |
+| Security middleware | Helmet and CORS | Helmet is active, although CSP is intentionally disabled pending a final policy |
+| Testing | Vitest and TypeScript compiler | 61 automated tests passed during this audit |
+| CI | GitHub Actions | Runs `npm ci`, type-checking, tests, and build on pushes and pull requests |
+
+### Application architecture
+
+```mermaid
+flowchart LR
+  Browser[React SPA] --> Router[React Router + role guards]
+  Router --> Context[AppContext]
+  Context --> Adapter[src/lib/api.ts]
+  Adapter --> API[Express REST API]
+  API --> Memory[In-memory runtime arrays]
+  API --> Files[Local / temporary upload folder]
+  API --> Outbox[Mock Email + Teams activity records]
+  API -. planned .-> Postgres[PostgreSQL via Drizzle]
+  API -. planned .-> Entra[Microsoft Entra OIDC]
+  API -. planned .-> Graph[Microsoft Graph]
+```
+
+The frontend and backend deliberately use different domain shapes. `src/lib/api.ts` is the translation layer that converts server-side reimbursement, cash advance, and liquidation records into the unified frontend claim model. This is a useful boundary to preserve during future database and authentication work.
+
+### Database status — including Supabase
+
+**No, Supabase is not currently connected or used by the running application.** There is no Supabase package, URL, key, client, or authentication integration in this repository.
+
+What does exist:
+
+- A Drizzle ORM PostgreSQL schema in `src/db/schema.ts` with **25 prepared tables**.
+- A Drizzle configuration in `drizzle.config.ts` that expects a standard `DATABASE_URL`.
+- Generated migration files in `drizzle/`.
+- A PostgreSQL client factory in `src/db/index.ts` using `pg` and `drizzle-orm`.
+- Database commands: `npm run db:generate`, `npm run db:push`, and `npm run db:studio`.
+
+What is not connected yet:
+
+- `server.ts` does not use the Drizzle client for business operations.
+- Claims, users, MOMs, expenses, receipts, notifications, imports, and settings currently live in in-memory arrays.
+- There is no live `DATABASE_URL` requirement for the current demo.
+- No data survives a server restart or serverless cold start.
+
+Supabase could be used later as the managed PostgreSQL provider because it supplies a normal Postgres connection string, but it would be an infrastructure choice, not a required rewrite. The existing Drizzle schema can work with Supabase Postgres, Neon, Render Postgres, Azure Database for PostgreSQL, or another compatible managed PostgreSQL service. If Supabase is chosen, do not use its browser client or expose service-role keys for core financial operations; keep business authorization in the Express backend.
+
+### Authentication and Microsoft readiness
+
+| Area | Current implementation | Production target |
+|---|---|---|
+| Sign-in | Demo account launcher | Microsoft Entra ID authorization-code flow |
+| Identity source | Tab-scoped `sessionStorage` plus `X-User-Id` request header | Validated server-side session or token claims |
+| Roles | Stored in the application's user records | Keep application roles initially, or formally map Entra groups/app roles later |
+| Microsoft button | Microsoft-first visual entry point | Real redirect, callback, session creation, and logout |
+| Profile photos | Local demo avatar files | Optional Microsoft Graph fetch/cache/proxy after approval |
+
+The Microsoft configuration contract is prepared through `/api/auth/config` and `/api/auth/microsoft/start`, but it intentionally does not perform SSO yet. Without the required Entra app registration and an approved OIDC adapter, the route returns a clear not-configured or adapter-required response instead of pretending authentication works.
+
+### File storage and document export
+
+- Uploaded files are handled by Multer and stored locally in `uploads/`; Vercel deployments use a temporary directory.
+- Accepted files are JPG, PNG, GIF, WEBP, PDF, DOC, and DOCX, with a 10 MB limit.
+- This is prototype storage only: it is not durable, and attachment downloads are not yet authorized against the specific claim or MOM that owns the file.
+- PDF exports use `jspdf`; Word-compatible exports are generated in the browser as `.doc` files.
+
+### Notifications and external integrations
+
+- Internal notification events currently create in-memory outbox records and mock Microsoft Teams records.
+- The mock transport logs messages rather than delivering them through Microsoft Teams, Microsoft Graph, SMTP, or another real provider.
+- Client CC messages are represented in the workflow, but production delivery needs a real, approved mail integration.
+- There is no current Microsoft Graph, SharePoint, SAP, HRIS, or calendar integration.
+
+### Deployment and environment configuration
+
+- `vercel.json` prepares the project for a Vercel serverless API plus static frontend deployment. This confirms deployment configuration exists; it does not prove a live Vercel environment is currently configured.
+- Local development uses `npm run dev` and serves the application on `http://127.0.0.1:3000`.
+- The main planned environment variables are `DATABASE_URL`, `DEMO_MODE`, `AUTH_MODE`, `ENABLE_DEMO_LOGIN`, `AUTO_SEED`, and the Microsoft Entra registration values.
+- There is currently no health/readiness endpoint, centralized production logging, monitoring, or error-tracking service.
+
 ## What works well
 
 - Role navigation is clear and appropriately differentiated.
