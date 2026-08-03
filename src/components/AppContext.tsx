@@ -39,6 +39,8 @@ interface AppContextType {
   highValueThreshold: number;
   /** Company spending policy: max amount per line item, keyed by expense category. */
   categoryLimits: Record<string, number>;
+  /** True only while the deployment explicitly allows demo accounts/data. */
+  demoModeEnabled: boolean;
   /** Reset to a fresh, fully-populated year of demo data. */
   resetData: () => Promise<void>;
   /** Regenerate demo data using only the selected categories (customizable generator). */
@@ -95,6 +97,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [paymentMethods, setPaymentMethods] = useState<string[]>([]);
   const [highValueThreshold, setHighValueThreshold] = useState<number>(15000);
   const [categoryLimits, setCategoryLimits] = useState<Record<string, number>>({});
+  const [demoModeEnabled, setDemoModeEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -122,6 +125,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPaymentMethods(data.paymentMethods);
       setHighValueThreshold(data.highValueThreshold);
       setCategoryLimits(data.categoryLimits);
+      setDemoModeEnabled(data.demoModeEnabled);
       setLoadError(null);
     } catch (err: any) {
       setLoadError(err?.message || 'Could not reach the server');
@@ -308,6 +312,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       paymentMethods,
       highValueThreshold,
       categoryLimits,
+      demoModeEnabled,
       resetData,
       generateData,
       clearData

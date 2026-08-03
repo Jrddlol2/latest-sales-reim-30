@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Modal } from '../../components/shared/Modal';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -19,6 +20,7 @@ const ITEMS_PER_PAGE = 10;
 export function Support() {
   const { currentUser, supportRequests, refresh, claims } = useAppContext();
   const { addToast } = useToast();
+  const [searchParams] = useSearchParams();
 
   const [activeTicket, setActiveTicket] = useState<SupportRequest | null>(null);
   const [showNewTicketModal, setShowNewTicketModal] = useState(false);
@@ -54,6 +56,15 @@ export function Support() {
 
   const totalPages = Math.ceil(userTickets.length / ITEMS_PER_PAGE);
   const paginatedTickets = userTickets.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  // Global search deep-links to a ticket while the normal role scope still
+  // determines whether that ticket is available to this user.
+  const requestedTicketId = searchParams.get('ticket');
+  useEffect(() => {
+    if (!requestedTicketId || activeTicket?.id === requestedTicketId) return;
+    const requestedTicket = userTickets.find(ticket => ticket.id === requestedTicketId);
+    if (requestedTicket) openTicket(requestedTicket);
+  }, [requestedTicketId, supportRequests, currentUser.id, activeTicket?.id]);
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(Math.max(1, totalPages));

@@ -3,6 +3,7 @@ import { useAppContext } from '../AppContext';
 import { useNavigate } from 'react-router-dom';
 import { logout } from '../../lib/api';
 import { formatDateTime } from '../../lib/date';
+import { GlobalSearch } from './GlobalSearch';
 
 interface TopbarProps {
   onMenuClick: () => void;
@@ -12,7 +13,9 @@ interface TopbarProps {
 export function Topbar({ onMenuClick, isCollapsed = false }: TopbarProps) {
   const { currentUser, emails, markEmailsRead } = useAppContext();
   const [showNotifications, setShowNotifications] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+  const profileRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   // The bell shows this user's own emails. Admin's outbox is everyone's, so
@@ -25,17 +28,36 @@ export function Topbar({ onMenuClick, isCollapsed = false }: TopbarProps) {
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
         setShowNotifications(false);
+      }
+      if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
+        setShowProfileMenu(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowNotifications(false);
+        setShowProfileMenu(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
   }, []);
+
+  const handleSignOut = () => {
+    setShowProfileMenu(false);
+    logout();
+    window.location.reload();
+  };
 
   return (
     <header className={`h-[64px] fixed top-0 right-0 left-0 flex justify-between items-center px-6 bg-surface border-b border-outline-variant shadow-sm z-10 transition-all duration-300 ${isCollapsed ? 'lg:left-[80px]' : 'lg:left-[220px]'}`}>
-      <div className="flex items-center gap-4 flex-1">
+      <div className="flex min-w-0 flex-1 items-center gap-4">
         <button 
           aria-label="Toggle sidebar"
           className="lg:hidden p-2 text-on-surface-variant hover:bg-surface-container-high rounded-full focus:ring-2 focus:ring-primary focus-visible:outline-none transition-colors"
@@ -45,35 +67,20 @@ export function Topbar({ onMenuClick, isCollapsed = false }: TopbarProps) {
         </button>
         <h2 className="hidden md:block font-headline-md text-headline-md font-semibold text-on-surface">Expense Dashboard</h2>
         
-        <div className="relative w-full max-w-md ml-0 md:ml-8" title="Global search coming soon">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline">search</span>
-          <input 
-            type="text" 
-            placeholder="Global search coming soon..." 
-            disabled
-            className="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant rounded-[6px] text-body-base font-body-base text-outline-variant cursor-not-allowed transition-all"
-          />
-        </div>
+        <GlobalSearch />
       </div>
       
-      <div className="flex items-center gap-6 ml-4">
-        {/* Sign out — the account-picker Login screen is the only way back
-            in, in every build. See App.tsx. */}
-        <button
-          aria-label="Sign out"
-          title={`Signed in as ${currentUser.name}`}
-          className="hidden sm:flex items-center gap-1.5 text-xs text-on-surface-variant hover:text-primary transition-colors"
-          onClick={() => { logout(); window.location.reload(); }}
-        >
-          <span className="material-symbols-outlined text-[18px]">logout</span> Sign out
-        </button>
-
+      <div className="flex items-center gap-2 sm:gap-3 md:gap-4 ml-3 md:ml-4">
         <div className="flex items-center gap-2">
-          <div className="relative" ref={dropdownRef}>
+          <div className="relative" ref={notificationsRef}>
             <button 
               aria-label="View notifications"
+              aria-expanded={showNotifications}
               className="relative p-2 text-on-surface-variant hover:text-primary hover:bg-surface-container-high rounded-full transition-colors focus:ring-2 focus:ring-primary focus-visible:outline-none active:opacity-70"
-              onClick={() => setShowNotifications(!showNotifications)}
+              onClick={() => {
+                setShowNotifications(!showNotifications);
+                setShowProfileMenu(false);
+              }}
             >
               <span className="material-symbols-outlined">notifications</span>
               {unreadCount > 0 && (
@@ -127,18 +134,68 @@ export function Topbar({ onMenuClick, isCollapsed = false }: TopbarProps) {
           </button>
         </div>
         
-        <div className="h-8 w-[1px] bg-outline-variant hidden md:block"></div>
-        
-        <div className="hidden md:flex items-center gap-3">
-          <div className="text-right hidden xl:block">
-            <p className="font-label-md text-label-md text-on-surface">{currentUser.name}</p>
-            <p className="text-[12px] text-outline font-semibold uppercase tracking-wider">{currentUser.role}</p>
-          </div>
-          {currentUser.avatarUrl ? (
-            <img src={currentUser.avatarUrl} alt={currentUser.name} loading="lazy" width="40" height="40" className="w-10 h-10 rounded-full border-2 border-outline-variant object-cover" />
-          ) : (
-            <div className="w-10 h-10 rounded-full bg-secondary-container flex items-center justify-center font-bold text-on-secondary-container font-label-md">
-              {currentUser.name.split(' ').map(n => n[0]).join('')}
+        <div className="h-8 w-px bg-outline-variant hidden md:block"></div>
+
+        <div className="relative" ref={profileRef}>
+          <button
+            type="button"
+            aria-label={`Open account menu for ${currentUser.name}`}
+            aria-haspopup="menu"
+            aria-expanded={showProfileMenu}
+            className="flex items-center gap-2 rounded-full p-1 pr-1.5 text-left transition-colors hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            onClick={() => {
+              setShowProfileMenu(!showProfileMenu);
+              setShowNotifications(false);
+            }}
+          >
+            <span className="hidden xl:block max-w-[180px] text-right">
+              <span className="block truncate font-label-md text-label-md text-on-surface">{currentUser.name}</span>
+              <span className="block text-[11px] font-semibold uppercase tracking-wider text-outline">{currentUser.role}</span>
+            </span>
+            {currentUser.avatarUrl ? (
+              <img src={currentUser.avatarUrl} alt="" loading="lazy" width="36" height="36" className="h-9 w-9 rounded-full border-2 border-outline-variant object-cover" />
+            ) : (
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary-container font-bold text-on-secondary-container font-label-md">
+                {currentUser.name.split(' ').map(n => n[0]).join('')}
+              </span>
+            )}
+            <span aria-hidden="true" className={`hidden sm:block material-symbols-outlined text-[18px] text-outline transition-transform ${showProfileMenu ? 'rotate-180' : ''}`}>expand_more</span>
+          </button>
+
+          {showProfileMenu && (
+            <div role="menu" className="absolute right-0 mt-2 w-64 overflow-hidden rounded-lg border border-outline-variant bg-surface shadow-lg">
+              <div className="border-b border-outline-variant px-4 py-3">
+                <p className="truncate font-label-md text-on-surface">{currentUser.name}</p>
+                <p className="mt-0.5 truncate text-xs text-on-surface-variant">{currentUser.email}</p>
+                <span className="mt-2 inline-flex rounded-full bg-secondary-container px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-on-secondary-container">
+                  {currentUser.role}
+                </span>
+              </div>
+              <div className="p-1.5">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-on-surface transition-colors hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    navigate('/settings');
+                  }}
+                >
+                  <span aria-hidden="true" className="material-symbols-outlined text-[19px] text-on-surface-variant">manage_accounts</span>
+                  Account settings
+                </button>
+              </div>
+              <div className="border-t border-outline-variant p-1.5">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-error transition-colors hover:bg-error-container/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error"
+                  onClick={handleSignOut}
+                >
+                  <span aria-hidden="true" className="material-symbols-outlined text-[19px]">logout</span>
+                  Sign out
+                </button>
+              </div>
             </div>
           )}
         </div>

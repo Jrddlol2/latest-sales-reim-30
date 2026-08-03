@@ -239,6 +239,28 @@ describe('core reimbursement loop (submit -> approve -> process -> ready -> comp
     expect(accounts[0]).not.toHaveProperty('reports_to');
   });
 
+  it('publishes a secret-free Microsoft-ready auth contract without pretending SSO is active', async () => {
+    const configResponse = await fetch(`${baseUrl}/api/auth/config`);
+    expect(configResponse.status).toBe(200);
+    const config = await configResponse.json();
+    expect(config).toEqual({
+      provider: 'microsoft',
+      mode: 'demo',
+      demoModeEnabled: true,
+      demoLoginEnabled: true,
+      microsoft: {
+        configured: false,
+        loginUrl: '/api/auth/microsoft/start',
+      },
+    });
+    expect(JSON.stringify(config)).not.toMatch(/secret|tenantId|clientId/i);
+
+    const microsoftStart = await fetch(`${baseUrl}/api/auth/microsoft/start`);
+    expect(microsoftStart.status).toBe(503);
+    const body = await microsoftStart.json();
+    expect(body.code).toBe('MICROSOFT_AUTH_NOT_CONFIGURED');
+  });
+
   it('confirms client CC delivery to both the requestor and approver', async () => {
     const clientEmail = 'jane.client@example.com';
     const mom = await api('/api/moms', REQUESTOR_ID, {

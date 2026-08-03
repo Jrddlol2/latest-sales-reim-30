@@ -383,7 +383,7 @@ const DEFAULT_NOTIFY_PREFS: Record<string, { inApp: boolean, email: boolean }> =
 
 export function Settings() {
   const { addToast } = useToast();
-  const { currentUser, refresh } = useAppContext();
+  const { currentUser, refresh, demoModeEnabled } = useAppContext();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'profile');
   const [savingPrefs, setSavingPrefs] = useState(false);
@@ -417,7 +417,7 @@ export function Settings() {
     { id: 'notifications', label: 'Notifications' },
     { id: 'delegation', label: 'Delegation' },
     // The demo-data generator lives in its own admin-only category.
-    ...(currentUser.role === UserRole.ADMIN ? [{ id: 'demo-data', label: 'Demo Data' }] : []),
+    ...(currentUser.role === UserRole.ADMIN && demoModeEnabled ? [{ id: 'demo-data', label: 'Demo Data' }] : []),
     { id: 'security', label: 'Security' },
   ];
 

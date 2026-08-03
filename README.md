@@ -1,301 +1,509 @@
 # Sales Reimbursement System
 
-A sales-expense reimbursement platform for a mid-size org: reimbursements, cash advances,
-liquidations, minutes-of-meeting (MOM), multi-role approvals, and disbursement — with a
-full admin console (master data, field definitions, company directory, audit log, system
-email log, reporting) on top. A polished React front end on a ported Express backend that
-holds all state in memory and auto-seeds a year of realistic demo data on every startup.
+Sales Reimbursement System is a role-based web application for managing sales reimbursements, transport reimbursements, cash advances, liquidations, client meeting records, approvals, release processing, receipts, and support requests.
 
-> **Prototype status.** The backend is in-memory (state is lost on restart) and
-> authentication is a mock `X-User-Id` header — good enough to demo every workflow
-> end-to-end, not yet safe for real employee or finance data. See
-> [Production readiness](#production-readiness) below and
-> [`docs/CURRENT-SYSTEM-AUDIT.md`](docs/CURRENT-SYSTEM-AUDIT.md) for the current, authoritative
-> gap list.
->
-> **Looking for how to *use* the app?** See [`docs/USER-MANUAL.md`](docs/USER-MANUAL.md) —
-> this README is the technical/developer doc.
+It is a high-fidelity **prototype and demonstration system**. Core workflows are functional against an Express backend, but the backend currently keeps data in memory and uses demo identity selection. It is not yet safe for real employee, client, or financial data.
 
----
+> **Source of truth:** this README reflects the local codebase as reviewed on 2026-08-03. The current implementation takes precedence over older screenshots, historical audits, and previous GitHub snapshots.
 
-## Table of contents
+## Contents
 
-- [What it does](#what-it-does)
-- [Roles](#roles)
-- [Tech stack](#tech-stack)
-- [Getting started](#getting-started)
+- [System at a glance](#system-at-a-glance)
+- [Current implementation status](#current-implementation-status)
+- [Roles and access](#roles-and-access)
+- [User experience and navigation](#user-experience-and-navigation)
+- [Business workflows](#business-workflows)
 - [Architecture](#architecture)
-- [Project structure](#project-structure)
-- [Core workflows](#core-workflows)
+- [Data model](#data-model)
+- [Authentication, demo mode, and Microsoft](#authentication-demo-mode-and-microsoft)
+- [Global search](#global-search)
+- [API reference](#api-reference)
+- [Local development](#local-development)
 - [Testing](#testing)
-- [Deployment](#deployment)
-- [Production readiness](#production-readiness)
-- [Documentation index](#documentation-index)
+- [Deployment and production cutover](#deployment-and-production-cutover)
+- [Troubleshooting](#troubleshooting)
+- [Handoff checklist](#handoff-checklist)
 
----
+## System at a glance
 
-## What it does
+### Business purpose
 
-- **Reimbursements** — submit a Minutes-of-Meeting record first, then itemized expenses
-  (date, category, vendor, payment method, amount, receipt), route through the requestor's
-  manager for approval, then to a custodian for disbursement, and back to the requestor to
-  confirm receipt with a release code.
-- **Cash Advances** — request funds up front for an upcoming expense; approve → release →
-  liquidate later.
-- **Liquidations** — settle a cash advance against actual spend; the system computes the
-  variance (settled / refund due / reimbursement due) automatically.
-- **Minutes of Meeting (MOM)** — a first-class record (client, purpose, discussion,
-  agreements, action items, custom admin-defined fields), either filled from a template or
-  uploaded as a file; every reimbursement is anchored to one.
-- **Review meetings** — a reimbursement submission proposes a review meeting with the
-  approver; the approver can confirm, decline (with a reason), or the requestor can propose
-  a new time.
-- **Delegations** — an approver can delegate their approval authority to a peer for a date
-  range (e.g. while on leave); claims route to the delegate automatically while active.
-- **Org-change / stale-approver handling** — if a requestor's manager changes while a claim
-  is still pending, the claim is flagged stale for the *old* approver, who can transfer it
-  to the new one (or an admin can reassign/escalate it).
-- **Admin console** — user accounts & org chart, six master-data catalogs (departments,
-  cost centers, business units, branches, project codes, vendors), admin-configurable
-  dynamic form fields, company directory, historical CSV import, reporting/analytics, an
-  immutable audit log, and the full system email log.
-- **Support helpdesk** — in-app tickets with a threaded reply log, tied to any
-  claim/advance/liquidation.
+The system gives sales teams one place to submit, approve, disburse, and track expense-related requests. It supports the business trail from a client meeting through an expense request and payment confirmation, while preserving an activity history and notification trail.
 
-Money renders as Philippine Pesos (₱) throughout — the backend has always modeled the
-domain in PHP.
+### Transaction types
 
-## Roles
+| Type | Purpose | Typical lifecycle |
+|---|---|---|
+| Reimbursement | Repay an employee for completed business expenses. | Draft → Pending Approval → Processing → Ready for Claim → Completed |
+| Transport reimbursement | A reimbursement whose expense category/type is transport. | Same reimbursement workflow |
+| Cash advance | Provide funds before a planned business expense. | Draft → Submitted → Approved → Released → Liquidated |
+| Liquidation | Settle a released cash advance against actual expenses. | Draft → Submitted → Reviewed → Closed, or Returned for Revision |
+| MOM / LOA | Record meeting details or an agreement supporting business activity. | Draft/Completed; may be linked to a reimbursement |
 
-| Role | What they do |
+### Main capabilities
+
+- Role-based dashboards for Requestor, Approver, Custodian, Finance, and Administrator.
+- Claim submission with expense line items, receipts, client/contact information, and configurable fields.
+- Minutes of Meeting (MOM) and Letter of Agreement (LOA) records, including file upload.
+- Approval, rejection, revision, delegation, transfer, and stale-approver handling.
+- Review meeting scheduling and response actions.
+- Custodian release processing and requestor receipt confirmation using a release code.
+- Cash advance and liquidation tracking, including refund and reimbursement-due outcomes.
+- Receipt archive, activity history, notifications, mock email outbox, support tickets, and role dashboards.
+- Administrative management for users, companies, master data, fields, reporting, imports, and audit/activity views.
+- Permission-aware global search with partial, fuzzy, token, abbreviation, and keyboard support.
+
+## Current implementation status
+
+| Area | Status | What exists today | Before real deployment |
+|---|---|---|---|
+| Frontend | Implemented | React SPA with role routes, responsive layout, error/loading states, forms, dashboards, and search. | Accessibility review and final UAT. |
+| Core workflows | Implemented for demo | Reimbursement, cash advance, liquidation, review meeting, delegation, release, and support flows are server-backed. | Exercise business rules against real data and policies. |
+| Authentication | Demo only | Role/account launcher stores an identity per browser tab and sends `X-User-Id`. | Microsoft Entra OIDC, signed sessions, token validation, and removal of temporary identity headers. |
+| Authorization | Partial / prototype | Server routes generally check the current mock identity; frontend adds route guards and scoped views. | Security review and authoritative server-side policy coverage. |
+| Data persistence | Not implemented | Runtime arrays in `server.ts`; restart/cold start loses transactions. | Wire the existing Drizzle/PostgreSQL schema and migrations. |
+| Demo data | Implemented | Fake users, reference data, optional automatic year seed, and admin seed/reset controls. | Set `DEMO_MODE=false` only after real identity and persistence exist. |
+| Microsoft sign-in | Scaffolded | Login UI, `/api/auth/config`, config variables, and a stable `/api/auth/microsoft/start` placeholder. | OIDC adapter, Entra app registration, sessions, and callbacks. |
+| Microsoft profile photos | Planned | User model has `avatar_url`; current avatars are local demo images. | Microsoft Graph permission, backend fetch/cache/proxy, fallback initials. |
+| Notifications | Implemented for demo | In-app bell, outbox records, read state, and client-CC awareness messages. | Real email provider and production notification delivery. |
+| Uploads | Prototype | Local disk upload endpoint; JPG, PNG, GIF, WEBP, PDF, DOC, and DOCX accepted up to 10 MB. | Durable object storage and per-resource authorization. |
+| Search | Implemented | Client-side role-filtered search across claims, meetings, receipts, and support tickets. | Server-side/indexed search for large datasets. |
+| Reporting | Implemented for demo | Role dashboards, analytics, activity, finance, and admin reports. | Validate metrics against the production data source. |
+
+## Roles and access
+
+| Role | Core responsibilities | Key access |
+|---|---|---|
+| Requestor | Creates and tracks their requests; confirms payment receipt. | Own claims, MOMs/LOAs, receipts, payouts, calendar, support, notifications, settings. |
+| Approver | Reviews direct-report or delegated work; can submit own claims. | Approval queue, own claims, eligible team records, delegated approvals, review meetings, receipts, calendar, settings. |
+| Custodian | Releases approved work and handles payment/refund processing. | Disbursement queues, ready-to-claim queue, transaction history, custodian analytics, support/settings. |
+| Finance | Read-only financial visibility. | Submitted financial records, receipts, transactions, finance analytics, support/settings. |
+| Administrator | Maintains the system configuration and oversight views. | Users, companies, master data, fields, imports, reporting, system activity, audit/email views, demo data while demo mode is enabled. |
+
+Notes:
+
+- An Approver cannot approve their own claim. Delegates can act only for active delegated approvers.
+- Frontend route restrictions are in `src/App.tsx`; backend checks are in `server.ts`. Do not treat a hidden UI control as a security boundary.
+- The application role is currently assigned by the internal user record. Microsoft sign-in, once implemented, should identify a user rather than automatically determine their role unless the business adopts an Entra group/app-role mapping policy.
+
+## User experience and navigation
+
+### Layout
+
+The application shell consists of:
+
+- A role-scoped sidebar for navigation and the current user identity.
+- A top bar with global search, notifications, help, and a compact profile menu.
+- A profile menu containing account context, Account settings, and Sign out. Sign out intentionally lives here rather than occupying top-bar space.
+- Responsive cards, tables, filters, modals, pagination, empty states, confirmation dialogs, and status badges.
+
+The primary desktop targets are **1366×768** and **1920×1080**. On narrow viewports the header search becomes an icon and opens a full-width result panel below the top bar.
+
+### Routes
+
+| Route | Purpose | Allowed roles |
+|---|---|---|
+| `/` | Role dashboard; Admin receives Admin Dashboard. | All signed-in roles |
+| `/claims`, `/claims/:id`, `/claims/new` | Claim list, detail, and creation. | Requestor, Approver; Finance can view list/detail where allowed |
+| `/payouts` | Requestor payout/receipt tracking. | Requestor, Approver |
+| `/moms`, `/moms/new`, `/moms/:id` | Minutes and agreements. | Requestor, Approver |
+| `/receipts` | Receipt archive. | Requestor, Approver, Finance |
+| `/calendar` | Meetings/calendar. | Requestor, Approver |
+| `/approvals` | Approval queue. | Approver |
+| `/disbursements`, `/ready-to-claim` | Custodian processing queues. | Custodian |
+| `/transactions` | Transaction history. | Custodian, Finance |
+| `/custodian/analytics`, `/finance/analytics` | Role analytics. | Custodian / Finance respectively |
+| `/notifications`, `/support`, `/settings` | Shared account/support areas. | All signed-in roles |
+| `/admin/users`, `/admin/companies`, `/admin/import`, `/admin/reports`, `/admin/activity` | Administration. | Admin |
+
+Unknown routes return to `/`. Route components below the shell are lazily loaded to reduce the initial bundle.
+
+### Key UI source locations
+
+| Area | Main files |
 |---|---|
-| **Requestor** | Submits reimbursements/advances/liquidations, tracks their status, confirms payout receipt, resubmits returned claims. |
-| **Approver** | Reviews their direct reports' submissions (approve / reject / return with a comment), confirms review meetings, can delegate approval authority. Also a Requestor for their own claims. |
-| **Custodian** | Processes approved claims: generates a release code, records the payment method, marks a claim Ready for Claim, collects liquidation refunds. |
-| **Finance** | View-only company-wide access to submitted financial records, receipts, transaction history, and analytics. Cannot approve, edit, process, or release funds. |
-| **Admin** | Owns master data, user accounts/org chart, field definitions, company directory, historical import, reporting, the audit log, and system emails. |
+| Application routes and role guards | `src/App.tsx` |
+| Global server-backed state | `src/components/AppContext.tsx` |
+| Layout, navigation, profile, notifications | `src/components/layout/` |
+| Global search | `src/components/layout/GlobalSearch.tsx`, `src/lib/globalSearch.ts` |
+| Login and demo launcher | `src/pages/Login.tsx` |
+| Workflow pages | `src/pages/requestor/`, `src/pages/approver/`, `src/pages/custodian/`, `src/pages/finance/`, `src/pages/shared/` |
+| Admin pages | `src/pages/admin/` |
+| UI primitives | `src/components/ui/` |
 
-## Tech stack
+## Business workflows
 
-- **Frontend:** React 19, React Router 7, Tailwind CSS 4, Vite 6, Recharts (analytics/reporting
-  only, code-split — see [Architecture](#architecture))
-- **Backend:** Express 4, in-memory data (no database yet — see
-  [`docs/DATABASE-MIGRATION.md`](docs/DATABASE-MIGRATION.md)), `helmet` + `cors` for basic
-  HTTP hardening
-- **Language/tooling:** TypeScript, `tsx` for dev, `esbuild` for the server bundle
-- **Testing:** Vitest — unit tests for the model adapter, an e2e smoke test of the core
-  claim lifecycle against the real Express app
-- **DB tooling (schema-ready, not wired in yet):** Drizzle ORM + `pg`, targeting Postgres
+### Reimbursement
 
-## Getting started
-
-**Prerequisites:** Node.js 18+
-
-```bash
-npm install
-npm run dev        # Express + Vite on http://localhost:3000, auto-seeds a year of demo data
-npm run lint        # tsc --noEmit (note: not strict mode — see Gotchas below)
-npm test             # Vitest — unit tests + the core-loop smoke test
+```mermaid
+flowchart LR
+  A[Requestor creates MOM and expense claim] --> B[Pending Approval]
+  B -->|Approve| C[Custodian Processing]
+  B -->|Return| D[Returned for Revision]
+  D --> A
+  B -->|Reject| E[Rejected]
+  C --> F[Ready for Claim + release code]
+  F --> G[Requestor confirms receipt]
+  G --> H[Completed]
 ```
 
-Open `http://localhost:3000` — you'll land on an account picker (`Login.tsx`), grouped by
-role. Click any account to sign in as them; there are no passwords (see
-[Production readiness](#production-readiness)). "Sign out" in the top bar returns you to
-the picker so you can switch identities.
+1. A Requestor creates an expense claim, generally with a MOM/LOA context and line-item receipts.
+2. The server routes it to the requestor’s approver, considering active delegation and stale-approver logic.
+3. The Approver approves, returns for revision, or rejects the claim. Review meeting actions are available where applicable.
+4. A Custodian processes approved work, records release/payment information, and makes it ready for claim.
+5. The Requestor confirms receipt with the release code. This final confirmation is intentionally not a custodian action.
 
-**Useful seed accounts** (same every restart — the seed is deterministic):
+### Cash advance and liquidation
 
-| id | Name | Role |
-|---|---|---|
-| `u4` | Dave Lopez | Admin |
-| `u1` | Alice Reyes | Requestor |
-| `u2` | Bob Santos | Approver (Alice's manager) |
-| `u3` | Carol Ramos | Custodian |
-| `u22` | Sofia Lim | Finance (view-only) |
+```mermaid
+flowchart LR
+  A[Draft cash advance] --> B[Submitted]
+  B -->|Approve| C[Approved]
+  B -->|Reject| X[Rejected]
+  C --> D[Released by Custodian]
+  D --> E[Liquidation submitted]
+  E -->|Review| F[Reviewed]
+  E -->|Return| G[Returned for Revision]
+  G --> E
+  F --> H{Variance}
+  H -->|Settled| I[Closed]
+  H -->|Refund Due| J[Custodian collects refund then Closed]
+  H -->|Reimbursement Due| K[Follow-up reimbursement path]
+```
+
+Liquidation line items calculate the total spent and variance. A `RefundDue` result requires custodian collection; a `ReimbursementDue` result can create a follow-up reimbursement path. Confirm behavior against the server before changing these rules.
+
+### Client CC awareness
+
+When the Requestor checks the client-CC option on a MOM/claim, a client email is required. The system records that the client was CCed and creates awareness notifications for the Requestor and Approver as applicable. Current email/outbox records are system data, not delivery through an external mail provider.
+
+### Delegation and stale approvers
+
+- An Approver can create a delegation for a date range; the designated delegate can accept or decline it.
+- Active delegation is considered during approval visibility and routing.
+- If a reporting relationship changes while a claim is pending, the system can mark the claim’s approver as stale and support transfer/reassignment paths.
+- See `docs/hierarchy-sync-design.md` for the rationale and model.
+
+### Status model
+
+| Domain | Important statuses |
+|---|---|
+| Reimbursement | Draft, Pending Approval, Review Meeting Scheduled, Approved, Processing, Ready for Claim, Completed, Rejected, Returned for Revision |
+| Cash advance | Draft, Submitted, Approved, Rejected, Released, Liquidated |
+| Liquidation | Draft, Submitted, Returned for Revision, Reviewed, Closed |
+| Review meeting | PendingConfirmation, Confirmed, DeclineRequested, Completed |
+| Support | Open, In Progress, Resolved |
+| Delegation | Pending, Active, Declined, Expired, Cancelled |
+
+The client uses a unified `ClaimStatus`; the server maintains separate reimbursement, cash advance, and liquidation representations. `src/lib/api.ts` is the adapter that translates between them.
 
 ## Architecture
 
-**The one thing to understand:** the server and the UI model the domain *differently*, and
-neither was rewritten to match the other — a model adapter bridges them.
-
-| | Server (`server.ts`) | Front end |
-|---|---|---|
-| Claim types | 3 separate entities: `Claim` (reimbursement), `CashAdvance`, `Liquidation` | one `Claim`, discriminated by `type` |
-| Statuses | 3 separate enums | 1 unified `ClaimStatus` |
-| Field naming | `snake_case` (`total_amount`, `reports_to`) | `camelCase` (`total`, `reportsTo`) |
-| MOM | standalone; a claim points at it via `mom_id` | subordinate; conceptually tied to its claim |
-| Master data | 6 separate typed catalogs | one array with a `type` discriminator |
-
-**`src/lib/api.ts` is the adapter — the only file that speaks both dialects.**
-`loadWorkspace()` fetches every collection in parallel, merges the three claim-ish
-collections into one unified `Claim[]`, converts snake_case → camelCase, and maps each
-entity's own status enum onto the unified `ClaimStatus` (table-driven —
-`CLAIM_STATUS`/`CASH_ADVANCE_STATUS`/`LIQUIDATION_STATUS`, with `toServerStatus()` as the
-reverse). `fromServer*` functions convert inbound; the mutation helpers
-(`decideOnClaim`, `confirmReceipt`, `createMasterData`, …) convert outbound.
-
-`src/components/AppContext.tsx` loads from the server once, gates rendering until data is
-in, and exposes it to every page. `updateClaimStatus(...)` keeps one call signature but
-internally maps the target status onto whichever server route actually owns that
-transition, then re-`refresh()`es so the UI reflects the authoritative server result
-(including side effects like re-routing and emails).
-
-**Identity** is a single header, `X-User-Id`, set by the client from `localStorage` and
-trusted as-is by the server — no sessions, tokens, or passwords. `getUser(req)` is the one
-function every route derives identity through (except the `/uploads/:filename` static
-route, which also accepts a `?uid=` query param since browsers don't attach custom headers
-to `<img>` loads). This single seam is deliberate prep for swapping in real Microsoft Entra
-ID sign-in later — see [Production readiness](#production-readiness).
-
-**Code-splitting:** every route below the app shell (`Layout`) is `React.lazy`-loaded
-except the two dashboards (they're the landing page for every role, so lazy-loading them
-would just move the wait, not remove it). `recharts` — a large dependency — is isolated to
-the one admin reporting route that needs it, so nobody else's bundle pays for it.
-
-**Fonts** load from the Google Fonts CDN (Hanken Grotesk, JetBrains Mono, Material
-Symbols) — by design, not an oversight; self-hosting was tried and reverted.
-
-## Project structure
-
-```
-app/
-├─ server.ts                     ← Express backend (in-memory, auto-seeds); exports createApp()
-├─ api/index.ts                  ← Vercel serverless entry point (drives createApp())
-├─ vercel.json                   ← Vercel build + routing config
-├─ vitest.config.ts              ← test runner config
-├─ drizzle.config.ts             ← Drizzle Kit config (schema → migrations)
-├─ drizzle/                      ← generated SQL migrations (not applied to any DB yet)
-├─ src/
-│  ├─ serverTypes.ts             ← server-side entity shapes (snake_case)
-│  ├─ types.ts                   ← UI-side entity shapes (unified Claim, camelCase)
-│  ├─ lib/
-│  │  ├─ api.ts                  ← THE ADAPTER: transport + model + status mapping + mutations
-│  │  ├─ api.test.ts             ← unit tests for the adapter
-│  │  ├─ money.ts                ← single source of truth for PHP currency formatting
-│  │  └─ date.ts                 ← date/time formatting helpers
-│  ├─ db/
-│  │  ├─ schema.ts               ← Drizzle table definitions (25 tables, mirrors serverTypes.ts)
-│  │  └─ index.ts                ← Drizzle client factory (unused until DATABASE_URL exists)
-│  ├─ components/
-│  │  ├─ AppContext.tsx          ← server-backed global state
-│  │  ├─ layout/                 ← Sidebar (role-scoped nav), Topbar, Layout
-│  │  ├─ shared/                 ← cross-role widgets (action buttons, modals, empty/error states)
-│  │  └─ ui/                     ← design-system primitives (Button, Card, Input, Pagination, …)
-│  └─ pages/
-│     ├─ requestor/, approver/, custodian/, admin/   ← role-specific pages
-│     └─ shared/                 ← pages every role can reach (claims, MOMs, settings, support, …)
-├─ test/
-│  └─ core-loop.smoke.test.ts    ← e2e smoke test: submit → approve → process → ready → complete
-└─ docs/
-   ├─ USER-MANUAL.md             ← how to use the app, by role
-   ├─ PROJECT-CONTEXT.md         ← orientation & gotchas for a fresh dev session — read first
-   ├─ CURRENT-SYSTEM-AUDIT.md    ← current audit, requirement status, and handoff priorities
-   ├─ PROTOTYPE-AUDIT.md         ← historical prototype audit; status claims may be stale
-   ├─ DATABASE-MIGRATION.md      ← persistent-DB migration status (schema done, wiring pending)
-   ├─ AUDIT.md / PRODUCTION-PASS.md / ROADMAP.md   ← earlier-session docs, partially superseded
-   │                                                  (see CURRENT-SYSTEM-AUDIT.md before relying on them)
-   └─ hierarchy-sync-design.md   ← the org-change / stale-approver design
+```mermaid
+flowchart TB
+  Browser[Browser / React SPA] --> Router[React Router + role guards]
+  Browser --> Context[AppContext workspace state]
+  Context --> Adapter[src/lib/api.ts adapter]
+  Adapter --> API[Express API in server.ts]
+  API --> Memory[In-memory arrays: current runtime data]
+  API --> Uploads[Local uploads directory]
+  API -. future .-> Postgres[PostgreSQL + Drizzle schema]
+  API -. future .-> Entra[Microsoft Entra OIDC session adapter]
+  API -. future .-> Graph[Microsoft Graph profile photos]
+  API --> Outbox[In-app notification / mock email outbox]
 ```
 
-## Core workflows
+### Frontend-to-server model adapter
 
-**The reimbursement loop:** `Draft → Pending Approval → Processing → Ready for Claim →
-Completed` (or `Rejected` / `Returned for Revision` at the approval step). A submission
-proposes a review meeting with the approver in the same step. Full step-by-step in
-[`docs/USER-MANUAL.md`](docs/USER-MANUAL.md).
+The server and UI deliberately use different domain shapes:
 
-**Cash advance:** `Draft → Submitted → Approved → Released → Liquidated`.
+| Server | Frontend |
+|---|---|
+| Separate reimbursement claims, cash advances, and liquidations | A unified `Claim` with a `type` discriminator |
+| Mostly snake_case wire fields | camelCase UI fields |
+| Separate status enums | One `ClaimStatus` enum |
+| Separate master-data collections | Unified frontend master-data representation |
 
-**Liquidation:** `Draft → Submitted → Reviewed → Closed` (or `Returned for Revision`); the
-custodian collects a refund if `RefundDue`, or a follow-up reimbursement claim is
-auto-created if `ReimbursementDue`.
+`src/lib/api.ts` is the boundary that converts objects and statuses. Avoid adding direct raw API shape assumptions into pages; new API work should be normalized in this adapter.
 
-Server-side business rules are enforced on the server, not just the UI — a requestor can
-never approve their own claim (segregation of duties), a receipt is required before
-submission, and every action is authorization-checked against `getUser(req)`.
+### State loading and cross-tab behavior
+
+`AppContext` loads the workspace, gates rendering while loading, exposes mutations, and periodically refreshes visible tabs. Demo identity is stored in **sessionStorage**, not a shared browser-wide store, so a presentation can keep separate Requestor, Approver, Custodian, Finance, and Admin tabs open at the same time. They share the same in-memory backend, so updates are visible after polling, focus, or refresh.
+
+## Data model
+
+The domain definitions are in `src/types.ts`; server wire types are in `src/serverTypes.ts`. A PostgreSQL-ready Drizzle schema exists in `src/db/schema.ts` but is not connected to the live server yet.
+
+```mermaid
+erDiagram
+  USERS ||--o{ CLAIMS : requests_or_approves
+  USERS ||--o{ MOMS : prepares
+  CLAIMS ||--o{ EXPENSE_LINE_ITEMS : contains
+  CLAIMS ||--o{ REVIEW_MEETINGS : schedules
+  CLAIMS ||--o{ STATUS_HISTORIES : records
+  CASH_ADVANCES ||--o{ LIQUIDATIONS : settled_by
+  LIQUIDATIONS ||--o{ LIQUIDATION_LINE_ITEMS : contains
+  USERS ||--o{ APPROVER_DELEGATIONS : owns_or_accepts
+  USERS ||--o{ SUPPORT_REQUESTS : opens
+  SUPPORT_REQUESTS ||--o{ SUPPORT_REQUEST_MESSAGES : contains
+  USERS ||--o{ SYSTEM_EMAILS : receives
+```
+
+| Entity | Purpose |
+|---|---|
+| User | Employee identity, application role, org relationship, notification preferences, avatar, future Entra join keys. |
+| Claim | Unified frontend view of reimbursement/cash advance/liquidation records. |
+| Expense line item | Vendor, category, date, amount, payment method, business purpose, receipt, OR number. |
+| MOM / LOA | Meeting/client record, contact person/designation/email, CC flag, content, source file, and custom fields. |
+| Review meeting | Proposed/confirmed/declined review schedule linked to a claim. |
+| Delegation | Date-bound approval delegation with acceptance state. |
+| Status history | Audit-style workflow events and reasons. |
+| System email | Mock outbox / in-app notification record with recipient and read state. |
+| Support request | Ticket, priority, status, related entity, and message thread. |
+| Company and master data | Company directory plus departments, cost centers, business units, branches, project codes, and vendors. |
+| Field definition | Admin-configured dynamic fields for MOM/claim forms. |
+
+## Authentication, demo mode, and Microsoft
+
+### Current demo authentication
+
+The login screen is Microsoft-first visually, but it provides demo access while Microsoft setup is pending. A user chooses a role and account, then **Open demo in new tab** creates a new sessionStorage-backed tab. There are no passwords, sessions, tokens, or real identity validation.
+
+The API currently trusts `X-User-Id`. This is a prototype seam, not production authentication. It must be replaced before real deployment.
+
+### Demo controls
+
+| Variable | Default in `.env.example` | Purpose |
+|---|---:|---|
+| `DEMO_MODE` | `true` | Master switch for fake users/reference data, demo endpoints, seed/reset tools, and Demo Data UI. |
+| `AUTH_MODE` | `demo` | Requests demo or Microsoft mode; demo mode remains authoritative while enabled. |
+| `ENABLE_DEMO_LOGIN` | `true` | Enables the demo account launcher. |
+| `VITE_ENABLE_DEMO_LOGIN` | `true` | Frontend-facing defense-in-depth flag. |
+| `AUTO_SEED` | `true` | Seeds demonstration data at startup while demo mode is enabled. |
+
+Set `DEMO_MODE=false` only after persistent data and real login exist. It disables fake identity/data bootstrap, demo account access, seed/reset endpoints, automatic seed, and the Admin Demo Data tab. It does **not** install a database or authenticate anyone by itself.
+
+### Microsoft Entra ID integration status
+
+Implemented preparation:
+
+- `GET /api/auth/config` reports demo/Microsoft capability without exposing secrets.
+- `GET /api/auth/microsoft/start` is a stable future OIDC entry point.
+- User schema contains `entra_object_id` and `user_principal_name` fields.
+- Login UI provides a Microsoft sign-in entry and clearly falls back to demo accounts when unconfigured.
+
+Still required:
+
+1. Entra tenant ID, client/application ID, approved redirect URI, secret/certificate, and assignment policy from IT.
+2. Authorization-code OIDC flow with PKCE, state, nonce, issuer/audience/signature validation, and server-side session storage.
+3. `HttpOnly`, `Secure`, `SameSite` session cookies, logout, expiry, and account-removal handling.
+4. Lookup from validated Entra `oid` to the internal user record.
+5. Removal of `X-User-Id` and per-resource upload authorization.
+
+### Profile pictures
+
+Profile pictures do not automatically come from Microsoft today. The current avatars are local demo files. Entra ID token claims identify a person but do not include profile-photo bytes. A production implementation should request approved Microsoft Graph photo permission, fetch a fixed-size photo such as `/me/photos/96x96/$value` through the backend, cache/proxy it to an internal `avatar_url`, and fall back to initials when no photo exists. Never place an access token or expiring Graph URL directly in an image element.
+
+## Global search
+
+The top-bar search is client-side and searches only records that the signed-in role is allowed to open.
+
+| Search behavior | Details |
+|---|---|
+| Record types | Claims, meetings/agreements, receipt line items, and support tickets. |
+| Fields | Reference, client, purpose, requester, vendor, category, receipt name/OR number, contact, status, and ticket details. |
+| Matching | Case, punctuation, spacing, and accents are normalized. Terms can appear in any order. |
+| Fuzzy tolerance | One typo for medium words; two for longer words; adjacent transpositions such as `jnae` → `jane`. |
+| Abbreviations | `CA`, `LIQ`, `MOM`, `LOA`, `REIM`, `REQ`, and `SUPP` expand to workflow concepts. |
+| Keyboard | `Ctrl+K` focuses search; arrows choose; Enter opens; Escape closes. |
+| Result limit | Top 10 ranked results. |
+| Scale limitation | The full workspace is already loaded in the browser. Move matching/indexing to the server for large production datasets. |
+
+Examples: `reim 124`, `client jane`, `reimbursmnt`, `CA travel`, and `MOM client`.
+
+## API reference
+
+All routes are implemented in `server.ts`. Most protected routes rely on the temporary `X-User-Id` header. This table is a handoff map; inspect request validation in the corresponding route before integrating an external client.
+
+| Area | Main endpoints |
+|---|---|
+| Capability/auth | `GET /api/auth/config`, `GET /api/auth/microsoft/start`, `GET /api/demo-users`, `POST /api/login`, `GET /api/me`, `PUT /api/me/notification-prefs` |
+| Uploads | `POST /api/upload`, `GET /uploads/:filename` |
+| Users/admin settings | `GET /api/users`, `PUT /api/users/:id`, `GET/PUT /api/admin/settings` |
+| Companies/master data | `GET/POST/PUT /api/companies`, `POST /api/companies/import`, `GET/POST/PUT` master-data catalog routes, `GET/POST/PUT /api/field-definitions` |
+| MOM/receipts | `GET/POST/PUT /api/moms`, `GET /api/moms/:id`, `POST /api/moms/:id/send`, `GET /api/receipts` |
+| Reimbursements | `GET/POST /api/claims`, `GET /api/claims/:id`, `POST /api/claims/:id/approve`, `PUT /api/claims/:id/resubmit`, `POST /api/claims/:id/transfer-approver`, `POST /api/claims/:id/ready-for-claim`, `POST /api/claims/:id/claim` |
+| Review meetings | `GET /api/review-meetings`, `POST /api/review-meetings/:id/confirm`, `POST /api/review-meetings/:id/decline`, `PUT /api/review-meetings/:id/reschedule` |
+| Custodian/activity | `POST /api/custodian/claims/:id/decision`, `PUT /api/claims/:id/claim-code`, `GET /api/history`, `GET /api/system-activity`, `GET /api/activity/status`, `POST /api/activity/seen` |
+| Notifications | `GET /api/outbox`, `PUT /api/outbox/read` |
+| Cash advances | `GET/POST /api/cash-advances`, `GET/PUT /api/cash-advances/:id`, `POST /:id/submit`, `POST /:id/approve`, `POST /:id/release` |
+| Liquidations | `GET/POST /api/liquidations`, `GET /api/liquidations/:id`, line-item create/update/delete routes, `POST /:id/submit`, `POST /:id/review`, `POST /:id/collect-refund` |
+| Delegations | `GET/POST /api/delegations`, `POST /:id/accept`, `POST /:id/decline`, `POST /:id/cancel`, `PUT /api/claims/:id/reassign` |
+| Support | `GET/POST /api/support`, `GET /api/support/:id`, `POST /api/support/:id/messages`, `PUT /api/support/:id` |
+| Analytics/import/demo | `GET /api/analytics/summary`, `GET/POST /api/imports`, `POST /api/admin/seed`, `POST /api/admin/seed-year`, `POST /api/admin/reset` |
+
+Demo seed/reset routes return unavailable when `DEMO_MODE=false`.
+
+## Local development
+
+### Prerequisites
+
+- Node.js 18 or newer (Node 22 typings are included in development dependencies).
+- npm.
+- Optional: PostgreSQL only when working on the unfinished database migration.
+
+### Start the application
+
+PowerShell:
+
+```powershell
+cd D:\312026-Sales
+npm install
+npm.cmd run dev
+```
+
+Open `http://127.0.0.1:3000/` or `http://localhost:3000/`.
+
+The development command runs `tsx server.ts`; Vite is used as Express middleware. In normal demo configuration, the server automatically seeds data unless `AUTO_SEED=false`.
+
+### Production-style local run
+
+```powershell
+npm.cmd run build
+$env:NODE_ENV = 'production'
+npm.cmd start
+```
+
+Useful commands:
+
+| Command | Purpose |
+|---|---|
+| `npm.cmd run dev` | Express plus Vite development server on port 3000. |
+| `npm.cmd run dev:ui-only` | Vite UI only; not suitable for full backend workflows. |
+| `npm.cmd run lint` | TypeScript check with `tsc --noEmit`. |
+| `npm.cmd test` | Vitest test suite. |
+| `npm.cmd run build` | Vite frontend build and esbuild server bundle. |
+| `npm.cmd start` | Serve `dist/server.cjs`. |
+| `npm.cmd run db:generate` | Generate Drizzle migrations. |
+| `npm.cmd run db:push` | Push Drizzle schema when a database is configured. |
+| `npm.cmd run db:studio` | Open Drizzle Studio when a database is configured. |
+
+### Environment configuration
+
+Copy `.env.example` into the deployment environment and set only environment-specific values. Do not commit secrets.
+
+| Variable | Purpose |
+|---|---|
+| `ALLOWED_ORIGINS` | Comma-separated allowed origins when frontend and backend are separated. |
+| `DEMO_MODE` | Master demo-content switch. |
+| `AUTH_MODE` | `demo` or intended `microsoft` runtime mode. |
+| `ENABLE_DEMO_LOGIN`, `VITE_ENABLE_DEMO_LOGIN` | Demo account launcher controls. |
+| `AUTO_SEED` | Startup demo-data seed control. |
+| `MICROSOFT_TENANT_ID`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_REDIRECT_URI` | Future Microsoft OIDC configuration. |
+| `SESSION_SECRET` | Required once real server-side sessions are implemented. |
+| `DATABASE_URL` | Required once PostgreSQL persistence is wired into the server. |
+| `GRAPH_SCOPES` | Future approved Microsoft Graph scopes. |
 
 ## Testing
 
-```bash
-npm test              # vitest run — unit tests + e2e smoke test
+The project uses Vitest. At the time this README was updated, the suite contains **39 tests in 6 test files**.
+
+| Test area | Files |
+|---|---|
+| API/model adapters | `src/lib/api.test.ts`, `test/api-adapters.test.ts` |
+| Core reimbursement lifecycle smoke test | `test/core-loop.smoke.test.ts` |
+| Analytics | `test/team-analytics.test.ts` |
+| Reimbursement policy | `src/lib/reimbursementPolicy.test.ts` |
+| Global search matching | `src/lib/globalSearch.test.ts` |
+
+Run before handoff or release:
+
+```powershell
+npm.cmd run lint
+npm.cmd test
+npm.cmd run build
 ```
 
-- **`src/lib/api.test.ts`** — the model adapter: snake↔camel conversion, status-table
-  mapping in both directions, ref-number generation, purpose-fallback chains.
-- **`test/core-loop.smoke.test.ts`** — spins up the real Express app on an ephemeral port
-  (no mocks) and drives a reimbursement through every status transition, plus two
-  negative-path checks (wrong approver, wrong release code).
+The tests cover important adapter, workflow, analytics, policy, and fuzzy-search behavior. They are not a replacement for role-by-role browser testing, Microsoft login testing, real database integration testing, or a security assessment.
 
-CI (`.github/workflows/ci.yml`) runs lint, test, and build on every push/PR to `main`.
+## Deployment and production cutover
 
-## Deployment
+The repository contains Vercel configuration (`vercel.json`) and an API entry point under `api/`. A standard Node deployment can build with `npm run build` and start with `npm start`.
 
-### Render
+### Do not deploy with real data until all of the following are complete
 
-This is the project's primary deploy target (`sales-reimbursement.onrender.com`). Standard
-Node web service: `npm install && npm run build`, start command `npm start`.
+1. Connect `server.ts` to PostgreSQL through the existing Drizzle schema/migrations.
+2. Add backups, migration ownership, retention, and restore testing.
+3. Implement Microsoft Entra OIDC and a server-side session model.
+4. Remove `X-User-Id` trust and demo account access.
+5. Set `DEMO_MODE=false`, `AUTH_MODE=microsoft`, `ENABLE_DEMO_LOGIN=false`, and `AUTO_SEED=false`.
+6. Move uploads to durable object storage with ownership/authorization checks.
+7. Replace mock email/outbox behavior with an approved email/notification provider.
+8. Add structured logs, monitoring, error tracking, rate limiting, security headers/CSP review, and incident ownership.
+9. Complete privacy, audit-retention, financial-control, and user-acceptance reviews.
 
-### Vercel
+See `docs/production-cutover.md`, `docs/microsoft-auth-handoff.md`, and `docs/DATABASE-MIGRATION.md` for focused plans.
 
-Also configured via [`vercel.json`](vercel.json):
-- The Vite frontend builds via `npm run vercel-build` and serves as static assets.
-- `/api/*` and `/uploads/*` route to one serverless function
-  ([`api/index.ts`](api/index.ts)) running the full Express app from `server.ts`.
+## Troubleshooting
 
-```bash
-vercel            # preview
-vercel --prod     # production
-```
-Or import the repo at vercel.com — no extra build config needed.
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| Port 3000 is busy | Another local Node process is still running. | Stop the known development server, then run the command again. |
+| App opens but has no records | `AUTO_SEED=false`, demo data was reset, or demo mode is off. | Use Admin Demo Data tools only in demo mode, or restart with valid demo configuration. |
+| Demo account launcher is absent | Demo mode or demo login is disabled. | Check `DEMO_MODE` and `ENABLE_DEMO_LOGIN`. |
+| Microsoft sign-in reports unavailable | App registration/OIDC adapter is not implemented/configured. | Use demo access until IT supplies the registration and the adapter is built. |
+| Search returns no results | Current role cannot see the data, dataset is empty, or query is unrelated. | Try a client, reference, vendor, purpose, or abbreviated workflow term. |
+| Old favicon/title remains | Browser cache. | Hard refresh the affected tab. |
+| Another role tab looks stale | Tabs refresh while visible/focused; backend data is shared. | Focus the tab or refresh it. |
+| Upload disappears after deploy/restart | Local filesystem is not persistent. | Use durable object storage before production. |
+| Type check passes but behavior is wrong | TypeScript is not in strict mode and workflow rules are server-dependent. | Run tests and exercise the actual role flow. |
 
-> **Demo-deploy caveats (by design, not bugs):**
-> - **State does not persist.** In-memory backend — every cold start (serverless) or
->   restart re-seeds fresh, and concurrent instances don't share state. See
->   [`docs/DATABASE-MIGRATION.md`](docs/DATABASE-MIGRATION.md).
-> - **Uploads don't persist** on serverless (read-only filesystem outside `/tmp`).
-> - **Auth is mock** — anyone can sign in as anyone from the account picker; there's no
->   real credential check.
->
-> Good enough to click through every flow with a client or stakeholder; not for real data.
+## Known limitations and technical debt
 
-## Production readiness
+| Priority | Issue | Why it matters |
+|---|---|---|
+| Critical | In-memory runtime data | All transactional data can disappear on restart/cold start and cannot support production. |
+| Critical | Demo `X-User-Id` identity | Anyone can impersonate a role; it is not authentication. |
+| High | Microsoft login is scaffolding only | No real Entra sign-in/session exists yet. |
+| High | Local upload storage | Not durable or sufficiently resource-authorized for production. |
+| High | Mock email/outbox | Records are generated, but external email delivery is not production-integrated. |
+| Medium | Client-side workspace search | Good for demo volume; not suitable as a large-data search service. |
+| Medium | Database schema is not wired | Drizzle tables/migrations exist but the Express server still uses arrays. |
+| Medium | TypeScript is not strict | Green lint does not prove runtime correctness. |
+| Medium | Authorization needs formal audit | Route/UI scoping should be validated against a production server-side policy. |
+| Low | Historical import/import-batch behavior is evolving | Treat it as a controlled admin prototype feature until persistence and validation are complete. |
 
-Current scorecard (full detail in
-[`docs/PROTOTYPE-AUDIT.md`](docs/PROTOTYPE-AUDIT.md)):
+## Recommended handoff order
 
-| Dimension | Grade |
+1. Read this README, then `docs/PROJECT-CONTEXT.md` and `docs/USER-MANUAL.md`.
+2. Run the application in demo mode and open separate Requestor, Approver, Custodian, Finance, and Admin tabs.
+3. Walk one reimbursement from submission to requestor receipt confirmation.
+4. Review `src/lib/api.ts` before changing any API-backed page or status mapping.
+5. Review `server.ts` before changing a workflow rule or permission decision.
+6. Read `docs/DATABASE-MIGRATION.md`, `docs/production-cutover.md`, and `docs/microsoft-auth-handoff.md` before planning deployment work.
+7. Run lint, tests, and build before making a handoff commit.
+
+## Related documentation
+
+| Document | Use it for |
 |---|---|
-| Functional completeness | A− |
-| UX & flows | A− |
-| Code quality / maintainability | C |
-| Security | D+ |
-| Testing / CI | now wired — was F |
-| Production readiness | D |
+| `docs/USER-MANUAL.md` | Role-by-role operational usage. |
+| `docs/PROJECT-CONTEXT.md` | Historical architecture context and developer gotchas. Some statements are historical; verify against current code. |
+| `docs/CURRENT-SYSTEM-AUDIT.md` | Current audit and requirement/gap analysis. |
+| `docs/CHANGELOG-AND-FUTURE-WORK.md` | Delivered stakeholder changes and follow-up work. |
+| `docs/production-cutover.md` | Demo-mode shutdown plan and prerequisites. |
+| `docs/microsoft-auth-handoff.md` | IT inputs and implementation plan for Entra sign-in/profile photos. |
+| `docs/DATABASE-MIGRATION.md` | Persistent PostgreSQL migration plan. |
+| `docs/hierarchy-sync-design.md` | Approver changes, stale routing, and hierarchy model. |
 
-**The gap, in order of what actually blocks going live:**
-1. **Persistent database** — schema and migrations exist
-   ([`docs/DATABASE-MIGRATION.md`](docs/DATABASE-MIGRATION.md)), not yet wired into
-   `server.ts`. Needs a `DATABASE_URL`.
-2. **Real authentication** — target is Microsoft Entra ID / Office 365 sign-in
-   (`docs/PROTOTYPE-AUDIT.md`'s "Target integration" section has the full plan). Backend
-   prep is done: the identity join keys (`entra_object_id`, `user_principal_name`) already
-   exist on every user record, and `getUser()` is the one seam that needs to change.
-3. **File storage** — uploads land on local disk with only a login check, not a
-   per-resource ownership check.
-4. **Observability** — no structured logging, error tracking, or health endpoints yet.
+## Ownership placeholders
 
-None of this blocks demoing the product — it blocks trusting it with real employee or
-finance data.
+Before an internal pilot or production deployment, assign and record:
 
-## Documentation index
-
-| Doc | What it's for |
-|---|---|
-| [`docs/USER-MANUAL.md`](docs/USER-MANUAL.md) | How to use the app, written per role — start here if you're not a developer. |
-| [`docs/PROJECT-CONTEXT.md`](docs/PROJECT-CONTEXT.md) | Orientation for a fresh dev session — architecture, gotchas, where things live. |
-| [`docs/CURRENT-SYSTEM-AUDIT.md`](docs/CURRENT-SYSTEM-AUDIT.md) | Current audit for the reviewed GitHub commit, including requirement status, verified checks, risks, and Claude Code handoff priorities. |
-| [`docs/CHANGELOG-AND-FUTURE-WORK.md`](docs/CHANGELOG-AND-FUTURE-WORK.md) | Delivered stakeholder changes, known gaps, product decisions, and planned follow-up work. |
-| [`docs/PROTOTYPE-AUDIT.md`](docs/PROTOTYPE-AUDIT.md) | Historical prototype audit; several scores and status claims are now stale. |
-| [`docs/DATABASE-MIGRATION.md`](docs/DATABASE-MIGRATION.md) | Persistent-database status: what's built, what's left, in what order. |
-| [`docs/hierarchy-sync-design.md`](docs/hierarchy-sync-design.md) | How the org-change / stale-approver simulation works. |
-| `docs/AUDIT.md`, `docs/PRODUCTION-PASS.md`, `docs/ROADMAP.md` | Earlier-session documents retained for historical context; do not treat their checkboxes as current status. |
+- Business/product owner
+- Technical owner
+- Microsoft Entra administrator
+- Database owner
+- Infrastructure/deployment owner
+- Financial-control and policy owner
+- Support escalation contact

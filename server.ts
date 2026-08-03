@@ -462,6 +462,41 @@ export async function createApp() {
   const app = express();
   app.disable('x-powered-by');
 
+  // Authentication deployment contract. Demo identity remains the default
+  // while the organization is obtaining its Entra registration. Switching to
+  // Microsoft later is configuration-driven, so the UI and the rest of the API
+  // do not need another auth redesign.
+  // DEMO_MODE is the production cutover switch: turning it off removes fake
+  // identities/reference records from bootstrap, closes every seed/reset
+  // surface, skips auto-seeding, and hides demo UI through /api/auth/config.
+  // The narrower flags remain useful while DEMO_MODE is on (for example, a
+  // clean-data demo that still needs the account launcher).
+  const demoModeEnabled = process.env.DEMO_MODE?.toLowerCase() !== 'false';
+  const requestedAuthMode = process.env.AUTH_MODE?.toLowerCase() === 'microsoft' ? 'microsoft' : 'demo';
+  const authMode = demoModeEnabled ? requestedAuthMode : 'microsoft';
+  const demoLoginEnabled = demoModeEnabled && (process.env.ENABLE_DEMO_LOGIN === undefined
+    ? authMode === 'demo'
+    : process.env.ENABLE_DEMO_LOGIN.toLowerCase() === 'true');
+
+  if (!demoModeEnabled) {
+    users.length = 0;
+    companies = [];
+    departments = [];
+    costCenters = [];
+    businessUnits = [];
+    branches = [];
+    projectCodes = [];
+    vendors = [];
+    fieldDefinitions = [];
+  }
+  const microsoftAuth = {
+    tenantId: process.env.MICROSOFT_TENANT_ID || process.env.TENANT_ID || '',
+    clientId: process.env.MICROSOFT_CLIENT_ID || process.env.CLIENT_ID || '',
+    clientSecret: process.env.MICROSOFT_CLIENT_SECRET || process.env.CLIENT_SECRET || '',
+    redirectUri: process.env.MICROSOFT_REDIRECT_URI || process.env.OAUTH_REDIRECT_URI || '',
+  };
+  const microsoftAuthConfigured = Object.values(microsoftAuth).every(Boolean);
+
   // --- P1 #7 HTTP security middleware (prototype-level pass) -------------
   // contentSecurityPolicy is off: the SPA loads a Google Fonts CDN stylesheet
   // and Vite's dev-mode inline HMR scripts, and a real CSP needs to be tuned
@@ -484,6 +519,38 @@ export async function createApp() {
   // 10 MB cap on /api/upload. 1 MB is generous headroom for the largest
   // legitimate payload (a claim with many line items).
   app.use(express.json({ limit: '1mb' }));
+
+  // Public, secret-free capability endpoint used by the sign-in screen. The
+  // response shape stays stable when Entra is enabled; only these flags change.
+  app.get('/api/auth/config', (_req, res) => {
+    res.json({
+      provider: 'microsoft',
+      mode: authMode,
+      demoModeEnabled,
+      demoLoginEnabled,
+      microsoft: {
+        configured: microsoftAuthConfigured,
+        loginUrl: '/api/auth/microsoft/start',
+      },
+    });
+  });
+
+  // This route is the stable hand-off point for a future MSAL/OIDC adapter.
+  // It deliberately refuses to imitate SSO: until IT provides the tenant app
+  // registration and a signed-session implementation is installed, no user is
+  // authenticated and no authorization URL is generated without CSRF state.
+  app.get('/api/auth/microsoft/start', (_req, res) => {
+    if (!microsoftAuthConfigured) {
+      return res.status(503).json({
+        code: 'MICROSOFT_AUTH_NOT_CONFIGURED',
+        message: 'Microsoft sign-in is awaiting the organization\'s Entra app registration.',
+      });
+    }
+    return res.status(501).json({
+      code: 'MICROSOFT_AUTH_ADAPTER_REQUIRED',
+      message: 'Entra settings are present. Install the approved OIDC session adapter before enabling Microsoft sign-in.',
+    });
+  });
 
   // --- INTERIM upload access gate -------------------------------------
   // TEMPORARY until Phase 2 (real authentication/sessions). Previously this
@@ -1363,8 +1430,13 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
   };
 
   // Prototype account picker. It intentionally exposes only the fields needed
-  // to choose a demo identity; the full directory remains authenticated.
+  // to choose a demo identity; the full directory remains authenticated. This
+  // endpoint automatically closes when AUTH_MODE=microsoft unless explicitly
+  // reopened for a controlled test environment.
   app.get('/api/demo-users', (_req, res) => {
+    if (!demoLoginEnabled) {
+      return res.status(404).json({ error: 'Demo login is disabled.' });
+    }
     res.json(users.map(({ id, name, email, role, department, job_title, avatar_url }) => ({
       id,
       name,
@@ -4348,6 +4420,7 @@ You'll receive another email as soon as a decision is made.`
 
   // Admin: Seed Data
   app.post('/api/admin/seed', (req, res) => {
+    if (!demoModeEnabled) return res.status(404).json({ error: 'Demo data tools are disabled.' });
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -5771,6 +5844,7 @@ You'll receive another email as soon as a decision is made.`
   // narrower run than "everything"). No body (the original "Generate 1 Year
   // of History" button) still means "generate everything," unchanged.
   app.post('/api/admin/seed-year', (req, res) => {
+    if (!demoModeEnabled) return res.status(404).json({ error: 'Demo data tools are disabled.' });
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -5801,6 +5875,7 @@ You'll receive another email as soon as a decision is made.`
   // standard org chart in place, so the next thing anyone does is create
   // something from scratch rather than looking at a random empty app.
   app.post('/api/admin/reset', (req, res) => {
+    if (!demoModeEnabled) return res.status(404).json({ error: 'Demo data tools are disabled.' });
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -6074,7 +6149,7 @@ You'll receive another email as soon as a decision is made.`
   // too, so a fresh serverless cold start has demo data to serve. NOTE: the
   // backend is in-memory — state does not persist across cold starts. That is
   // a deliberate prototype limitation; see PRODUCTION-PASS.md #3 (persistent DB).
-  if (process.env.AUTO_SEED !== 'false') {
+  if (demoModeEnabled && process.env.AUTO_SEED !== 'false') {
     try {
       seedYearOfData();
       console.log('Auto-seeded 1 year of mock data on startup.');

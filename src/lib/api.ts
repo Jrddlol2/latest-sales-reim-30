@@ -34,7 +34,7 @@ export const CURRENT_USER_KEY = 'mockUserId';
  * longer clobbers the others. sessionStorage survives an in-tab reload but is
  * scoped to the tab, which is exactly the demo behaviour we want.
  */
-export const getCurrentUserId = () => sessionStorage.getItem(CURRENT_USER_KEY) || 'u15';
+export const getCurrentUserId = () => sessionStorage.getItem(CURRENT_USER_KEY) || '';
 export const setCurrentUserId = (id: string) => sessionStorage.setItem(CURRENT_USER_KEY, id);
 
 /**
@@ -44,9 +44,9 @@ export const setCurrentUserId = (id: string) => sessionStorage.setItem(CURRENT_U
  */
 const SESSION_KEY = 'hasLoggedIn';
 export const isLoggedIn = () => sessionStorage.getItem(SESSION_KEY) === 'true';
-export const login = (userId: string) => {
-  setCurrentUserId(userId);
-  sessionStorage.setItem(SESSION_KEY, 'true');
+export const login = (userId: string, storage: Storage = sessionStorage) => {
+  storage.setItem(CURRENT_USER_KEY, userId);
+  storage.setItem(SESSION_KEY, 'true');
 };
 export const logout = () => {
   sessionStorage.removeItem(SESSION_KEY);
@@ -73,6 +73,9 @@ const ROLE_DEEP_LINK: Record<string, string> = {
  * before the login gate is evaluated.
  */
 export const applyDeepLinkLogin = (): boolean => {
+  const demoDeepLinksEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEMO_LOGIN === 'true';
+  if (!demoDeepLinksEnabled) return false;
+
   const params = new URLSearchParams(window.location.search);
   const roleParam = params.get('role')?.toLowerCase();
   const uidParam = params.get('uid');
@@ -94,11 +97,12 @@ export interface ApiError extends Error {
 }
 
 export async function apiFetch<T = any>(url: string, options: RequestInit = {}): Promise<T> {
+  const currentUserId = getCurrentUserId();
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'X-User-Id': getCurrentUserId(),
+      ...(currentUserId ? { 'X-User-Id': currentUserId } : {}),
       ...options.headers,
     },
   });
@@ -544,6 +548,8 @@ export interface WorkspaceData {
   highValueThreshold: number;
   /** Company spending policy: max amount per line item, keyed by expense category. */
   categoryLimits: Record<string, number>;
+  /** Master deployment switch; false means all demo-only UI is unavailable. */
+  demoModeEnabled: boolean;
 }
 
 /**
@@ -552,7 +558,7 @@ export interface WorkspaceData {
  * and merged here so components only ever see one list.
  */
 export async function loadWorkspace(): Promise<WorkspaceData> {
-  const [me, users, rawClaims, rawAdvances, rawLiquidations, masterAll, rawFields, rawMoms, rawReviewMeetings, rawCompanies, rawOutbox, rawSupport, rawDelegations, rawSettings] =
+  const [me, users, rawClaims, rawAdvances, rawLiquidations, masterAll, rawFields, rawMoms, rawReviewMeetings, rawCompanies, rawOutbox, rawSupport, rawDelegations, rawSettings, runtimeConfig] =
     await Promise.all([
       apiFetch('/api/me'),
       apiFetch('/api/users'),
@@ -568,6 +574,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
       apiFetch('/api/support'),
       apiFetch('/api/delegations'),
       apiFetch('/api/admin/settings'),
+      apiFetch('/api/auth/config'),
     ]);
 
   const claims: Claim[] = [
@@ -625,6 +632,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
     paymentMethods: rawSettings?.paymentMethods || ['Cash', 'GCash', 'Bank Transfer', 'Check'],
     highValueThreshold: Number(rawSettings?.highValueThreshold) || 15000,
     categoryLimits: (rawSettings?.categoryLimits && typeof rawSettings.categoryLimits === 'object') ? rawSettings.categoryLimits : {},
+    demoModeEnabled: runtimeConfig?.demoModeEnabled === true,
   };
 }
 
