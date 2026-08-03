@@ -4579,10 +4579,6 @@ You'll receive another email as soon as a decision is made.`
       const [first, ...rest] = contact.split(' ');
       const last = rest[rest.length - 1] || first;
       const momDate = rDate(daysAgo);
-      // Roughly 1 in 3 minutes were uploaded as a scanned document rather
-      // than filled in via the template form - the real distribution the
-      // requestor-facing MOM step supports.
-      const isUploaded = momCursor % 3 === 0;
       // Roughly 1 in 4 records are Letters of Agreement rather than plain
       // meeting minutes, so the Minutes & Agreements tab shows both types.
       const isLOA = momCursor % 4 === 0;
@@ -4604,12 +4600,11 @@ You'll receive another email as soon as a decision is made.`
         prepared_by: reqUser?.name || 'Requestor',
         status,
         created_at: momDate,
-        minutes_source: isUploaded ? MinutesSource.UPLOADED : MinutesSource.TEMPLATE,
+        minutes_source: MinutesSource.TEMPLATE,
         meeting_type: MEETING_TYPES[idx],
         participants_internal: internalParticipants,
         participants_external: `${contact}${idx % 2 === 0 ? ', ' + CONTACTS[(idx + 1) % 5] : ''}`,
         custom_fields: { type_of_account: ACCOUNT_TYPES[idx], category: CATEGORIES[idx] },
-        ...(isUploaded ? { file_url: '/mom_attachment_placeholder.png', file_name: `${actualClient.replace(/[^a-zA-Z0-9]/g, '_')}_minutes.png` } : {}),
       };
       getOrCreateCompany(actualClient);
       moms.push(mom);

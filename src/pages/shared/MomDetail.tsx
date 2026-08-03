@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -15,6 +15,8 @@ export function MomDetail() {
   const { moms, claims } = useAppContext();
   const { addToast } = useToast();
   const [exporting, setExporting] = useState<'pdf' | 'word' | null>(null);
+  const exportMenuRef = useRef<HTMLDetailsElement>(null);
+  const moreMenuRef = useRef<HTMLDetailsElement>(null);
 
   const mom = moms.find(m => m.id === id);
 
@@ -42,6 +44,7 @@ export function MomDetail() {
   const internalParticipants = mom.participantsInternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
   const externalParticipants = mom.participantsExternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
   const handleExport = async (format: 'pdf' | 'word') => {
+    exportMenuRef.current?.removeAttribute('open');
     setExporting(format);
     try {
       if (format === 'pdf') await exportMomPdf(mom);
@@ -63,43 +66,66 @@ export function MomDetail() {
       </nav>
 
       <Card className="overflow-hidden">
-        <CardHeader className="flex-col xl:flex-row items-start xl:items-center gap-5 bg-surface-container-low/60 border-b border-outline-variant">
-          <div>
-            <h2 className="text-headline-md font-semibold text-brand-slate">
-              {mom.companyName || 'Unknown Company'}
-            </h2>
+        <CardHeader className="flex-col lg:flex-row items-start lg:items-center gap-4 bg-surface-container-low/60 border-b border-outline-variant">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-headline-md font-semibold text-brand-slate">
+                {mom.companyName || 'Unknown Company'}
+              </h2>
+              <span
+                title={DOCUMENT_TYPE_LABEL[docType]}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-bold uppercase tracking-wider ${docType === 'LOA' ? 'bg-tertiary-container/50 text-tertiary' : 'bg-primary-container/40 text-on-primary-container'}`}
+              >
+                {docType === 'LOA' ? 'LOA' : 'MoM'}
+              </span>
+              <span className="inline-flex items-center rounded-md bg-surface-container-highest px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-on-surface-variant">
+                {mom.status === 'Completed' ? 'Finalized' : (mom.status || 'Draft')}
+              </span>
+            </div>
             <p className="text-body-sm text-outline mt-1">
               {mom.typeOfAccount || mom.preparedBy} &bull; {dateStr}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button variant="outline" className="gap-2" onClick={() => handleExport('pdf')} disabled={exporting !== null}>
-              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">picture_as_pdf</span>
-              {exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
-            </Button>
-            <Button className="gap-2" onClick={() => handleExport('word')} disabled={exporting !== null}>
-              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">description</span>
-              Export Word
-            </Button>
-            <span
-              title={DOCUMENT_TYPE_LABEL[docType]}
-              className={`inline-flex items-center gap-1 px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider ${docType === 'LOA' ? 'bg-tertiary-container/50 text-tertiary' : 'bg-primary-container/40 text-on-primary-container'}`}
-            >
-              <span className="material-symbols-outlined text-[15px]">{docType === 'LOA' ? 'handshake' : 'description'}</span>
-              {DOCUMENT_TYPE_LABEL[docType]}
-            </span>
-            <span className="inline-flex items-center px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider bg-surface-container-highest text-on-surface-variant">
-              {mom.status || 'Draft'}
-            </span>
+          <div className="flex items-center gap-2">
             {linkedClaim && (
-              <Button variant="outline" className="gap-2" onClick={() => navigate(`/claims/${linkedClaim.id}`)}>
+              <Button className="gap-2" onClick={() => navigate(`/claims/${linkedClaim.id}`)}>
                 <span className="material-symbols-outlined text-[18px]">receipt_long</span>
-                View Claim ({linkedClaim.ref})
+                View Claim
               </Button>
+            )}
+            <details ref={exportMenuRef} className="relative">
+              <summary className="list-none inline-flex h-10 cursor-pointer items-center gap-2 rounded-[10px] border border-outline-variant bg-white px-4 font-label-md text-on-surface hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                <span className="material-symbols-outlined text-[18px]">download</span>
+                {exporting ? 'Exporting…' : 'Export'}
+                <span className="material-symbols-outlined text-[17px]">expand_more</span>
+              </summary>
+              <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-lg border border-outline-variant bg-white p-1.5 shadow-lg">
+                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('pdf')}>
+                  <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span>PDF document
+                </button>
+                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('word')}>
+                  <span className="material-symbols-outlined text-[18px]">description</span>Word document
+                </button>
+              </div>
+            </details>
+            {fileUrl && (
+              <details ref={moreMenuRef} className="relative">
+                <summary aria-label="More actions" className="list-none inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-[10px] border border-outline-variant bg-white text-on-surface hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                  <span className="material-symbols-outlined">more_vert</span>
+                </summary>
+                <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-lg border border-outline-variant bg-white p-1.5 shadow-lg">
+                  <a href={fileUrl} target="_blank" rel="noreferrer" onClick={() => moreMenuRef.current?.removeAttribute('open')} className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-surface-container-low">
+                    <span className="material-symbols-outlined text-[18px]">open_in_new</span>Open original file
+                  </a>
+                  <a href={fileUrl} download={mom.fileName} onClick={() => moreMenuRef.current?.removeAttribute('open')} className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-surface-container-low">
+                    <span className="material-symbols-outlined text-[18px]">download</span>Download original
+                  </a>
+                </div>
+              </details>
             )}
           </div>
         </CardHeader>
-        <CardContent className={showAttachment ? "grid grid-cols-1 md:grid-cols-2 gap-8" : "block"}>
+        <CardContent>
 
           <div className="space-y-6">
             <section>
@@ -204,52 +230,24 @@ export function MomDetail() {
             </section>
           </div>
 
-          {showAttachment && <div className="space-y-6">
-             <section className="h-full flex flex-col">
-                <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Attached Document</h3>
-
-                {fileUrl ? (
-                  <div className="flex flex-col flex-1 border border-brand-border rounded-[10px] overflow-hidden bg-surface-container-low min-h-[400px]">
-                    <div className="p-3 border-b border-brand-border flex items-center justify-between bg-surface-container-lowest">
-                      <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-outline">description</span>
-                        <span className="text-label-sm font-medium truncate max-w-[200px] sm:max-w-[300px]">
-                          {mom.fileName || 'document.pdf'}
-                        </span>
-                      </div>
-                      <a href={fileUrl} target="_blank" rel="noreferrer" download={mom.fileName}>
-                        <Button size="sm" variant="outline" className="gap-2">
-                          <span className="material-symbols-outlined text-[16px]">download</span>
-                          Download
-                        </Button>
-                      </a>
-                    </div>
-
-                    <div className="flex-1 flex items-center justify-center p-4">
-                      {mom.fileName?.match(/\.(jpeg|jpg|gif|png)$/i) ? (
-                        <img src={fileUrl} alt="Attachment Preview" className="max-w-full max-h-full object-contain rounded" />
-                      ) : mom.fileName?.match(/\.pdf$/i) ? (
-                        <iframe title="MOM attachment" src={fileUrl} className="w-full h-full min-h-[350px] rounded border border-brand-border" />
-                      ) : (
-                        <div className="w-full h-full min-h-[300px] flex flex-col items-center justify-center bg-surface-container rounded border border-brand-border border-dashed text-center text-outline">
-                          <span className="material-symbols-outlined text-[48px] mb-2 opacity-50">description</span>
-                          <p className="text-body-sm">Preview not available for this file type.</p>
-                          <p className="text-[12px] mt-1">Use Download to open it.</p>
-                        </div>
-                      )}
-                    </div>
+          {showAttachment && (
+            <section className="mt-6 border-t border-outline-variant pt-6">
+              <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Supporting file</h3>
+              <div className="flex flex-col gap-3 rounded-[10px] border border-brand-border bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="material-symbols-outlined rounded-lg bg-primary/10 p-2 text-primary">description</span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-on-surface">{mom.fileName || 'Attached meeting document'}</p>
+                    <p className="text-xs text-outline">Uploaded minutes · Opens in a new tab</p>
                   </div>
-                ) : (
-                  <div className="flex-1 min-h-[200px] border border-brand-border border-dashed rounded-[10px] bg-surface-container-low flex flex-col items-center justify-center p-6 text-center text-outline">
-                    <span className="material-symbols-outlined text-[32px] mb-2 opacity-50">draft</span>
-                    <p className="text-body-sm font-medium">No file attached</p>
-                    <p className="text-[12px] mt-1 max-w-[250px]">
-                      This MOM was created via the template form — the fields on the left are the record.
-                    </p>
-                  </div>
-                )}
-             </section>
-          </div>}
+                </div>
+                <a href={fileUrl} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-outline-variant px-3 text-xs font-semibold text-on-surface hover:bg-surface-container-low">
+                  <span className="material-symbols-outlined text-[17px]">open_in_new</span>
+                  Open file
+                </a>
+              </div>
+            </section>
+          )}
 
         </CardContent>
       </Card>

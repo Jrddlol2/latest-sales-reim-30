@@ -230,8 +230,8 @@ export function fromServerMom(m: any): MOM | null {
     meetingDate: m.meeting_date || undefined,
     status: m.status || undefined,
     source: m.minutes_source === 'Uploaded' ? MinutesSource.UPLOADED : MinutesSource.TEMPLATE,
-    fileUrl: m.file_url || undefined,
-    fileName: m.file_name || undefined,
+    fileUrl: m.file_url === '/mom_attachment_placeholder.png' ? undefined : (m.file_url || undefined),
+    fileName: m.file_url === '/mom_attachment_placeholder.png' ? undefined : (m.file_name || undefined),
     companyName: m.client_name || m.client || undefined,
     purposeOfMeeting: m.purpose || undefined,
     location: m.location || undefined,
@@ -1030,6 +1030,9 @@ export interface CreateMomInput {
   ccClient?: boolean;
   discussion?: string;
   actionItems?: string;
+  source?: MinutesSource;
+  fileUrl?: string;
+  fileName?: string;
   customFields?: Record<string, string>;
   status?: 'Draft' | 'Completed';
 }
@@ -1048,7 +1051,9 @@ export const createMom = (input: CreateMomInput) =>
       cc_client: Boolean(input.ccClient),
       discussion: input.discussion || '',
       action_items: input.actionItems || '',
-      minutes_source: MinutesSource.TEMPLATE,
+      minutes_source: input.source || MinutesSource.TEMPLATE,
+      file_url: input.fileUrl,
+      file_name: input.fileName,
       custom_fields: input.customFields,
       status: input.status || 'Completed',
     }),

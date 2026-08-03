@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   fromServerClaim, fromServerCashAdvance, fromServerLiquidation,
-  fromServerUser, fromServerEmail, toServerStatus,
+  fromServerUser, fromServerEmail, fromServerMom, toServerStatus,
 } from './api';
 import { ClaimStatus } from '../types';
 
@@ -145,5 +145,21 @@ describe('fromServerEmail', () => {
     });
     expect(email.recipientId).toBe('u1');
     expect(email.read).toBe(false);
+  });
+});
+
+describe('fromServerMom', () => {
+  it('hides the retired demo placeholder while preserving real uploads', () => {
+    const legacy = fromServerMom({
+      id: 'm1', requestor_id: 'u1', file_url: '/mom_attachment_placeholder.png', file_name: 'fake-minutes.png',
+    });
+    const uploaded = fromServerMom({
+      id: 'm2', requestor_id: 'u1', file_url: '/uploads/real-minutes.pdf', file_name: 'real-minutes.pdf', minutes_source: 'Uploaded',
+    });
+
+    expect(legacy?.fileUrl).toBeUndefined();
+    expect(legacy?.fileName).toBeUndefined();
+    expect(uploaded?.fileUrl).toBe('/uploads/real-minutes.pdf');
+    expect(uploaded?.fileName).toBe('real-minutes.pdf');
   });
 });
