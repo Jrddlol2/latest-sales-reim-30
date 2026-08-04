@@ -9,7 +9,11 @@ import { useAppContext } from '../../components/AppContext';
 import { DynamicFieldRenderer } from '../../components/shared/DynamicFieldRenderer';
 import { useToast } from '../../components/shared/ToastContext';
 import { ConfirmModal } from '../../components/shared/ConfirmModal';
-import { ClaimStatus, ClaimType, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
+import { MomClientPreviewModal } from '../../components/shared/MomClientPreviewModal';
+import { ContactPersonsField } from '../../components/shared/ContactPersonsField';
+import { ClaimStatus, ClaimType, MOM, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
+import { exportMomPdf, exportMomWord } from '../../lib/momExport';
+import { MomContact, serializeContacts, joinDesignations } from '../../lib/momContacts';
 import { submitClaimFlow, submitCashAdvanceFlow, submitLiquidationFlow, DraftLineItem } from '../../lib/api';
 import { formatMoney } from '../../lib/money';
 import { EXPENSE_CATEGORIES } from '../../lib/expenseCategories';
@@ -29,6 +33,7 @@ const TYPE_PARAM_MAP: Record<string, ClaimType> = {
   liquidation: 'Liquidation',
 };
 const REIMBURSEMENT_CAP = 1000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function SubmitClaim() {
   const navigate = useNavigate();
@@ -54,9 +59,20 @@ export function SubmitClaim() {
   const invalidDateInputRefs = React.useRef<Array<HTMLInputElement | null>>([]);
   const clientEmailInputRef = React.useRef<HTMLInputElement>(null);
   const [momCore, setMomCore] = useState({
-    client: '', purpose: '', meetingDate: '', location: '', contactPerson: '', contactPersonEmail: '',
+    client: '', purpose: '', meetingDate: '', location: '', contactPersonEmail: '',
     discussion: '', actionItems: '', ccClient: false,
   });
+  // A meeting can involve several client-side attendees, each with their own
+  // designation; contacts is the source of truth, serialized into
+  // momCore.contactPerson at submit (see serializeContacts).
+  const [contacts, setContacts] = useState<MomContact[]>([{ name: '', designation: '' }]);
+  // The client can be CC'd on more than one address; clientEmails is the source
+  // of truth for the chip UI, joined into momCore.contactPersonEmail at submit.
+  const [clientEmails, setClientEmails] = useState<string[]>([]);
+  const [emailDraft, setEmailDraft] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [showMomPreview, setShowMomPreview] = useState(false);
+  const [previewExporting, setPreviewExporting] = useState<'pdf' | 'word' | null>(null);
   // A known Company Directory entry can pre-fill the meeting details below
   // (mirrors the original system's "Company Auto-Fill" MOM behavior). Default
   // to the picker when companies exist; fall back to free text otherwise.
@@ -114,8 +130,8 @@ export function SubmitClaim() {
   };
 
   const handleNext = () => {
-    if (step === 2 && momCore.ccClient && !momCore.contactPersonEmail.trim()) {
-      addToast('Enter the client email to send claim status notifications.', 'error');
+    if (step === 2 && momCore.ccClient && joinedClientEmails().trim() === '') {
+      addToast('Add at least one client email to send claim status notifications.', 'error');
       window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
       return;
     }
@@ -210,7 +226,9 @@ export function SubmitClaim() {
   };
 
   /** Selecting a known company pre-fills Location/Contact from its directory
-   *  record — only into fields the user hasn't already typed something into. */
+   *  record — only into fields the user hasn't already typed something into.
+   *  The client email is deliberately NOT prefilled: the meeting contact is
+   *  often a different person than the company's default address. */
   const applyCompanyDefaults = (companyName: string) => {
     const company = companies.find(c => c.name === companyName);
     if (!company) return;
@@ -218,9 +236,61 @@ export function SubmitClaim() {
       ...p,
       client: companyName,
       location: p.location || company.address || '',
-      contactPerson: p.contactPerson || company.contactPerson || '',
-      contactPersonEmail: p.contactPersonEmail || company.contactEmail || '',
     }));
+    // Prefill the first contact's name only when it's still blank — never
+    // overwrite what the user typed, and never touch designations.
+    if (company.contactPerson) {
+      setContacts(current => {
+        const [first, ...rest] = current.length ? current : [{ name: '', designation: '' }];
+        if (first.name.trim()) return current;
+        return [{ ...first, name: company.contactPerson || '' }, ...rest];
+      });
+    }
+  };
+
+  const addClientEmail = (raw: string) => {
+    const email = raw.trim().replace(/,$/, '');
+    if (!email) return;
+    if (!EMAIL_RE.test(email)) {
+      setEmailError(`"${email}" doesn't look like a valid email address.`);
+      return;
+    }
+    if (clientEmails.some(e => e.toLowerCase() === email.toLowerCase())) {
+      setEmailError(`${email} is already in the list.`);
+      setEmailDraft('');
+      return;
+    }
+    setClientEmails(current => [...current, email]);
+    setEmailDraft('');
+    setEmailError('');
+  };
+
+  const removeClientEmail = (email: string) =>
+    setClientEmails(current => current.filter(e => e !== email));
+
+  const joinedClientEmails = () => {
+    const pending = emailDraft.trim().replace(/,$/, '');
+    const all = pending && EMAIL_RE.test(pending) && !clientEmails.includes(pending)
+      ? [...clientEmails, pending]
+      : clientEmails;
+    return all.join(', ');
+  };
+
+  const previewMom: MOM = {
+    id: 'preview',
+    claimId: '',
+    documentType,
+    companyName: momCore.client,
+    purposeOfMeeting: momCore.purpose,
+    meetingDate: momCore.meetingDate,
+    location: momCore.location,
+    contactPerson: serializeContacts(contacts),
+    contactPersonEmail: joinedClientEmails(),
+    description: momCore.discussion,
+    actionItems: momCore.actionItems,
+    preparedBy: currentUser.name,
+    typeOfAccount: momData['type_of_account'],
+    customFields: momData,
   };
 
   /** Presenter convenience (the header "Autofill" button): fill the ENTIRE
@@ -331,12 +401,12 @@ export function SubmitClaim() {
           ...p,
           purpose: p.purpose || 'Quarterly account review',
           location: p.location || 'Makati City, Philippines',
-          contactPerson: p.contactPerson || 'Jane Dela Cruz',
-          contactPersonEmail: p.contactPersonEmail || 'jane@client.com',
           discussion: p.discussion || 'Reviewed pipeline, agreed next steps and follow-up schedule.',
           actionItems: p.actionItems || 'Send the revised proposal and confirm the next meeting date.',
           meetingDate: p.meetingDate || today(),
         }));
+        setContacts(prev => (prev.length && prev[0].name.trim()) ? prev : [{ name: 'Jane Dela Cruz', designation: '' }]);
+        setClientEmails(prev => prev.length ? prev : ['jane@client.com']);
         setMomData(p => ({ ...p, ...fillCustomFields('mom') }));
       }
       addToast('Form filled with demo data.', 'success');
@@ -355,8 +425,8 @@ export function SubmitClaim() {
    */
   const send = async (isDraft: boolean) => {
     if (!isDraft && isReimbursement && showReimbursementDateError()) return;
-    if (claimType === 'Reimbursement' && momCore.ccClient && !momCore.contactPersonEmail.trim()) {
-      addToast('Enter the client email to send claim status notifications.', 'error');
+    if (claimType === 'Reimbursement' && momCore.ccClient && joinedClientEmails().trim() === '') {
+      addToast('Add at least one client email to send claim status notifications.', 'error');
       setStep(2);
       window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
       return;
@@ -382,9 +452,15 @@ export function SubmitClaim() {
           lineItems: lineItemsLocal,
           mom: claimType === 'Reimbursement' ? {
             ...momCore,
+            contactPerson: serializeContacts(contacts),
+            contactPersonEmail: joinedClientEmails(),
             documentType,
           } : undefined,
-          customFields: { ...momData, ...claimCustomFields },
+          // contact_person_designation stays in sync as a comma-joined legacy
+          // field for any consumer still reading the old single-designation shape.
+          customFields: claimType === 'Reimbursement'
+            ? { ...momData, contact_person_designation: joinDesignations(contacts), ...claimCustomFields }
+            : { ...momData, ...claimCustomFields },
           remarks: claimType === 'Transport Reimbursement' ? 'Transport reimbursement' : momCore.purpose,
           isDraft,
         });
@@ -874,6 +950,10 @@ export function SubmitClaim() {
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
                   <h4 className="font-headline-md text-on-surface">{DOCUMENT_TYPE_LABEL[documentType]}</h4>
                   <div className="flex items-center gap-2">
+                    <Button type="button" variant="outline" className="gap-2 whitespace-nowrap" onClick={() => setShowMomPreview(true)} disabled={!momCore.client.trim()}>
+                      <span className="material-symbols-outlined text-[18px]">visibility</span>
+                      Preview client copy
+                    </Button>
                     <Select value={documentType} onChange={(e) => setDocumentType(e.target.value as MomDocumentType)} className="w-auto" aria-label="Document type">
                       <option value="MoM">Minutes of Meeting</option>
                       <option value="LOA">Letter of Agreement</option>
@@ -929,21 +1009,55 @@ export function SubmitClaim() {
                         <h5 className="font-headline-sm text-on-surface">Client contact</h5>
                         <p className="text-body-sm text-outline mt-1">Who attended on behalf of the client and where should updates be sent?</p>
                       </div>
+                      <ContactPersonsField contacts={contacts} onChange={setContacts} />
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                          <Label>Contact Person</Label>
-                          <Input value={momCore.contactPerson} onChange={e => setMomCore(p => ({ ...p, contactPerson: e.target.value }))} />
-                        </div>
-                        <DynamicFieldRenderer
-                          entity="mom"
-                          values={momData}
-                          onChange={(key, value) => setMomData(p => ({ ...p, [key]: value }))}
-                          includeKeys={['contact_person_designation']}
-                          containerClassName="contents"
-                        />
-                        <div>
-                          <Label required={momCore.ccClient}>Client Email</Label>
-                          <Input ref={clientEmailInputRef} type="email" required={momCore.ccClient} value={momCore.contactPersonEmail} onChange={e => setMomCore(p => ({ ...p, contactPersonEmail: e.target.value }))} />
+                        <div className="md:col-span-2">
+                          <div className="flex items-baseline justify-between">
+                            <Label required={momCore.ccClient}>Client Email(s) — who gets status updates</Label>
+                            {clientEmails.length > 0 && (
+                              <span className="text-xs font-semibold text-primary">{clientEmails.length} added</span>
+                            )}
+                          </div>
+                          <div className={`flex flex-wrap items-center gap-2 rounded-input border bg-white px-3 py-2 min-h-11 focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary ${emailError || (momCore.ccClient && clientEmails.length === 0) ? 'border-tertiary' : 'border-brand-field-border'}`}>
+                            {clientEmails.map(email => (
+                              <span key={email} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-2.5 py-1 text-xs font-semibold">
+                                {email}
+                                <button type="button" aria-label={`Remove ${email}`} onClick={() => removeClientEmail(email)} className="hover:text-on-surface">
+                                  <span className="material-symbols-outlined text-[14px]">close</span>
+                                </button>
+                              </span>
+                            ))}
+                            <input
+                              ref={clientEmailInputRef}
+                              type="email"
+                              className="flex-1 min-w-[160px] outline-none text-sm bg-transparent"
+                              placeholder={clientEmails.length ? 'Add another email…' : 'name@client.com'}
+                              value={emailDraft}
+                              onChange={e => { setEmailDraft(e.target.value); if (emailError) setEmailError(''); }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter' || e.key === ',') {
+                                  e.preventDefault();
+                                  addClientEmail(emailDraft);
+                                } else if (e.key === 'Backspace' && !emailDraft && clientEmails.length) {
+                                  removeClientEmail(clientEmails[clientEmails.length - 1]);
+                                }
+                              }}
+                              onBlur={() => emailDraft.trim() && addClientEmail(emailDraft)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => addClientEmail(emailDraft)}
+                              disabled={!emailDraft.trim()}
+                              className="inline-flex h-7 items-center gap-1 rounded-md bg-primary/10 px-2.5 text-xs font-bold text-primary hover:bg-primary/20 disabled:opacity-40 disabled:hover:bg-primary/10"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">add</span>Add
+                            </button>
+                          </div>
+                          {emailError ? (
+                            <p className="text-xs text-tertiary mt-1 font-semibold">{emailError}</p>
+                          ) : (
+                            <p className="text-xs text-outline mt-1">Type an address, then press Enter, comma, or Add. You can CC more than one client.</p>
+                          )}
                         </div>
                       </div>
                       <label className={`flex items-start gap-3 min-h-11 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${momCore.ccClient ? 'border-primary/40 bg-primary/8' : 'border-outline-variant bg-surface-container-low hover:border-primary/30'}`}>
@@ -953,7 +1067,7 @@ export function SubmitClaim() {
                           onChange={e => {
                             const checked = e.target.checked;
                             setMomCore(p => ({ ...p, ccClient: checked }));
-                            if (checked && !momCore.contactPersonEmail.trim()) window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
+                            if (checked && clientEmails.length === 0) window.setTimeout(() => clientEmailInputRef.current?.focus(), 0);
                           }}
                           className="h-4 w-4 mt-0.5 accent-primary"
                         />
@@ -962,7 +1076,7 @@ export function SubmitClaim() {
                             <span aria-hidden="true" className="material-symbols-outlined text-[17px] text-primary">priority_high</span>
                             CC client on claim status notifications
                           </span>
-                          <span className="block text-xs text-outline mt-1">Important: enable this when the client should receive status updates. Client email becomes required.</span>
+                          <span className="block text-xs text-outline mt-1">Important: enable this when the client should receive status updates. At least one client email becomes required.</span>
                         </span>
                       </label>
                     </section>
@@ -1065,6 +1179,43 @@ export function SubmitClaim() {
           Reimbursement receipts must be dated within {REIMBURSEMENT_FILING_WINDOW_DAYS} days of the filing date. Update the purchase date before continuing.
         </p>
       </ConfirmModal>
+
+      {showMomPreview && (
+        <MomClientPreviewModal
+          mom={previewMom}
+          onClose={() => setShowMomPreview(false)}
+          footer={
+            <>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1"
+                  disabled={previewExporting !== null}
+                  onClick={async () => {
+                    setPreviewExporting('pdf');
+                    try { await exportMomPdf(previewMom, 'client'); } finally { setPreviewExporting(null); }
+                  }}
+                >
+                  <span className="material-symbols-outlined text-[16px]">picture_as_pdf</span> PDF
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1"
+                  disabled={previewExporting !== null}
+                  onClick={() => { setPreviewExporting('word'); try { exportMomWord(previewMom, 'client'); } finally { setPreviewExporting(null); } }}
+                >
+                  <span className="material-symbols-outlined text-[16px]">description</span> Word
+                </Button>
+              </div>
+              <p className="text-xs text-outline">Submit the claim to send this copy to the client.</p>
+            </>
+          }
+        />
+      )}
     </div>
   );
 }

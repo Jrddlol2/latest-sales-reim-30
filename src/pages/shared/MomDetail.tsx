@@ -2,19 +2,24 @@ import { useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { MomClientPreviewModal } from '../../components/shared/MomClientPreviewModal';
 import { useAppContext } from '../../components/AppContext';
-import { uploadUrl } from '../../lib/api';
+import { uploadUrl, sendMomToClient } from '../../lib/api';
 import { formatDateTime } from '../../lib/date';
 import { DOCUMENT_TYPE_LABEL, MomDocumentType } from '../../types';
 import { exportMomPdf, exportMomWord } from '../../lib/momExport';
+import { contactsFromMom } from '../../lib/momContacts';
 import { useToast } from '../../components/shared/ToastContext';
 
 export function MomDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { moms, claims } = useAppContext();
+  const { moms, claims, currentUser, users } = useAppContext();
   const { addToast } = useToast();
   const [exporting, setExporting] = useState<'pdf' | 'word' | null>(null);
+  const [showClientPreview, setShowClientPreview] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
   const exportMenuRef = useRef<HTMLDetailsElement>(null);
   const moreMenuRef = useRef<HTMLDetailsElement>(null);
 
@@ -38,22 +43,48 @@ export function MomDetail() {
   const dateStr = mom.meetingDate ? formatDateTime(mom.meetingDate) : 'No date specified';
   const docType: MomDocumentType = mom.documentType === 'LOA' ? 'LOA' : 'MoM';
   const linkedClaim = mom.claimId ? claims.find(c => c.id === mom.claimId) : undefined;
+  // Mirrors the PUT /api/moms/:id guard: the owner, or the owner's approver, can
+  // edit — so the client's minutes can be corrected before (or after) sending.
+  const owner = users.find(u => u.id === mom.requestorId);
+  const canEdit = mom.requestorId === currentUser.id || (Boolean(owner) && owner!.reportsTo === currentUser.id);
+  // The server's /send route is owner-only.
+  const isOwner = mom.requestorId === currentUser.id;
+  const clientRecipients = (mom.contactPersonEmail || '').split(',').map(e => e.trim()).filter(Boolean);
+  const clientContacts = contactsFromMom(mom.contactPerson, mom.contactPersonDesignation);
   const fileUrl = uploadUrl(mom.fileUrl);
   const showAttachment = Boolean(fileUrl);
 
   const internalParticipants = mom.participantsInternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
   const externalParticipants = mom.participantsExternal?.split(',').map(p => p.trim()).filter(Boolean) || [];
-  const handleExport = async (format: 'pdf' | 'word') => {
+  const handleExport = async (format: 'pdf' | 'word', audience: 'internal' | 'client' = 'internal') => {
     exportMenuRef.current?.removeAttribute('open');
     setExporting(format);
     try {
-      if (format === 'pdf') await exportMomPdf(mom);
-      else exportMomWord(mom);
-      addToast(`${DOCUMENT_TYPE_LABEL[docType]} exported as ${format === 'pdf' ? 'PDF' : 'Word'}.`, 'success');
+      if (format === 'pdf') await exportMomPdf(mom, audience);
+      else exportMomWord(mom, audience);
+      const copyLabel = audience === 'client' ? 'client copy' : 'your copy';
+      addToast(`${DOCUMENT_TYPE_LABEL[docType]} exported as ${format === 'pdf' ? 'PDF' : 'Word'} (${copyLabel}).`, 'success');
     } catch (error: any) {
       addToast(error?.message || 'Could not export this document.', 'error');
     } finally {
       setExporting(null);
+    }
+  };
+
+  const handleSendToClient = async () => {
+    if (clientRecipients.length === 0) {
+      addToast('Add a client email to this record before sending.', 'error');
+      return;
+    }
+    setSending(true);
+    try {
+      await sendMomToClient(mom.id);
+      setSent(true);
+      addToast(`Client copy sent to ${clientRecipients.join(', ')}.`, 'success');
+    } catch (error: any) {
+      addToast(error?.message || 'Could not send the client copy.', 'error');
+    } finally {
+      setSending(false);
     }
   };
 
@@ -93,18 +124,38 @@ export function MomDetail() {
                 View Claim
               </Button>
             )}
+            {canEdit && (
+              <Button variant="outline" className="gap-2" onClick={() => navigate(`/moms/${mom.id}/edit`)}>
+                <span className="material-symbols-outlined text-[18px]">edit</span>
+                Edit
+              </Button>
+            )}
+            <Button variant="outline" className="gap-2" onClick={() => setShowClientPreview(true)}>
+              <span className="material-symbols-outlined text-[18px]">visibility</span>
+              Preview client copy
+            </Button>
             <details ref={exportMenuRef} className="relative">
               <summary className="list-none inline-flex h-10 cursor-pointer items-center gap-2 rounded-btn border border-outline-variant bg-white px-4 font-label-md text-on-surface hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
                 <span className="material-symbols-outlined text-[18px]">download</span>
                 {exporting ? 'Exporting…' : 'Export'}
                 <span className="material-symbols-outlined text-[17px]">expand_more</span>
               </summary>
-              <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-lg border border-outline-variant bg-white p-1.5 shadow-lg">
-                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('pdf')}>
+              <div className="absolute right-0 z-20 mt-2 w-56 overflow-hidden rounded-lg border border-outline-variant bg-white p-1.5 shadow-lg">
+                <p className="px-3 pt-1.5 pb-1 text-[11px] font-bold uppercase tracking-wider text-outline">Your copy</p>
+                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('pdf', 'internal')}>
                   <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span>PDF document
                 </button>
-                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('word')}>
+                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('word', 'internal')}>
                   <span className="material-symbols-outlined text-[18px]">description</span>Word document
+                </button>
+                <div className="my-1.5 border-t border-outline-variant" />
+                <p className="px-3 pt-0.5 pb-1 text-[11px] font-bold uppercase tracking-wider text-outline">Client copy</p>
+                <p className="px-3 pb-1.5 text-[11px] text-outline">Omits Type of Account.</p>
+                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('pdf', 'client')}>
+                  <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span>PDF for client
+                </button>
+                <button disabled={exporting !== null} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-container-low disabled:opacity-50" onClick={() => handleExport('word', 'client')}>
+                  <span className="material-symbols-outlined text-[18px]">description</span>Word for client
                 </button>
               </div>
             </details>
@@ -155,13 +206,18 @@ export function MomDetail() {
             </section>
 
             <section>
-              <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Contact Person</h3>
+              <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">{clientContacts.length > 1 ? 'Contact Persons' : 'Contact Person'}</h3>
               <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
                 <div>
                   <dt className="text-label-sm text-outline">Name & Designation</dt>
                   <dd className="text-body-base font-medium mt-1">
-                    {mom.contactPerson || '-'}
-                    {mom.contactPersonDesignation ? ` (${mom.contactPersonDesignation})` : ''}
+                    {clientContacts.length > 0 ? (
+                      <ul className="space-y-1">
+                        {clientContacts.map((contact, i) => (
+                          <li key={i}>{contact.name}{contact.designation ? ` (${contact.designation})` : ''}</li>
+                        ))}
+                      </ul>
+                    ) : '-'}
                   </dd>
                 </div>
                 <div>
@@ -251,6 +307,36 @@ export function MomDetail() {
 
         </CardContent>
       </Card>
+
+      {showClientPreview && (
+        <MomClientPreviewModal
+          mom={mom}
+          onClose={() => setShowClientPreview(false)}
+          footer={
+            <>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" className="gap-1" disabled={exporting !== null} onClick={() => handleExport('pdf', 'client')}>
+                  <span className="material-symbols-outlined text-[16px]">picture_as_pdf</span> PDF
+                </Button>
+                <Button variant="outline" size="sm" className="gap-1" disabled={exporting !== null} onClick={() => handleExport('word', 'client')}>
+                  <span className="material-symbols-outlined text-[16px]">description</span> Word
+                </Button>
+              </div>
+              {isOwner && (
+                <Button
+                  size="sm"
+                  className="gap-1"
+                  disabled={sending || sent || clientRecipients.length === 0}
+                  onClick={handleSendToClient}
+                >
+                  <span className="material-symbols-outlined text-[16px]">{sent ? 'check' : 'send'}</span>
+                  {sent ? 'Sent' : sending ? 'Sending…' : 'Send to client'}
+                </Button>
+              )}
+            </>
+          }
+        />
+      )}
     </div>
   );
 }

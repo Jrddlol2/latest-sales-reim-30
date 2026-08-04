@@ -108,6 +108,7 @@ function RoleBasedRouter() {
         <Route path="/claims/:id" element={<RequireRoles roles={claimDetailRoles}><ClaimDetail /></RequireRoles>} />
         <Route path="/moms" element={<RequireRoles roles={requestRoles}><MOMs /></RequireRoles>} />
         <Route path="/moms/new" element={<RequireRoles roles={requestRoles}><CreateMom /></RequireRoles>} />
+        <Route path="/moms/:id/edit" element={<RequireRoles roles={requestRoles}><CreateMom /></RequireRoles>} />
         <Route path="/moms/:id" element={<RequireRoles roles={requestRoles}><MomDetail /></RequireRoles>} />
         <Route path="/receipts" element={<RequireRoles roles={receiptRoles}><Receipts /></RequireRoles>} />
         

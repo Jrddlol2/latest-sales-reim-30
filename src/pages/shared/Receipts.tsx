@@ -51,6 +51,7 @@ export function Receipts() {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptRecord | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  const [groupBy, setGroupBy] = useState<'none' | 'member' | 'client'>('none');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 12;
 
@@ -153,6 +154,27 @@ export function Receipts() {
   const filteredReceiptIds = new Set(filteredReceipts.map(receipt => receipt.id));
   const filteredApplicableLineItems = scopedLineItems.filter(item => filteredReceiptIds.has(item.id));
 
+  // Grouping by member is only meaningful when more than one person's receipts
+  // are visible; grouping by client works in any scope.
+  const canGroupByMember = isFinance || (isApprover && scope === 'team');
+  const receiptGroups = groupBy === 'none' ? [] : (() => {
+    const map = new Map<string, ReceiptRecord[]>();
+    for (const receipt of filteredReceipts) {
+      const key = groupBy === 'member' ? (receipt.requestorId || 'unknown') : (receipt.client || '—');
+      const bucket = map.get(key);
+      if (bucket) bucket.push(receipt);
+      else map.set(key, [receipt]);
+    }
+    return Array.from(map.entries()).map(([key, items]) => {
+      const total = items.reduce((sum, item) => sum + item.amount, 0);
+      const attached = items.filter(item => Boolean(item.fileUrl)).length;
+      const label = groupBy === 'member'
+        ? (users.find(user => user.id === key)?.name || 'Unknown requestor')
+        : (key === '—' ? 'No client' : key);
+      return { key, label, items, total, attached, coverage: items.length ? Math.round((attached / items.length) * 100) : 0 };
+    }).sort((a, b) => b.total - a.total);
+  })();
+
   const totalPages = Math.ceil(filteredReceipts.length / itemsPerPage);
   const paginatedReceipts = filteredReceipts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   const advancedFilterCount = [
@@ -215,6 +237,12 @@ export function Receipts() {
     setSelectedMember('');
   }, [scope]);
 
+  // "By team member" stops making sense once we're back to a single person's
+  // receipts, so fall back to an ungrouped list.
+  useEffect(() => {
+    if (!canGroupByMember && groupBy === 'member') setGroupBy('none');
+  }, [canGroupByMember, groupBy]);
+
   const filteredTotal = filteredReceipts.reduce((sum, receipt) => sum + receipt.amount, 0);
   const receiptCoverage = filteredApplicableLineItems.length === 0
     ? null
@@ -226,6 +254,139 @@ export function Receipts() {
     return totals;
   }, {});
   const topCategory = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1])[0];
+  const showRequestorCol = isFinance || (isApprover && scope === 'team');
+
+  const renderReceiptGrid = (items: ReceiptRecord[], showRequestor: boolean) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 p-6 pt-4">
+      {items.map(receipt => (
+        <Card
+          key={receipt.id}
+          className="overflow-hidden hover:border-primary transition-all cursor-pointer group hover:shadow-md"
+          onClick={() => setSelectedReceipt(receipt)}
+        >
+          <div className="h-36 bg-surface-container-high flex flex-col items-center justify-center relative p-4">
+            <span className={`material-symbols-outlined text-4xl mb-1 ${receipt.fileUrl ? 'text-primary' : 'text-tertiary'}`}>
+              {receipt.fileUrl ? 'receipt_long' : 'receipt_long_off'}
+            </span>
+            <span className="text-xs font-mono-data font-semibold text-on-surface text-center truncate max-w-full px-2">
+              {receipt.fileName}
+            </span>
+            {!receipt.fileUrl && (
+              <span className="text-[11px] font-bold text-tertiary mt-1">Receipt missing</span>
+            )}
+            <span className="text-[12px] uppercase font-bold text-outline mt-1 bg-surface-container px-2 py-0.5 rounded">
+              {receipt.category}
+            </span>
+            {receipt.orNumber && (
+              <span className="text-[11px] font-mono-data text-outline mt-1">OR {receipt.orNumber}</span>
+            )}
+            {showRequestor && (
+              <span className="text-[12px] text-outline mt-1">
+                {users.find(u => u.id === receipt.requestorId)?.name || 'Unknown requestor'}
+              </span>
+            )}
+          </div>
+          <CardContent className="p-4 bg-surface-container-lowest">
+            <div className="flex justify-between items-start mb-1">
+              <p className="font-label-md text-on-surface font-semibold truncate">{receipt.vendor}</p>
+              <p className="font-mono-data font-bold text-primary">{formatMoney(receipt.amount)}</p>
+            </div>
+            {receipt.businessPurpose && <p className="text-xs text-outline line-clamp-2">{receipt.businessPurpose}</p>}
+            <div className="flex justify-between items-center text-xs text-outline mt-2 pt-2 border-t border-outline-variant/40">
+              <span>{receipt.date}</span>
+              {receipt.claimRef && (
+                <span className="bg-primary-container/20 text-primary font-mono-data px-1.5 py-0.5 rounded text-[12px]">
+                  {receipt.claimRef}
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+
+  const renderReceiptTable = (items: ReceiptRecord[], showRequestor: boolean) => (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left min-w-[980px]">
+        <thead className="bg-surface-container-low text-outline font-label-sm uppercase tracking-wider">
+          <tr>
+            <th className="px-5 py-3">Expense</th>
+            {showRequestor && <th className="px-5 py-3">Requestor</th>}
+            <th className="px-5 py-3">Claim</th>
+            <th className="px-5 py-3">OR Number</th>
+            <th className="px-5 py-3">Status</th>
+            <th className="px-5 py-3">Category</th>
+            <th className="px-5 py-3">Date of Purchase</th>
+            <th className="px-5 py-3 text-right">Amount</th>
+            <th className="px-5 py-3 text-right">Attachment</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-outline-variant">
+          {items.map(receipt => (
+            <tr
+              key={receipt.id}
+              onClick={() => setSelectedReceipt(receipt)}
+              className="hover:bg-primary/5 cursor-pointer transition-colors"
+            >
+              <td className="px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <span className={`material-symbols-outlined ${receipt.fileUrl ? 'text-primary' : 'text-tertiary'}`}>
+                    {receipt.fileUrl ? 'receipt_long' : 'receipt_long_off'}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="font-label-md text-on-surface truncate max-w-[240px]">{receipt.vendor}</p>
+                    <p className="text-xs text-outline truncate max-w-[280px]">{receipt.businessPurpose || receipt.fileName}</p>
+                  </div>
+                </div>
+              </td>
+              {showRequestor && (
+                <td className="px-5 py-4 text-body-sm text-on-surface">
+                  {users.find(user => user.id === receipt.requestorId)?.name || 'Unknown requestor'}
+                </td>
+              )}
+              <td className="px-5 py-4">
+                <p className="font-mono-data text-xs text-primary">{receipt.claimRef || '—'}</p>
+              </td>
+              <td className="px-5 py-4 font-mono-data text-xs text-on-surface-variant whitespace-nowrap">{receipt.orNumber || 'No OR number'}</td>
+              <td className="px-5 py-4">
+                {receipt.claimStatus ? <StatusBadge status={receipt.claimStatus} /> : <span className="text-xs text-outline">Not linked</span>}
+              </td>
+              <td className="px-5 py-4">
+                <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface-variant">
+                  {receipt.category}
+                </span>
+              </td>
+              <td className="px-5 py-4 text-body-sm text-on-surface-variant whitespace-nowrap">{receipt.date}</td>
+              <td className="px-5 py-4 text-right font-mono-data font-bold text-on-surface">{formatMoney(receipt.amount)}</td>
+              <td className="px-5 py-4 text-right">
+                <span className={`inline-flex items-center gap-1 text-xs font-semibold ${receipt.fileUrl ? 'text-primary' : 'text-tertiary'}`}>
+                  {receipt.fileUrl ? 'View receipt' : 'Missing receipt'}
+                  <span className="material-symbols-outlined text-[16px]">{receipt.fileUrl ? 'open_in_new' : 'warning'}</span>
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const groupControl = (
+    <div className="flex items-center gap-2">
+      <span className="material-symbols-outlined text-[18px] text-outline">workspaces</span>
+      <Select
+        aria-label="Group expenses"
+        className="w-full sm:w-48"
+        value={groupBy}
+        onChange={e => setGroupBy(e.target.value as typeof groupBy)}
+      >
+        <option value="none">No grouping</option>
+        {canGroupByMember && <option value="member">By team member</option>}
+        <option value="client">By client</option>
+      </Select>
+    </div>
+  );
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -463,15 +624,50 @@ export function Receipts() {
           <p className="font-headline-sm text-on-surface mb-1">No expenses found</p>
           <p className="text-sm">Expense lines will appear here when they are added to a claim.</p>
         </Card>
+      ) : groupBy !== 'none' ? (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <p className="text-sm text-outline">
+              {receiptGroups.length} {groupBy === 'member' ? (receiptGroups.length === 1 ? 'team member' : 'team members') : (receiptGroups.length === 1 ? 'client' : 'clients')}
+              {' · '}{filteredReceipts.length} record{filteredReceipts.length === 1 ? '' : 's'}
+            </p>
+            {groupControl}
+          </div>
+          {receiptGroups.map(group => (
+            <Card key={group.key} className="overflow-hidden">
+              <div className="p-5 border-b border-outline-variant flex flex-wrap items-center justify-between gap-4 bg-surface-container-low/40">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="material-symbols-outlined text-primary">{groupBy === 'member' ? 'person' : 'domain'}</span>
+                  <div className="min-w-0">
+                    <h2 className="font-headline-sm text-on-surface truncate">{group.label}</h2>
+                    <p className="text-xs text-outline">{group.items.length} expense{group.items.length === 1 ? '' : 's'}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <p className="font-label-sm text-outline uppercase tracking-wider text-[11px]">Subtotal</p>
+                    <p className="font-mono-data font-bold text-primary">{formatMoney(group.total)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-label-sm text-outline uppercase tracking-wider text-[11px]">Receipt coverage</p>
+                    <p className="font-mono-data font-semibold text-on-surface">{group.coverage}% <span className="text-outline font-normal">({group.attached}/{group.items.length})</span></p>
+                  </div>
+                </div>
+              </div>
+              {renderReceiptTable(group.items, groupBy !== 'member' && showRequestorCol)}
+            </Card>
+          ))}
+        </div>
       ) : (
         <Card className="overflow-hidden">
-        <div className="p-5 border-b border-outline-variant flex items-center justify-between bg-surface-container-low/40">
+        <div className="p-5 border-b border-outline-variant flex flex-wrap items-center justify-between gap-3 bg-surface-container-low/40">
           <div>
             <h2 className="font-headline-sm text-on-surface">Expense records</h2>
             <p className="text-xs text-outline mt-1">Inspect each purchase, its claim status, and whether evidence is attached.</p>
           </div>
           <div className="flex items-center gap-3">
             <span className="font-label-sm text-outline whitespace-nowrap">{filteredReceipts.length} records</span>
+            {groupControl}
             <div className="flex rounded-lg border border-outline-variant bg-white p-1" aria-label="Expense view">
               <button
                 type="button"
@@ -494,119 +690,7 @@ export function Receipts() {
             </div>
           </div>
         </div>
-        {viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 p-6 pt-4">
-          {paginatedReceipts.map(receipt => (
-            <Card 
-              key={receipt.id} 
-              className="overflow-hidden hover:border-primary transition-all cursor-pointer group hover:shadow-md"
-              onClick={() => setSelectedReceipt(receipt)}
-            >
-              <div className="h-36 bg-surface-container-high flex flex-col items-center justify-center relative p-4">
-                <span className={`material-symbols-outlined text-4xl mb-1 ${receipt.fileUrl ? 'text-primary' : 'text-tertiary'}`}>
-                  {receipt.fileUrl ? 'receipt_long' : 'receipt_long_off'}
-                </span>
-                <span className="text-xs font-mono-data font-semibold text-on-surface text-center truncate max-w-full px-2">
-                  {receipt.fileName}
-                </span>
-                {!receipt.fileUrl && (
-                  <span className="text-[11px] font-bold text-tertiary mt-1">Receipt missing</span>
-                )}
-                <span className="text-[12px] uppercase font-bold text-outline mt-1 bg-surface-container px-2 py-0.5 rounded">
-                  {receipt.category}
-                </span>
-                {receipt.orNumber && (
-                  <span className="text-[11px] font-mono-data text-outline mt-1">OR {receipt.orNumber}</span>
-                )}
-                {(isFinance || (isApprover && scope === 'team')) && (
-                  <span className="text-[12px] text-outline mt-1">
-                    {users.find(u => u.id === receipt.requestorId)?.name || 'Unknown requestor'}
-                  </span>
-                )}
-              </div>
-              <CardContent className="p-4 bg-surface-container-lowest">
-                <div className="flex justify-between items-start mb-1">
-                  <p className="font-label-md text-on-surface font-semibold truncate">{receipt.vendor}</p>
-                  <p className="font-mono-data font-bold text-primary">{formatMoney(receipt.amount)}</p>
-                </div>
-                {receipt.businessPurpose && <p className="text-xs text-outline line-clamp-2">{receipt.businessPurpose}</p>}
-                <div className="flex justify-between items-center text-xs text-outline mt-2 pt-2 border-t border-outline-variant/40">
-                  <span>{receipt.date}</span>
-                  {receipt.claimRef && (
-                    <span className="bg-primary-container/20 text-primary font-mono-data px-1.5 py-0.5 rounded text-[12px]">
-                      {receipt.claimRef}
-                    </span>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left min-w-[980px]">
-              <thead className="bg-surface-container-low text-outline font-label-sm uppercase tracking-wider">
-                <tr>
-                  <th className="px-5 py-3">Expense</th>
-                  {(isFinance || (isApprover && scope === 'team')) && <th className="px-5 py-3">Requestor</th>}
-                  <th className="px-5 py-3">Claim</th>
-                  <th className="px-5 py-3">OR Number</th>
-                  <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3">Category</th>
-                  <th className="px-5 py-3">Date of Purchase</th>
-                  <th className="px-5 py-3 text-right">Amount</th>
-                  <th className="px-5 py-3 text-right">Attachment</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-outline-variant">
-                {paginatedReceipts.map(receipt => (
-                  <tr
-                    key={receipt.id}
-                    onClick={() => setSelectedReceipt(receipt)}
-                    className="hover:bg-primary/5 cursor-pointer transition-colors"
-                  >
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-3">
-                        <span className={`material-symbols-outlined ${receipt.fileUrl ? 'text-primary' : 'text-tertiary'}`}>
-                          {receipt.fileUrl ? 'receipt_long' : 'receipt_long_off'}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="font-label-md text-on-surface truncate max-w-[240px]">{receipt.vendor}</p>
-                          <p className="text-xs text-outline truncate max-w-[280px]">{receipt.businessPurpose || receipt.fileName}</p>
-                        </div>
-                      </div>
-                    </td>
-                    {(isFinance || (isApprover && scope === 'team')) && (
-                      <td className="px-5 py-4 text-body-sm text-on-surface">
-                        {users.find(user => user.id === receipt.requestorId)?.name || 'Unknown requestor'}
-                      </td>
-                    )}
-                    <td className="px-5 py-4">
-                      <p className="font-mono-data text-xs text-primary">{receipt.claimRef || '—'}</p>
-                    </td>
-                    <td className="px-5 py-4 font-mono-data text-xs text-on-surface-variant whitespace-nowrap">{receipt.orNumber || 'No OR number'}</td>
-                    <td className="px-5 py-4">
-                      {receipt.claimStatus ? <StatusBadge status={receipt.claimStatus} /> : <span className="text-xs text-outline">Not linked</span>}
-                    </td>
-                    <td className="px-5 py-4">
-                      <span className="inline-flex rounded-full bg-surface-container-high px-2.5 py-1 text-xs font-medium text-on-surface-variant">
-                        {receipt.category}
-                      </span>
-                    </td>
-                    <td className="px-5 py-4 text-body-sm text-on-surface-variant whitespace-nowrap">{receipt.date}</td>
-                    <td className="px-5 py-4 text-right font-mono-data font-bold text-on-surface">{formatMoney(receipt.amount)}</td>
-                    <td className="px-5 py-4 text-right">
-                      <span className={`inline-flex items-center gap-1 text-xs font-semibold ${receipt.fileUrl ? 'text-primary' : 'text-tertiary'}`}>
-                        {receipt.fileUrl ? 'View receipt' : 'Missing receipt'}
-                        <span className="material-symbols-outlined text-[16px]">{receipt.fileUrl ? 'open_in_new' : 'warning'}</span>
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {viewMode === 'grid' ? renderReceiptGrid(paginatedReceipts, showRequestorCol) : renderReceiptTable(paginatedReceipts, showRequestorCol)}
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}

@@ -12,6 +12,7 @@ import { confirmReceipt, uploadUrl, resubmitClaimFlow, DraftLineItem } from '../
 import { UserRole, ClaimStatus, ExpenseLineItem } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDateTime } from '../../lib/date';
+import { formatContactsDisplay } from '../../lib/momContacts';
 import { isCustodianProcessingClaim } from '../../lib/claimWorkflow';
 import { exportClaimPdf, exportClaimWord } from '../../lib/claimExport';
 
@@ -398,7 +399,7 @@ export function ClaimDetail() {
                     ['Purpose', mom.purposeOfMeeting || '—'],
                     ['Date', mom.meetingDate ? formatDateTime(mom.meetingDate) : '—'],
                     ['Location', mom.location || '—'],
-                    ['Contact person', mom.contactPerson || '—'],
+                    ['Contact person', formatContactsDisplay(mom.contactPerson, mom.contactPersonDesignation) || '—'],
                     ['Contact email', mom.contactPersonEmail || '—'],
                     ['Meeting type', mom.meetingType || '—'],
                     ['Category', mom.category || '—'],

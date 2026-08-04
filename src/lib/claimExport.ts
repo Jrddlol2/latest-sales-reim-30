@@ -1,5 +1,6 @@
 import { Claim, ExpenseLineItem, MOM } from '../types';
 import { ExportSection, exportStructuredPdf, exportStructuredWord } from './documentExport';
+import { formatContactsDisplay } from './momContacts';
 
 const money = (value?: number) =>
   `PHP ${(Number(value) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -45,7 +46,7 @@ function claimSections(
           ['Date of Meeting', mom.meetingDate || '—'],
           ['Location of Meeting', mom.location || '—'],
           ['Purpose of Meeting', mom.purposeOfMeeting || '—'],
-          ['Contact Person', mom.contactPerson || '—'],
+          ['Contact Person', formatContactsDisplay(mom.contactPerson, mom.contactPersonDesignation) || '—'],
           ['Client Email', mom.contactPersonEmail || '—'],
           ['Prepared By', mom.preparedBy || '—'],
         ],
