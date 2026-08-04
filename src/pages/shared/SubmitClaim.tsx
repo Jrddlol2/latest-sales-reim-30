@@ -754,7 +754,7 @@ export function SubmitClaim() {
                           )}
                         </td>
                         <td className="px-3 py-3">
-                          <Select disabled={claimType === 'Transport Reimbursement'} className="py-1 px-2 text-xs" value={item.category || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, category: e.target.value } : li))}>
+                          <Select disabled={claimType === 'Transport Reimbursement'} className="py-1 pl-2 pr-8 text-xs" value={item.category || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, category: e.target.value } : li))}>
                             <option value="">Select Category</option>
                             {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                           </Select>
@@ -763,7 +763,7 @@ export function SubmitClaim() {
                           <Input type="text" value={item.vendor || ''} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, vendor: e.target.value } : li))} className="py-1 px-2 text-xs" placeholder="Vendor..." />
                         </td>
                         <td className="px-3 py-3">
-                          <Select className="py-1 px-2 text-xs" value={item.paymentMethod || 'Personal Card'} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, paymentMethod: e.target.value } : li))}>
+                          <Select className="py-1 pl-2 pr-8 text-xs" value={item.paymentMethod || 'Personal Card'} onChange={e => setLineItemsLocal(prev => prev.map((li, i) => i === idx ? { ...li, paymentMethod: e.target.value } : li))}>
                             <option>Personal Card</option>
                             <option>Company Card</option>
                             <option>Cash</option>
