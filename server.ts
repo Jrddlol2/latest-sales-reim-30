@@ -4552,7 +4552,12 @@ You'll receive another email as soon as a decision is made.`
           mom_id: ca.momId || '',
           status: ClaimStatus.PROCESSING,
           total_amount: l.varianceAmount,
-          approved_amount: l.varianceAmount,
+          // Every other approval path caps the payout at REIMBURSEMENT_CAP
+          // (see POST /api/claims/:id/approve) — this auto-generated shortfall
+          // claim skipped that route entirely and paid the raw variance
+          // uncapped. Same fix as line ~3108: total_amount stays the full
+          // amount owed, only approved_amount (what actually gets paid) caps.
+          approved_amount: Math.min(l.varianceAmount, REIMBURSEMENT_CAP),
           approved_at: new Date().toISOString(),
           expense_category: 'Cash Advance Shortfall',
           receipt_url: liquidationLineItems.find(item => item.liquidationId === l.id)?.receipt_url || '',

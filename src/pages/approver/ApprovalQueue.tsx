@@ -282,7 +282,10 @@ export function ApprovalQueue() {
                   </td>
                 </tr>
               ) : paginatedClaims.map(claim => {
-                const req = users.find(u => u.id === claim.requestorId) || users[0];
+                // Falls back to a placeholder, never to another real user —
+                // `|| users[0]` here previously showed an arbitrary person's
+                // name/department/avatar as if they owned the claim.
+                const req = users.find(u => u.id === claim.requestorId) || { name: 'Unknown requestor', department: '—', avatarUrl: undefined };
                 const aging = getClaimAgingInfo(claim.submittedAt, claim.createdAt);
                 return (
                   <tr key={claim.id} className={`hover:bg-primary/5 transition-colors group cursor-pointer ${claim.approverStaleSince ? 'bg-tertiary-container/10' : ''}`} onClick={(e) => {
