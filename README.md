@@ -634,7 +634,7 @@ As of 2026-08-04, `npm audit` reports 7 advisories (1 critical, 2 high, 4 modera
 
 ## Recommended handoff order
 
-1. Read this README, then `docs/PROJECT-CONTEXT.md` and `docs/USER-MANUAL.md`.
+1. If you're an AI agent, read `AGENTS.md` first — it's a short map of traps specific to this repo (stale sibling copies, the persistence read/write split, why `npm test` alone doesn't verify database changes). Then read this README, `docs/PROJECT-CONTEXT.md`, and `docs/USER-MANUAL.md`.
 2. Run the application in demo mode and open separate Requestor, Approver, Custodian, Finance, and Admin tabs.
 3. Walk one reimbursement from submission to requestor receipt confirmation.
 4. Review `src/lib/api.ts` before changing any API-backed page or status mapping.
@@ -646,6 +646,7 @@ As of 2026-08-04, `npm audit` reports 7 advisories (1 critical, 2 high, 4 modera
 
 | Document | Use it for |
 |---|---|
+| `AGENTS.md` | **AI agents start here.** Repo-specific traps: stale sibling copies, the persistence read/write split, why `npm test` alone doesn't verify database changes. |
 | `docs/USER-MANUAL.md` | Role-by-role operational usage. |
 | `docs/SYSTEM-AUDIT-2026-08-03.md` | **Most recent full audit** — technical stack, security findings, and the prioritized roadmap this hardening pass builds on. Start here after the README. |
 | `docs/PROJECT-CONTEXT.md` | Historical architecture context and developer gotchas. Some statements are historical; verify against current code. |
