@@ -15,8 +15,13 @@ export function MOMs() {
   const [scope, setScope] = useState<'mine' | 'team'>('mine');
   const [linkFilter, setLinkFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
   const [statusFilter, setStatusFilter] = useState('');
+  const [docTypeFilter, setDocTypeFilter] = useState<'' | 'MoM' | 'LOA'>('');
+  const [clientFilter, setClientFilter] = useState('');
+  const [locationFilter, setLocationFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  
+
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
   const isApprover = currentUser.role === UserRole.APPROVER;
@@ -26,15 +31,33 @@ export function MOMs() {
   );
   const showPreparedBy = isApprover && scope === 'team';
 
+  const scopedMoms = useMemo(
+    () => !isApprover
+      ? moms
+      : moms.filter(m => scope === 'mine' ? m.requestorId === currentUser.id : !!m.requestorId && reporteeIds.has(m.requestorId)),
+    [moms, isApprover, scope, currentUser.id, reporteeIds]
+  );
+  const clientOptions = useMemo(
+    () => Array.from(new Set(scopedMoms.map(m => m.companyName).filter((v): v is string => !!v))).sort(),
+    [scopedMoms]
+  );
+  const locationOptions = useMemo(
+    () => Array.from(new Set(scopedMoms.map(m => m.location).filter((v): v is string => !!v))).sort(),
+    [scopedMoms]
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const scoped = !isApprover
-      ? moms
-      : moms.filter(m => scope === 'mine' ? m.requestorId === currentUser.id : !!m.requestorId && reporteeIds.has(m.requestorId));
-    const sorted = [...scoped].filter(m => {
+    const sorted = [...scopedMoms].filter(m => {
       if (linkFilter === 'linked' && !m.claimId) return false;
       if (linkFilter === 'unlinked' && m.claimId) return false;
       if (statusFilter && m.status !== statusFilter) return false;
+      if (docTypeFilter && (m.documentType === 'LOA' ? 'LOA' : 'MoM') !== docTypeFilter) return false;
+      if (clientFilter && m.companyName !== clientFilter) return false;
+      if (locationFilter && m.location !== locationFilter) return false;
+      const meetingTime = m.meetingDate ? new Date(m.meetingDate).getTime() : undefined;
+      if (dateFrom && (meetingTime === undefined || meetingTime < new Date(`${dateFrom}T00:00:00`).getTime())) return false;
+      if (dateTo && (meetingTime === undefined || meetingTime > new Date(`${dateTo}T23:59:59`).getTime())) return false;
       return true;
     }).sort((a, b) =>
       new Date(b.meetingDate || 0).getTime() - new Date(a.meetingDate || 0).getTime()
@@ -44,7 +67,7 @@ export function MOMs() {
       [m.purposeOfMeeting, m.companyName, m.location, m.contactPerson, m.preparedBy]
         .some(v => (v || '').toLowerCase().includes(q))
     );
-  }, [moms, query, isApprover, scope, currentUser.id, reporteeIds, linkFilter, statusFilter]);
+  }, [scopedMoms, query, linkFilter, statusFilter, docTypeFilter, clientFilter, locationFilter, dateFrom, dateTo]);
 
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
   const paginatedMOMs = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -52,15 +75,22 @@ export function MOMs() {
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [query, scope, linkFilter, statusFilter]);
+  }, [query, scope, linkFilter, statusFilter, docTypeFilter, clientFilter, locationFilter, dateFrom, dateTo]);
 
   const claimRefFor = (claimId?: string) =>
     claimId ? claims.find(c => c.id === claimId)?.ref : undefined;
-  const hasFilters = Boolean(linkFilter !== 'all' || statusFilter);
+  const hasFilters = Boolean(
+    linkFilter !== 'all' || statusFilter || docTypeFilter || clientFilter || locationFilter || dateFrom || dateTo
+  );
   const clearFilters = () => {
     setQuery('');
     setLinkFilter('all');
     setStatusFilter('');
+    setDocTypeFilter('');
+    setClientFilter('');
+    setLocationFilter('');
+    setDateFrom('');
+    setDateTo('');
   };
 
   return (
@@ -134,12 +164,56 @@ export function MOMs() {
                     <option value="Completed">Finalized</option>
                   </Select>
                 </div>
+                <div>
+                  <label className="block text-label-sm text-on-surface mb-1">Document type</label>
+                  <Select value={docTypeFilter} onChange={e => setDocTypeFilter(e.target.value as typeof docTypeFilter)}>
+                    <option value="">All types</option>
+                    <option value="MoM">Minutes of Meeting</option>
+                    <option value="LOA">Letter of Agreement</option>
+                  </Select>
+                </div>
+                <div>
+                  <label className="block text-label-sm text-on-surface mb-1">Client</label>
+                  <Select value={clientFilter} onChange={e => setClientFilter(e.target.value)}>
+                    <option value="">All clients</option>
+                    {clientOptions.map(client => <option key={client} value={client}>{client}</option>)}
+                  </Select>
+                </div>
+                <div>
+                  <label className="block text-label-sm text-on-surface mb-1">Location</label>
+                  <Select value={locationFilter} onChange={e => setLocationFilter(e.target.value)}>
+                    <option value="">All locations</option>
+                    {locationOptions.map(location => <option key={location} value={location}>{location}</option>)}
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-label-sm text-on-surface mb-1">Meeting from</label>
+                    <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-label-sm text-on-surface mb-1">Meeting to</label>
+                    <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+                  </div>
+                </div>
               </div>
             )}
             {hasFilters && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {linkFilter !== 'all' && <button onClick={() => setLinkFilter('all')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{linkFilter === 'linked' ? 'Linked to claim' : 'Unlinked'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
                 {statusFilter && <button onClick={() => setStatusFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{statusFilter === 'Completed' ? 'Finalized' : statusFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+                {docTypeFilter && <button onClick={() => setDocTypeFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{docTypeFilter === 'LOA' ? 'Letter of Agreement' : 'Minutes of Meeting'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+                {clientFilter && <button onClick={() => setClientFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{clientFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+                {locationFilter && <button onClick={() => setLocationFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{locationFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+                {(dateFrom || dateTo) && (
+                  <button
+                    className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold"
+                    onClick={() => { setDateFrom(''); setDateTo(''); }}
+                  >
+                    {dateFrom || 'Any date'} – {dateTo || 'Today'}
+                    <span className="material-symbols-outlined text-[14px]">close</span>
+                  </button>
+                )}
               </div>
             )}
           </div>

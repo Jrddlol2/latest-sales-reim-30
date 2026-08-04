@@ -28,10 +28,11 @@ import {
   getTodayIsoDate,
 } from './src/lib/reimbursementPolicy';
 import { normalizeExpenseCategory } from './src/lib/expenseCategories';
-import { isDbConfigured, loadUsersFromDb, syncUsersToDb, clearUsersInDb } from './src/db/usersRepo';
+import { isDbConfigured, loadUsersFromDb, syncUsersToDb, clearUsersInDb, loadUserHistoryFromDb } from './src/db/usersRepo';
 import {
   persistMom, persistClaim, persistExpenseLineItems, insertApproval,
   persistStatusHistoryFireAndForget, loadCoreLoopFromDb, clearCoreLoopInDb,
+  nextClaimNumberFromDb, syncClaimNumberSequenceFloor, persistHistoricalImportBatch,
 } from './src/db/coreLoopRepo';
 import {
   persistCashAdvance, persistLiquidation, persistLiquidationLineItems,
@@ -40,7 +41,7 @@ import {
 import {
   persistCompany, loadCompaniesFromDb, persistMasterDataRecord, loadMasterDataTable, type MasterDataKey,
   persistFieldDefinition, loadFieldDefinitionsFromDb, persistSystemSettings, loadSystemSettingsFromDb,
-  clearReferenceDataInDb,
+  clearReferenceDataInDb, loadMasterDataHistoryFromDb,
 } from './src/db/referenceDataRepo';
 import {
   persistDelegation, loadDelegationsFromDb, loadDelegationHistoryFromDb, persistReviewMeeting, loadReviewMeetingsFromDb,
@@ -132,6 +133,23 @@ function isFinanceVisibleFinancialRecord(
 let claimCounter = 123;
 
 /**
+ * Allocates the next human-facing claim number (e.g. "REIM-2026-000123").
+ * Uses the Postgres `claim_number_seq` sequence when a database is
+ * configured — atomic under concurrent requests and durable across
+ * restarts. Falls back to the in-memory counter only for the fully
+ * in-memory (no DATABASE_URL) mode, which has no concurrency or durability
+ * requirement to begin with.
+ */
+async function generateClaimNumber(): Promise<string> {
+  if (isDbConfigured()) {
+    return nextClaimNumberFromDb();
+  }
+  const year = new Date().getFullYear();
+  const numStr = String(claimCounter++).padStart(6, '0');
+  return `REIM-${year}-${numStr}`;
+}
+
+/**
  * Enforce the company spending policy against a set of expense lines. Returns an
  * error message describing the first line that breaks its category cap, or null
  * if every line is within policy. Shared by the reimbursement and liquidation
@@ -205,12 +223,38 @@ const buildInitialCompanies = (): Company[] =>
 
 let companies: Company[] = buildInitialCompanies();
 
-const getOrCreateCompany = (name?: string | null): void => {
+/**
+ * In-memory only — used by the demo seed generator (seedYearOfData), which
+ * (see coreLoopRepo.ts's file header) intentionally never writes this
+ * domain's records to Postgres, so repeated auto-seeding on every dev
+ * restart doesn't churn a live database with regenerated demo company rows.
+ */
+const getOrCreateCompanyInMemory = (name?: string | null): void => {
   if (!name || !name.trim()) return;
   const trimmed = name.trim();
   const exists = companies.some(c => c.name.toLowerCase() === trimmed.toLowerCase());
   if (!exists) {
     companies.push({ id: uuidv4(), name: trimmed });
+  }
+};
+
+/**
+ * Real MOM create/update paths funnel client names through this one instead
+ * — unlike the seed generator, a company an admin can already see in the
+ * Company Directory right after a real MOM submission should still be there
+ * after a restart (docs/project-handoff/REMAINING-BACKEND-GAPS.md #8).
+ */
+const getOrCreateCompany = async (name?: string | null): Promise<void> => {
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  const exists = companies.some(c => c.name.toLowerCase() === trimmed.toLowerCase());
+  if (exists) return;
+  const created: Company = { id: uuidv4(), name: trimmed };
+  companies.push(created);
+  try {
+    await persistCompany(created);
+  } catch (err) {
+    console.error('[db] Could not persist new company to Postgres:', err);
   }
 };
 
@@ -338,12 +382,44 @@ const buildDefaultUsers = (): User[] => [
   { id: 'u21', name: 'Marco Bernardo', email: 'marco@mgenesis.com', role: UserRole.REQUESTOR, department: 'Marketing', job_title: 'Content Strategist', reports_to: 'u14', avatar_url: '/avatars/corp_male_3.jpg' }
 ].map(withEntraFields);
 
+// Settings > Notifications' five toggleable categories (Settings.tsx's
+// DEFAULT_NOTIFY_PREFS is the other half of this contract — keep the string
+// literals in sync with its keys).
+type NotificationEventKey = 'submitted' | 'approved' | 'returned' | 'ready' | 'delegation';
+
+/**
+ * Central event-to-preference check (docs/project-handoff/REMAINING-BACKEND-GAPS.md
+ * #6 — "notification preferences are represented but not enforced"). Callers
+ * pass `opts.eventKey` on sendEmail() only for the notifications that have a
+ * corresponding toggle in Settings > Notifications; every other call (custodian
+ * ops emails, escalations, support messages, client CCs, cash-advance/
+ * liquidation lifecycle emails) has no matching category and is intentionally
+ * left unconditional, exactly as before.
+ *
+ * sendEmail() creates exactly one record per notification (into `emails` or
+ * `teamsMessages`, merged into one list for the frontend) that backs both the
+ * in-app bell and the "email" — there's no separate in-app-only queue to honor
+ * an inApp:true/email:false split against. Until that record model is split,
+ * a category only suppresses the notification when BOTH toggles are off;
+ * either toggle being on still creates the one record. A user with no saved
+ * preferences yet is notified (matches DEFAULT_NOTIFY_PREFS, which defaults
+ * every category to on) — failing open, since under-notifying a workflow
+ * approval/return is worse than an unwanted extra email.
+ */
+function shouldNotify(recipientId: string, eventKey: NotificationEventKey): boolean {
+  const recipient = users.find(u => u.id === recipientId);
+  const pref = recipient?.notification_prefs?.[eventKey];
+  if (!pref) return true;
+  return pref.inApp !== false || pref.email !== false;
+}
+
 // Email Transport Mock
 // opts.plain sends an unstyled personal-message email (no SharePoint header/footer) -
 // used for the MOM email to an external client contact, which must read as a personal
 // message, not a system notification. Every other notification keeps the full
 // enterprise template by omitting opts.
-const sendEmail = (toOrId: string, subject: string, body: string, ccId?: string, opts?: { plain?: boolean; recipientName?: string; fromLabel?: string; timestamp?: string }) => {
+const sendEmail = (toOrId: string, subject: string, body: string, ccId?: string, opts?: { plain?: boolean; recipientName?: string; fromLabel?: string; timestamp?: string; eventKey?: NotificationEventKey }) => {
+  if (opts?.eventKey && !shouldNotify(toOrId, opts.eventKey)) return;
   const recipient = users.find(u => u.id === toOrId);
   const toEmail = recipient ? recipient.email : toOrId;
   const recipientId = recipient ? recipient.id : 'external';
@@ -572,6 +648,13 @@ export async function createApp() {
   } else if (!demoModeEnabled) {
     users.length = 0;
   }
+  if (isDbConfigured()) {
+    try {
+      statusHistories.push(...(await loadUserHistoryFromDb()));
+    } catch (err) {
+      console.error('[db] Could not load user history from Postgres for this boot:', err);
+    }
+  }
 
   // --- Core loop persistence bootstrap (moms/claims/expenses/approvals) ---
   // Loading from Postgres here (rather than reseeding) only happens with
@@ -610,6 +693,7 @@ export async function createApp() {
       fieldDefinitions = await loadFieldDefinitionsFromDb();
       const loadedSettings = await loadSystemSettingsFromDb();
       if (loadedSettings) systemSettings = loadedSettings;
+      statusHistories.push(...(await loadMasterDataHistoryFromDb()));
       delegations = await loadDelegationsFromDb();
       statusHistories.push(...(await loadDelegationHistoryFromDb()));
       reviewMeetings = await loadReviewMeetingsFromDb();
@@ -695,20 +779,21 @@ export async function createApp() {
     });
   });
 
-  // --- INTERIM upload access gate -------------------------------------
-  // TEMPORARY until Phase 2 (real authentication/sessions). Previously this
-  // was a bare `express.static` mount with zero access control — any
-  // receipt/MOM attachment URL, once known, was publicly fetchable by
-  // anyone. This route requires *a* logged-in identity (same mock-auth
-  // concept used everywhere else in this file — X-User-Id) before serving a
-  // file, but does NOT check that the identity actually owns/has a
-  // legitimate reason to see that specific file. That per-resource
-  // ownership check needs real sessions to be meaningful and should be
-  // built in Phase 2, not bolted onto the header-trust model here.
+  // --- Upload access gate ----------------------------------------------
+  // Still built on the same mock-auth identity model as the rest of this
+  // file (X-User-Id / ?uid=) pending real sessions (Phase 2) — but unlike
+  // the previous version, "a valid identity" is no longer sufficient by
+  // itself. The file is resolved back to whichever claim/expense-line-item/
+  // mom/liquidation-line-item currently references it, and the SAME
+  // per-resource access predicate its own detail route enforces
+  // (canAccessClaim/canAccessMom/canAccessLiquidation) is applied here too —
+  // so a receipt or MOM document is only visible to someone who could
+  // already see the record it's attached to, not to any other logged-in
+  // user who happens to guess or intercept the filename.
   //
   // Browsers don't attach custom headers to <img>/<iframe>/direct-navigation
   // requests, so this also accepts the same identity via a `?uid=` query
-  // param (see getUploadUrl() in src/utils.ts) for those cases — deliberately
+  // param (see uploadUrl() in src/lib/api.ts) for those cases — deliberately
   // scoped to just this route, not merged into the shared getUser() used by
   // every other API route.
   app.get('/uploads/:filename', (req, res) => {
@@ -721,6 +806,16 @@ export async function createApp() {
     // manually. Multer-generated filenames are always `${uuid}${ext}` with
     // no path separators, so this never rejects a legitimate request.
     const safeFilename = path.basename(req.params.filename);
+
+    // A file with no known owning record (never attached, or the
+    // attachment was since replaced) is treated as not found rather than
+    // fetchable by any authenticated user — the client-side submit flows
+    // preview a freshly picked file from a local blob URL, not this route,
+    // so a real, still-attached file always resolves here.
+    const authorized = findUploadAccessCheck(`/uploads/${safeFilename}`);
+    if (!authorized) return res.status(404).json({ error: 'File not found' });
+    if (!authorized(user)) return res.status(403).json({ error: 'Forbidden' });
+
     const filePath = path.join(uploadDir, safeFilename);
     res.sendFile(filePath, (err) => {
       if (err && !res.headersSent) {
@@ -800,6 +895,84 @@ export async function createApp() {
       d.delegate_id === delegateId && d.approver_id === approverId && d.status === DelegationStatus.ACTIVE
     );
 
+  // Shared with GET /api/claims/:id, GET /api/moms/:id, GET /api/liquidations/:id
+  // (each still enforces the same rule at its own route) and with the
+  // /uploads/:filename attachment gate below, which resolves a requested file
+  // back to the claim/mom/liquidation that owns it and applies the matching
+  // predicate — so a receipt/document is only ever visible to someone who
+  // could already see the record it's attached to.
+  const canAccessClaim = (user: User, claim: Claim): boolean => {
+    if (user.role === UserRole.ADMIN) return true;
+    if (user.role === UserRole.FINANCE) return isFinanceVisibleFinancialRecord(claim.claim_type || 'Reimbursement', claim.status);
+    if (user.role === UserRole.REQUESTOR) return claim.requestor_id === user.id;
+    if (user.role === UserRole.APPROVER) {
+      return claim.current_approver_id === user.id || claim.original_approver_id === user.id ||
+        claim.requestor_id === user.id || isActiveDelegateFor(user.id, claim.current_approver_id);
+    }
+    if (user.role === UserRole.CUSTODIAN) {
+      return [ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(claim.status)
+        || claim.requestor_id === user.id;
+    }
+    return false;
+  };
+
+  const canAccessMom = (user: User, mom: Mom): boolean => {
+    if (user.role === UserRole.CUSTODIAN) return false;
+    if (user.role === UserRole.ADMIN) return true;
+    if (user.role === UserRole.FINANCE) {
+      const linkedClaim = claims.find(c => c.id === mom.claim_id);
+      return Boolean(linkedClaim && isFinanceVisibleFinancialRecord(linkedClaim.claim_type || 'Reimbursement', linkedClaim.status));
+    }
+    if (user.role === UserRole.REQUESTOR) return mom.requestor_id === user.id;
+    if (user.role === UserRole.APPROVER) {
+      const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
+      return mom.requestor_id === user.id || !!(mom.claim_id && mom.requestor_id && reporteeIds.includes(mom.requestor_id));
+    }
+    return false;
+  };
+
+  const canAccessLiquidation = (user: User, l: Liquidation): boolean => {
+    if (user.role === UserRole.REQUESTOR) return l.requestorId === user.id;
+    if (user.role === UserRole.APPROVER) {
+      const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
+      const relatedCa = cashAdvances.find(c => c.id === l.cashAdvanceId);
+      return l.requestorId === user.id || relatedCa?.approverId === user.id ||
+        reporteeIds.includes(l.requestorId) || isActiveDelegateFor(user.id, relatedCa?.approverId);
+    }
+    if (user.role === UserRole.FINANCE) return isFinanceVisibleFinancialRecord('Liquidation', l.status);
+    return true; // Custodian and Admin see all
+  };
+
+  /**
+   * Resolves an uploaded file back to whichever claim/expense-line-item/
+   * mom/liquidation-line-item currently references it, and returns that
+   * record's own access predicate. Returns null when no known record
+   * references the file (e.g. it was uploaded but never attached, or the
+   * attachment it belonged to was since replaced) — callers should treat
+   * that as "not found", not as "anyone may fetch it".
+   */
+  const findUploadAccessCheck = (uploadUrlPath: string): ((user: User) => boolean) | null => {
+    const claim = claims.find(c => c.receipt_url === uploadUrlPath);
+    if (claim) return (user) => canAccessClaim(user, claim);
+
+    const expense = expenses.find(e => e.receipt_url === uploadUrlPath);
+    if (expense) {
+      const parentClaim = claims.find(c => c.id === expense.claim_id);
+      if (parentClaim) return (user) => canAccessClaim(user, parentClaim);
+    }
+
+    const mom = moms.find(m => m.file_url === uploadUrlPath);
+    if (mom) return (user) => canAccessMom(user, mom);
+
+    const liqItem = liquidationLineItems.find(li => li.receipt_url === uploadUrlPath);
+    if (liqItem) {
+      const parentLiquidation = liquidations.find(l => l.id === liqItem.liquidationId);
+      if (parentLiquidation) return (user) => canAccessLiquidation(user, parentLiquidation);
+    }
+
+    return null;
+  };
+
   const addHistory = (claimId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
     const entry = {
       id: uuidv4(),
@@ -847,7 +1020,7 @@ export async function createApp() {
   };
 
   const addUserHistory = (userId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
-    statusHistories.push({
+    const entry = {
       id: uuidv4(),
       claim_id: '',
       user_id: userId,
@@ -856,7 +1029,9 @@ export async function createApp() {
       changed_by: changedBy,
       reason,
       timestamp: new Date().toISOString()
-    });
+    };
+    statusHistories.push(entry);
+    if (!suppressHistoryPersistence) persistStatusHistoryFireAndForget(entry);
   };
 
   const addDelegationHistory = (delegationId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
@@ -878,7 +1053,7 @@ export async function createApp() {
   // route factory below, following the exact same "push into statusHistories,
   // one call per meaningfully-changed field" shape as addUserHistory.
   const addMasterDataHistory = (entityKey: string, recordId: string, field: string, oldVal: string, newVal: string, changedBy: string) => {
-    statusHistories.push({
+    const entry = {
       id: uuidv4(),
       claim_id: '',
       master_data_key: entityKey,
@@ -888,7 +1063,9 @@ export async function createApp() {
       changed_by: changedBy,
       reason: `Changed ${entityKey} ${field}`,
       timestamp: new Date().toISOString()
-    });
+    };
+    statusHistories.push(entry);
+    if (!suppressHistoryPersistence) persistStatusHistoryFireAndForget(entry);
   };
 
   type AnalyticsDateBasis = 'submitted' | 'expense' | 'approved' | 'paid' | 'completed';
@@ -980,6 +1157,16 @@ export async function createApp() {
         const mom = moms.find(candidate => candidate.id === claim.mom_id);
         const items = expenses.filter(item => item.claim_id === claim.id);
         const claimedAmount = Number(claim.total_amount) || 0;
+        // Same legacy-record inference src/lib/api.ts's fromServerClaim() gates
+        // on demoModeEnabled (docs/project-handoff/REMAINING-BACKEND-GAPS.md
+        // #11) — this one isn't gated the same way yet. Unlike that one,
+        // AnalyticsRecord.approvedAmount/paidAmount are non-optional numbers
+        // summed directly into dashboard/report totals (below and in
+        // src/lib/analytics.ts), so silently switching this branch to 0 or
+        // undefined in production would zero out real reporting totals
+        // instead of just leaving one claim's display blank — needs those
+        // summation sites audited for how to represent "incomplete record"
+        // before this can be gated the same way, not a one-line change.
         const approvedAmount = Number(claim.approved_amount)
           || ([ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(claim.status)
             ? Math.min(claimedAmount, REIMBURSEMENT_CAP)
@@ -1505,9 +1692,12 @@ export async function createApp() {
     return missing ? `${missing.label} is required.` : null;
   };
 
-  // Lazily flips any Active delegation whose end_date has passed to Expired.
-  // No scheduler exists in this prototype, so this runs on every read/use of
-  // the delegations list instead - self-healing rather than time-driven.
+  // Flips any Active delegation whose end_date has passed to Expired. Called
+  // defensively on every read/use of the delegations list (getActiveDelegation
+  // below) so routing decisions never use a stale Active delegation, and also
+  // driven by the scheduled job further down so it fires even when nothing
+  // happens to read delegations for a while. Idempotent either way — only an
+  // Active row already past its own end_date is touched.
   const syncDelegationStatuses = () => {
     const now = new Date();
     delegations.forEach(d => {
@@ -1519,6 +1709,16 @@ export async function createApp() {
           d.status = DelegationStatus.EXPIRED;
           d.updated_at = now.toISOString();
           addDelegationHistory(d.id, oldStatus, DelegationStatus.EXPIRED, 'system', 'Delegation window ended.');
+          // Fire-and-forget, matching persistStatusHistoryFireAndForget's
+          // convention just above — this function is called synchronously
+          // from many routing-decision code paths (getActiveDelegation), so
+          // making it async would ripple awaits through all of them. The
+          // status itself is cheaply re-derivable from end_date on every
+          // call, so a dropped write on a transient DB blip self-heals the
+          // next time this runs; only the audit trail needs the fire-and-
+          // forget it already had.
+          persistDelegation(d).catch((err: unknown) =>
+            console.error('[db] Could not persist delegation expiry to Postgres:', err));
         }
       }
     });
@@ -1966,10 +2166,15 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
 
   // Self-service notification preferences — any authenticated user can set
   // their own; unlike PUT /api/users/:id this isn't an admin-only route.
-  app.put('/api/me/notification-prefs', (req, res) => {
+  app.put('/api/me/notification-prefs', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     user.notification_prefs = req.body;
+    try {
+      await syncUsersToDb(users);
+    } catch (err) {
+      console.error('[db] Could not persist notification preferences to Postgres:', err);
+    }
     res.json(user.notification_prefs);
   });
 
@@ -2028,21 +2233,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     const mom = moms.find(m => m.id === req.params.id);
     if (!mom) return res.status(404).json({ error: 'Minutes of Meeting not found' });
 
-    let hasAccess = false;
-    if (user.role === UserRole.ADMIN) {
-      hasAccess = true;
-    } else if (user.role === UserRole.FINANCE) {
-      const linkedClaim = claims.find(candidate => candidate.id === mom.claim_id);
-      hasAccess = Boolean(linkedClaim && isFinanceVisibleFinancialRecord(linkedClaim.claim_type || 'Reimbursement', linkedClaim.status));
-    } else if (user.role === UserRole.REQUESTOR) {
-      hasAccess = mom.requestor_id === user.id;
-    } else if (user.role === UserRole.APPROVER) {
-      const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
-      hasAccess = mom.requestor_id === user.id ||
-        !!(mom.claim_id && mom.requestor_id && reporteeIds.includes(mom.requestor_id));
-    }
-
-    if (!hasAccess) {
+    if (!canAccessMom(user, mom)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -2159,7 +2350,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       custom_fields: req.body.custom_fields || undefined
     };
 
-    getOrCreateCompany(mom.client);
+    await getOrCreateCompany(mom.client);
     moms.push(mom);
     try {
       await persistMom(mom);
@@ -2193,7 +2384,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     }
 
     mom.client = req.body.client ?? mom.client;
-    getOrCreateCompany(mom.client);
+    await getOrCreateCompany(mom.client);
     mom.contact_person = req.body.contact_person ?? mom.contact_person;
     mom.contact_person_email = req.body.contact_person_email ?? mom.contact_person_email;
     mom.cc_client = req.body.cc_client ?? mom.cc_client;
@@ -2344,19 +2535,7 @@ ${user.name}`;
     // Mirror the scoping already applied by GET /api/claims - the list endpoint
     // was correctly scoped but this single-record lookup was not, allowing any
     // authenticated user to read any claim by id.
-    let hasAccess = false;
-    if (user.role === UserRole.ADMIN) {
-      hasAccess = true;
-    } else if (user.role === UserRole.FINANCE) {
-      hasAccess = isFinanceVisibleFinancialRecord(claim.claim_type || 'Reimbursement', claim.status);
-    } else if (user.role === UserRole.REQUESTOR) {
-      hasAccess = claim.requestor_id === user.id;
-    } else if (user.role === UserRole.APPROVER) {
-      hasAccess = claim.current_approver_id === user.id || claim.original_approver_id === user.id || claim.requestor_id === user.id || isActiveDelegateFor(user.id, claim.current_approver_id);
-    } else if (user.role === UserRole.CUSTODIAN) {
-      hasAccess = [ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(claim.status) || claim.requestor_id === user.id;
-    }
-    if (!hasAccess) return res.status(403).json({ error: 'Forbidden' });
+    if (!canAccessClaim(user, claim)) return res.status(403).json({ error: 'Forbidden' });
 
     const claimExpenses = expenses.filter(e => e.claim_id === claim.id);
     const claimApprovals = approvals.filter(a => a.claim_id === claim.id);
@@ -2472,9 +2651,7 @@ ${user.name}`;
     const claimId = uuidv4();
 
     // Generate Philippine format Claim Number (e.g. REIM-2026-000123)
-    const year = new Date().getFullYear();
-    const numStr = String(claimCounter++).padStart(6, '0');
-    const claimNumber = `REIM-${year}-${numStr}`;
+    const claimNumber = await generateClaimNumber();
 
     // Create compatible expense items
     for (const item of itemsToCreate) {
@@ -2572,7 +2749,7 @@ ${claimNumber}
 Required Action:
 Please log in to the system and navigate to the Approval Queue to approve or reject this claim.`;
 
-      sendEmail(currentApproverId, emailSubject, emailBody);
+      sendEmail(currentApproverId, emailSubject, emailBody, undefined, { eventKey: 'submitted' });
 
       sendEmail(
         user.id,
@@ -2582,7 +2759,9 @@ Please log in to the system and navigate to the Approval Queue to approve or rej
 Reference:
 ${claimNumber}
 
-You'll receive another email as soon as ${approverName} makes a decision.`
+You'll receive another email as soon as ${approverName} makes a decision.`,
+        undefined,
+        { eventKey: 'submitted' }
        );
 
       if (mom?.cc_client && mom.contact_person_email) {
@@ -2938,7 +3117,7 @@ ${claimNumber}
 
 Required Action:
 Please log in to the system and navigate to the Approval Queue to approve or reject this claim.`;
-      sendEmail(claim.current_approver_id, emailSubject, emailBody);
+      sendEmail(claim.current_approver_id, emailSubject, emailBody, undefined, { eventKey: 'submitted' });
 
       sendEmail(
         user.id,
@@ -2948,7 +3127,9 @@ Please log in to the system and navigate to the Approval Queue to approve or rej
 Reference:
 ${claimNumber}
 
-You'll receive another email as soon as ${approverName} makes a decision.`
+You'll receive another email as soon as ${approverName} makes a decision.`,
+        undefined,
+        { eventKey: 'submitted' }
       );
     }
 
@@ -3116,7 +3297,7 @@ Approved reimbursement: ${formatPHP(claim.approved_amount)}${claim.total_amount 
 
 Reference:
 ${claimNumber}`;
-      sendEmail(claim.requestor_id, approvedSubject, approvedBody);
+      sendEmail(claim.requestor_id, approvedSubject, approvedBody, undefined, { eventKey: 'approved' });
 
       // Email Notification 5: Processing (Recipient: Custodian)
       const custodians = users.filter(u => u.role === UserRole.CUSTODIAN);
@@ -3151,7 +3332,12 @@ ${claimNumber}
 
 Required Action:
 ${actionText}`;
-      sendEmail(claim.requestor_id, emailSubject, emailBody);
+      // Settings > Notifications only has a "returned" toggle, not a
+      // "rejected" one — a rejection is terminal (no revise-and-resubmit
+      // expected of the requestor), so leave it unconditional rather than
+      // guess it into a category the UI doesn't actually expose.
+      sendEmail(claim.requestor_id, emailSubject, emailBody, undefined,
+        decision === 'Returned' ? { eventKey: 'returned' } : undefined);
     }
 
     const claimMom = claim.mom_id ? moms.find(candidate => candidate.id === claim.mom_id) : undefined;
@@ -3226,17 +3412,16 @@ ${actionText}`;
   });
 
   // Simulates the daily/hourly Entra ID sync's fallback cron
-  // (docs/hierarchy-sync-design.md §5) — there's no real scheduler in this
-  // prototype, so an Admin can trigger a check manually. `force: true` skips
-  // the day-count gate purely so the behavior is demoable without waiting 7
-  // real days; the day-based check is what a real cron would use.
-  app.post('/api/admin/run-fallback-check', async (req, res) => {
-    const admin = getUser(req);
-    if (!admin || admin.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
-
-    const force = !!req.body?.force;
+  // (docs/hierarchy-sync-design.md §5). Shared by the scheduled job further
+  // down (runs automatically, `force: false`) and the Admin Dashboard's
+  // manual "Run Fallback Check" button (still useful for demoing without
+  // waiting on the schedule, and `force: true` additionally skips the
+  // day-count gate). `changedBy` records who/what triggered this run in the
+  // resulting history entries.
+  async function runStaleApproverFallbackCheck(force: boolean, changedBy: string): Promise<Claim[]> {
     const now = Date.now();
     const escalated: Claim[] = [];
+    const admins = users.filter(u => u.role === UserRole.ADMIN);
 
     claims.forEach(claim => {
       if (!claim.approver_stale_since || claim.escalated_to_admin) return;
@@ -3248,16 +3433,16 @@ ${actionText}`;
         const claimNumber = claim.claim_number || `REIM-${claim.id.substring(0, 6)}`;
         const currentApprover = users.find(u => u.id === claim.current_approver_id);
         const suggested = claim.pending_transfer_to ? users.find(u => u.id === claim.pending_transfer_to) : undefined;
-        addHistory(claim.id, claim.status, claim.status, admin.id,
+        addHistory(claim.id, claim.status, claim.status, changedBy,
           `Fallback escalation: ${claimNumber} unresolved org-change notice sent to Admin.`);
-        sendEmail(admin.id, `Escalation: stuck approval - ${claimNumber}`,
+        admins.forEach(admin => sendEmail(admin.id, `Escalation: stuck approval - ${claimNumber}`,
           `${claimNumber} has had an unresolved org-change approver notice for ${STALE_APPROVER_FALLBACK_DAYS}+ days.
 
 Current approver: ${currentApprover?.name || '(unknown)'}
 Suggested new approver: ${suggested?.name || '(unassigned)'}
 Reason: ${claim.approver_stale_reason || 'Org change'}
 
-Manual reassignment may be needed.`);
+Manual reassignment may be needed.`));
       }
     });
 
@@ -3267,6 +3452,15 @@ Manual reassignment may be needed.`);
       console.error('[db] Could not persist fallback escalation to Postgres:', err);
     }
 
+    return escalated;
+  }
+
+  app.post('/api/admin/run-fallback-check', async (req, res) => {
+    const admin = getUser(req);
+    if (!admin || admin.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
+
+    const force = !!req.body?.force;
+    const escalated = await runStaleApproverFallbackCheck(force, admin.id);
     res.json({ escalatedCount: escalated.length, escalated: escalated.map(c => c.id) });
   });
 
@@ -3459,7 +3653,8 @@ BSM Assistant | BSD - IT Security Business`;
 
     sendEmail(claim.requestor_id, emailSubject, emailBody, undefined, {
       plain: true,
-      fromLabel: "SharePoint Online <no-reply@sharepointonline.com>"
+      fromLabel: "SharePoint Online <no-reply@sharepointonline.com>",
+      eventKey: 'ready',
     });
 
     try {
@@ -4231,19 +4426,7 @@ You'll receive another email as soon as a decision is made.`
 
     // Mirror the scoping already applied by GET /api/liquidations - the list
     // endpoint was correctly scoped but this single-record lookup was not.
-    let hasAccess = false;
-    if (user.role === UserRole.REQUESTOR) {
-      hasAccess = l.requestorId === user.id;
-    } else if (user.role === UserRole.APPROVER) {
-      const reporteeIds = users.filter(u => u.reports_to === user.id).map(u => u.id);
-      const relatedCa = cashAdvances.find(c => c.id === l.cashAdvanceId);
-      hasAccess = l.requestorId === user.id || relatedCa?.approverId === user.id || reporteeIds.includes(l.requestorId) || isActiveDelegateFor(user.id, relatedCa?.approverId);
-    } else if (user.role === UserRole.FINANCE) {
-      hasAccess = isFinanceVisibleFinancialRecord('Liquidation', l.status);
-    } else {
-      hasAccess = true; // Custodian and Admin see all
-    }
-    if (!hasAccess) return res.status(403).json({ error: 'Forbidden' });
+    if (!canAccessLiquidation(user, l)) return res.status(403).json({ error: 'Forbidden' });
 
     const requestor = users.find(u => u.id === l.requestorId);
     const cashAdvance = cashAdvances.find(c => c.id === l.cashAdvanceId);
@@ -4540,9 +4723,7 @@ You'll receive another email as soon as a decision is made.`
         ca.status = CashAdvanceStatus.LIQUIDATED;
 
         const claimId = uuidv4();
-        const year = new Date().getFullYear();
-        const numStr = String(claimCounter++).padStart(6, '0');
-        const claimNumber = `REIM-${year}-${numStr}`;
+        const claimNumber = await generateClaimNumber();
 
         shortFallClaim = {
           id: claimId,
@@ -4753,7 +4934,9 @@ You'll receive another email as soon as a decision is made.`
     sendEmail(
       delegate_id,
       `Delegation Request from ${user.name}`,
-      `${user.name} has asked you to cover their approval duties from ${start_date} to ${end_date}.\n\nPlease log in and Accept or Decline this request from Settings > Approval Delegation. Your decision does not take effect until you respond - claims will keep routing to ${user.name} until then.`
+      `${user.name} has asked you to cover their approval duties from ${start_date} to ${end_date}.\n\nPlease log in and Accept or Decline this request from Settings > Approval Delegation. Your decision does not take effect until you respond - claims will keep routing to ${user.name} until then.`,
+      undefined,
+      { eventKey: 'delegation' }
     );
 
     res.json(delegation);
@@ -4780,7 +4963,9 @@ You'll receive another email as soon as a decision is made.`
     sendEmail(
       delegation.approver_id,
       `${user.name} accepted your delegation request`,
-      `${user.name} has accepted your request to cover approvals from ${delegation.start_date} to ${delegation.end_date}. Claims from your direct reports will now route to them for that period.`
+      `${user.name} has accepted your request to cover approvals from ${delegation.start_date} to ${delegation.end_date}. Claims from your direct reports will now route to them for that period.`,
+      undefined,
+      { eventKey: 'delegation' }
     );
 
     try {
@@ -4813,7 +4998,9 @@ You'll receive another email as soon as a decision is made.`
     sendEmail(
       delegation.approver_id,
       `${user.name} declined your delegation request`,
-      `${user.name} has declined your request to cover approvals from ${delegation.start_date} to ${delegation.end_date}.${reason ? `\n\nReason: ${reason}` : ''}\n\nPlease choose a different delegate if you still need coverage for this period.`
+      `${user.name} has declined your request to cover approvals from ${delegation.start_date} to ${delegation.end_date}.${reason ? `\n\nReason: ${reason}` : ''}\n\nPlease choose a different delegate if you still need coverage for this period.`,
+      undefined,
+      { eventKey: 'delegation' }
     );
 
     try {
@@ -4845,7 +5032,9 @@ You'll receive another email as soon as a decision is made.`
     sendEmail(
       delegation.delegate_id,
       `${user.name} cancelled their delegation request`,
-      `${user.name} has cancelled the delegation ${oldStatus === DelegationStatus.ACTIVE ? 'that was active' : 'request'} covering ${delegation.start_date} to ${delegation.end_date}. ${oldStatus === DelegationStatus.ACTIVE ? 'You no longer need to act on their behalf.' : 'No action is needed.'}`
+      `${user.name} has cancelled the delegation ${oldStatus === DelegationStatus.ACTIVE ? 'that was active' : 'request'} covering ${delegation.start_date} to ${delegation.end_date}. ${oldStatus === DelegationStatus.ACTIVE ? 'You no longer need to act on their behalf.' : 'No action is needed.'}`,
+      undefined,
+      { eventKey: 'delegation' }
     );
 
     try {
@@ -5106,7 +5295,7 @@ You'll receive another email as soon as a decision is made.`
         participants_external: `${contact}${idx % 2 === 0 ? ', ' + CONTACTS[(idx + 1) % 5] : ''}`,
         custom_fields: { type_of_account: ACCOUNT_TYPES[idx], category: CATEGORIES[idx] },
       };
-      getOrCreateCompany(actualClient);
+      getOrCreateCompanyInMemory(actualClient);
       moms.push(mom);
       return mom;
     };
@@ -5829,7 +6018,7 @@ You'll receive another email as soon as a decision is made.`
         status: MomStatus.COMPLETED,
         created_at: rDate(daysAgo)
       };
-      getOrCreateCompany(mom.client);
+      getOrCreateCompanyInMemory(mom.client);
       moms.push(mom);
       mkClaim({
         requestorId: reqId,
@@ -6198,6 +6387,17 @@ You'll receive another email as soon as a decision is made.`
     }
 
     claimCounter = seedCounter;
+    // Seeded claims never call persistClaim (they're in-memory demo data
+    // only), but a live-database demo still allocates real claim numbers
+    // from the sequence below — keep it past the seeded range so a real
+    // submission can't display the same REIM-YYYY-NNNNNN as seeded data.
+    if (isDbConfigured()) {
+      try {
+        await syncClaimNumberSequenceFloor(seedCounter);
+      } catch (err) {
+        console.error('[db] Could not sync claim_number_seq after seeding:', err);
+      }
+    }
 
     if (options.reviewMeetings) {
       const RM_TIMES = ['09:00', '10:30', '13:00', '14:30', '16:00'];
@@ -6428,6 +6628,7 @@ You'll receive another email as soon as a decision is made.`
       for (const pc of projectCodes) await persistMasterDataRecord('project-codes', pc);
       for (const vendor of vendors) await persistMasterDataRecord('vendors', vendor);
       for (const field of fieldDefinitions) await persistFieldDefinition(field);
+      await syncClaimNumberSequenceFloor(123);
     } catch (err) {
       console.error('[db] Could not persist reset state to Postgres:', err);
     }
@@ -6591,10 +6792,10 @@ You'll receive another email as soon as a decision is made.`
     res.json(importBatches);
   });
 
-  app.post('/api/imports', (req, res) => {
+  app.post('/api/imports', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
-    
+
     const { filename, records } = req.body;
     if (!Array.isArray(records) || records.length === 0) {
       return res.status(400).json({ error: 'No valid records provided' });
@@ -6608,15 +6809,21 @@ You'll receive another email as soon as a decision is made.`
       total_records: records.length,
       imported_at: new Date().toISOString()
     };
-    importBatches.push(newBatch);
 
-    // Create claims
+    // Build every row in memory first — nothing is pushed into the live
+    // in-memory arrays or the database until the whole batch has been
+    // assembled and (when a database is configured) committed together.
+    const claimsToCreate: Claim[] = [];
+    const expensesToCreate: ExpenseLineItem[] = [];
+    const historyToCreate: StatusHistory[] = [];
+
     for (const record of records) {
       const claimId = uuidv4();
-      
-      const newClaim: Claim = {
+      const claimNumber = record.claim_number || (await generateClaimNumber());
+
+      claimsToCreate.push({
         id: claimId,
-        claim_number: record.claim_number || `REIM-${claimCounter++}`,
+        claim_number: claimNumber,
         requestor_id: record.requestor_id,
         current_approver_id: user.id, // Or whoever, it's historical so doesn't matter much
         mom_id: record.mom_id || '',
@@ -6628,13 +6835,11 @@ You'll receive another email as soon as a decision is made.`
         import_batch_id: batchId,
         created_at: record.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString()
-      };
-      
-      claims.push(newClaim);
-      
+      });
+
       if (record.lineItems && Array.isArray(record.lineItems)) {
         for (const li of record.lineItems) {
-          expenses.push({
+          expensesToCreate.push({
             id: uuidv4(),
             claim_id: claimId,
             expense_date: li.expense_date || new Date().toISOString().split('T')[0],
@@ -6648,8 +6853,8 @@ You'll receive another email as soon as a decision is made.`
           });
         }
       }
-      
-      statusHistories.push({
+
+      historyToCreate.push({
         id: uuidv4(),
         claim_id: claimId,
         old_status: 'Imported',
@@ -6659,6 +6864,25 @@ You'll receive another email as soon as a decision is made.`
         timestamp: new Date().toISOString()
       });
     }
+
+    // Unlike a live user submission (best-effort persist, in-memory state
+    // always wins), a bad historical-import batch has no user waiting on a
+    // single record — reject the whole batch on any DB failure (e.g. a
+    // duplicate claim_number hitting the unique constraint) rather than
+    // leaving a batch that looks imported in the UI but never committed.
+    if (isDbConfigured()) {
+      try {
+        await persistHistoricalImportBatch(newBatch, claimsToCreate, expensesToCreate, historyToCreate);
+      } catch (err) {
+        console.error('[db] Historical import batch failed, rejecting whole batch:', err);
+        return res.status(500).json({ error: 'Import failed while saving records. No records from this batch were imported — check for duplicate claim numbers and try again.' });
+      }
+    }
+
+    importBatches.push(newBatch);
+    claims.push(...claimsToCreate);
+    expenses.push(...expensesToCreate);
+    statusHistories.push(...historyToCreate);
 
     res.status(201).json(newBatch);
   });
@@ -6702,6 +6926,28 @@ You'll receive another email as soon as a decision is made.`
     } catch (err: any) {
       console.error('Failed to auto-seed mock data on startup:', err);
     }
+  }
+
+  // --- Durable scheduled jobs (docs/project-handoff/REMAINING-BACKEND-GAPS.md
+  // #9: "Stale-approver escalation is triggered manually by an Admin.
+  // Delegation expiration is calculated lazily during reads.") A real
+  // deployment would use a persistent job queue with database-backed job
+  // state; this in-process interval is the pragmatic middle ground for a
+  // single-persistent-Node-process app with no external job infrastructure
+  // available. Both jobs are idempotent — delegation sync only flips an
+  // Active row already past its own end_date, escalation only touches a
+  // stale, not-yet-escalated claim — so re-running on every tick is safe.
+  // Skipped under VERCEL=1 (the test harness's signal, also set on an actual
+  // Vercel deploy): a setInterval has no meaning across serverless
+  // invocations, and the test suite calls createApp() repeatedly per file,
+  // which would otherwise leak one live interval per test file.
+  if (process.env.VERCEL !== '1') {
+    const SCHEDULED_JOB_INTERVAL_MS = 60 * 60 * 1000; // hourly — plenty for a multi-day threshold
+    setInterval(() => {
+      syncDelegationStatuses();
+      runStaleApproverFallbackCheck(false, 'system').catch((err: unknown) =>
+        console.error('[scheduler] Stale-approver fallback check failed:', err));
+    }, SCHEDULED_JOB_INTERVAL_MS);
   }
 
   return app;

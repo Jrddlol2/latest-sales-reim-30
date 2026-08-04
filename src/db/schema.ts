@@ -12,7 +12,7 @@
  * historical serverTypes.ts interface happened to use for that entity.
  */
 import {
-  pgTable, pgEnum, text, integer, boolean, numeric, timestamp, primaryKey,
+  pgTable, pgEnum, pgSequence, text, integer, boolean, numeric, timestamp, primaryKey,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
@@ -153,9 +153,19 @@ export const reviewMeetings = pgTable('review_meetings', {
 
 // --- claims (reimbursements) -----------------------------------------
 
+// Backs atomic claim_number allocation (server.ts's nextClaimNumberFromDb) —
+// a Postgres sequence is safe under concurrent requests and survives
+// restarts, unlike the in-memory counter used only when DATABASE_URL isn't
+// set. Starts at 123 to match that counter's historical starting value.
+export const claimNumberSeq = pgSequence('claim_number_seq', {
+  startWith: 123,
+  minValue: 1,
+  increment: 1,
+});
+
 export const claims = pgTable('claims', {
   id: text('id').primaryKey(),
-  claimNumber: text('claim_number'), // e.g. "REIM-2026-000123"
+  claimNumber: text('claim_number').unique(), // e.g. "REIM-2026-000123"
   requestorId: text('requestor_id').notNull().references(() => users.id),
   currentApproverId: text('current_approver_id').notNull().references(() => users.id),
   originalApproverId: text('original_approver_id').references(() => users.id),

@@ -1,7 +1,7 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { Modal } from './Modal';
-import { MOM, MomDocumentType } from '../../types';
-import { momSections } from '../../lib/momExport';
+import { MOM } from '../../types';
+import { buildMomPdfBlob } from '../../lib/momExport';
 
 interface MomClientPreviewModalProps {
   mom: MOM;
@@ -12,18 +12,45 @@ interface MomClientPreviewModalProps {
 
 // Shared by CreateMom (checking before you save) and MomDetail (checking
 // before you send) so both show the exact same rendering of the client copy.
+// Renders the literal PDF buildMomPdfBlob() produces — the same bytes
+// "Export -> PDF for client" saves to disk — rather than an HTML
+// approximation, since only the PDF copy is what actually gets emailed.
 export function MomClientPreviewModal({ mom, onClose, footer }: MomClientPreviewModalProps) {
-  const docType: MomDocumentType = mom.documentType === 'LOA' ? 'LOA' : 'MoM';
   const clientRecipients = (mom.contactPersonEmail || '').split(',').map(e => e.trim()).filter(Boolean);
-  const clientSections = momSections(mom, 'client');
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Regenerates on every mom change (e.g. live edits in CreateMom's form)
+  // rather than memoizing past it, so the preview never goes stale.
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    setPdfUrl(null);
+    setError(null);
+
+    buildMomPdfBlob(mom, 'client')
+      .then(blob => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPdfUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Could not generate the PDF preview.');
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [mom]);
 
   return (
-    <Modal isOpen onClose={onClose} titleId="client-preview-title" className="max-w-2xl">
-      <div className="bg-surface-container-lowest rounded-xl w-full shadow-2xl max-h-[85vh] flex flex-col">
+    <Modal isOpen onClose={onClose} titleId="client-preview-title" className="max-w-3xl">
+      <div className="bg-surface-container-lowest rounded-xl w-full shadow-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-start justify-between gap-4 border-b border-outline-variant p-5">
           <div className="min-w-0">
             <h3 id="client-preview-title" className="font-headline-sm text-on-surface">Client copy preview</h3>
-            <p className="text-xs text-outline mt-1">This is exactly what the client receives — internal fields like Type of Account are left out.</p>
+            <p className="text-xs text-outline mt-1">This is the exact PDF the client receives — internal fields like Type of Account are left out.</p>
           </div>
           <button aria-label="Close preview" onClick={onClose} className="text-outline hover:text-on-surface">
             <span aria-hidden="true" className="material-symbols-outlined">close</span>
@@ -45,30 +72,14 @@ export function MomClientPreviewModal({ mom, onClose, footer }: MomClientPreview
           )}
         </div>
 
-        {/* WYSIWYG of the client-facing document */}
-        <div className="overflow-y-auto p-6 space-y-5">
-          <div className="text-center border-b border-outline-variant pb-4">
-            <p className="text-label-sm uppercase tracking-wider text-outline">{docType === 'LOA' ? 'Letter of Agreement' : 'Minutes of Meeting'}</p>
-            <h4 className="font-headline-md text-on-surface mt-1">{mom.companyName || 'Untitled meeting'}</h4>
-          </div>
-          {clientSections.map(section => (
-            <section key={section.heading}>
-              <h5 className="text-label-sm font-bold uppercase tracking-wider text-primary mb-2">{section.heading}</h5>
-              {section.rows && (
-                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-                  {section.rows.map(([label, value]) => (
-                    <div key={label} className="flex flex-col">
-                      <dt className="text-xs text-outline">{label}</dt>
-                      <dd className="text-body-sm text-on-surface font-medium">{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-              {section.paragraphs && section.paragraphs.map((p, i) => (
-                <p key={i} className="text-body-sm text-on-surface-variant whitespace-pre-wrap">{p}</p>
-              ))}
-            </section>
-          ))}
+        <div className="flex-1 min-h-[70vh] bg-surface-container-low">
+          {error ? (
+            <div className="flex h-full min-h-[70vh] items-center justify-center p-6 text-center text-body-sm text-error">{error}</div>
+          ) : pdfUrl ? (
+            <iframe title="Client copy PDF preview" src={pdfUrl} className="w-full h-full min-h-[70vh] border-0" />
+          ) : (
+            <div className="flex h-full min-h-[70vh] items-center justify-center p-6 text-center text-body-sm text-outline">Generating preview…</div>
+          )}
         </div>
 
         {footer && (

@@ -1,5 +1,5 @@
 import { MOM } from '../types';
-import { ExportSection, exportStructuredPdf, exportStructuredWord } from './documentExport';
+import { ExportSection, buildStructuredPdfBlob, exportStructuredPdf, exportStructuredWord } from './documentExport';
 import { formatContactsDisplay } from './momContacts';
 
 function filename(mom: MOM, extension: string) {
@@ -49,6 +49,19 @@ export function exportMomWord(mom: MOM, audience: 'internal' | 'client' = 'inter
 export async function exportMomPdf(mom: MOM, audience: 'internal' | 'client' = 'internal') {
   await exportStructuredPdf(
     filename(mom, 'pdf').replace(/\.pdf$/, '') + (audience === 'client' ? '-client' : ''),
+    mom.documentType === 'LOA' ? 'Letter of Agreement' : 'Minutes of Meeting',
+    mom.companyName || 'Untitled meeting',
+    momSections(mom, audience),
+  );
+}
+
+/**
+ * Same PDF bytes exportMomPdf saves to disk, returned as a Blob instead —
+ * lets the client-copy preview modal render the literal PDF that "Send to
+ * client" would attach, rather than a separate HTML approximation of it.
+ */
+export async function buildMomPdfBlob(mom: MOM, audience: 'internal' | 'client' = 'internal'): Promise<Blob> {
+  return buildStructuredPdfBlob(
     mom.documentType === 'LOA' ? 'Letter of Agreement' : 'Minutes of Meeting',
     mom.companyName || 'Untitled meeting',
     momSections(mom, audience),

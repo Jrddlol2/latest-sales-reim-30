@@ -13,14 +13,15 @@
  * server.ts's own registerMasterDataRoutes() factory — so one generic
  * pair of functions covers all six instead of six near-duplicate modules.
  */
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import { getDb } from './index';
 import {
   companies as companiesTable, fieldDefinitions as fieldDefinitionsTable, systemSettings as systemSettingsTable,
   departments as departmentsTable, costCenters as costCentersTable, businessUnits as businessUnitsTable,
   branches as branchesTable, projectCodes as projectCodesTable, vendors as vendorsTable,
+  statusHistories as statusHistoriesTable,
 } from './schema';
-import type { Company, FieldDefinition, MasterDataRecord } from '../serverTypes';
+import type { Company, FieldDefinition, MasterDataRecord, StatusHistory } from '../serverTypes';
 
 export const isDbConfigured = () => !!process.env.DATABASE_URL;
 
@@ -240,4 +241,33 @@ export async function loadSystemSettingsFromDb(): Promise<SystemSettingsShape | 
     paymentMethods: row.paymentMethods,
     categoryLimits: row.categoryLimits ? JSON.parse(row.categoryLimits) : {},
   };
+}
+
+function masterDataHistoryFromRow(r: typeof statusHistoriesTable.$inferSelect): StatusHistory {
+  return {
+    id: r.id,
+    claim_id: '',
+    master_data_key: r.masterDataKey ?? undefined,
+    master_data_id: r.masterDataId ?? undefined,
+    old_status: r.oldStatus,
+    new_status: r.newStatus,
+    changed_by: r.changedBy,
+    reason: r.reason ?? undefined,
+    timestamp: r.timestamp.toISOString(),
+  };
+}
+
+/**
+ * Loads master-data audit history (departments/cost-centers/business-units/
+ * branches/project-codes/vendors edits made via the generic master-data
+ * routes) from the shared status_histories table. Was previously write-only:
+ * addMasterDataHistory() pushed into the in-memory array but nothing
+ * persisted or reloaded it, so these entries vanished on every restart.
+ */
+export async function loadMasterDataHistoryFromDb(): Promise<StatusHistory[]> {
+  if (!isDbConfigured()) return [];
+  const db = getDb();
+  const rows = await db.select().from(statusHistoriesTable)
+    .where(and(isNotNull(statusHistoriesTable.masterDataKey), isNotNull(statusHistoriesTable.masterDataId)));
+  return rows.map(masterDataHistoryFromRow);
 }

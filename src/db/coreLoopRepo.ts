@@ -21,10 +21,10 @@
  * cash advances/liquidations are also migrated and the seed function can be
  * safely gated end to end.
  */
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { getDb } from './index';
-import { moms as momsTable, claims as claimsTable, expenseLineItems as expenseLineItemsTable, approvals as approvalsTable, statusHistories as statusHistoriesTable } from './schema';
-import type { Mom, Claim, ExpenseLineItem, Approval, StatusHistory, MomStatus, MinutesSource, ClaimStatus } from '../serverTypes';
+import { moms as momsTable, claims as claimsTable, expenseLineItems as expenseLineItemsTable, approvals as approvalsTable, statusHistories as statusHistoriesTable, importBatches as importBatchesTable } from './schema';
+import type { Mom, Claim, ExpenseLineItem, Approval, StatusHistory, MomStatus, MinutesSource, ClaimStatus, ImportBatch } from '../serverTypes';
 
 export const isDbConfigured = () => !!process.env.DATABASE_URL;
 
@@ -192,6 +192,35 @@ export async function persistClaim(claim: Claim): Promise<void> {
   await db.insert(claimsTable).values(row).onConflictDoUpdate({ target: claimsTable.id, set: row });
 }
 
+/**
+ * Atomically allocates the next human-facing claim number from the
+ * `claim_number_seq` Postgres sequence. Callers must only use this when
+ * `isDbConfigured()` — Postgres's own sequence guarantee is what makes this
+ * safe under concurrent requests and across restarts, unlike the in-memory
+ * counter server.ts falls back to when no database is configured.
+ */
+export async function nextClaimNumberFromDb(): Promise<string> {
+  const db = getDb();
+  const result: any = await db.execute(sql`select nextval('claim_number_seq') as val`);
+  const val = Number(result.rows[0].val);
+  const year = new Date().getFullYear();
+  return `REIM-${year}-${String(val).padStart(6, '0')}`;
+}
+
+/**
+ * Fast-forwards the sequence so the next `nextval()` returns at least
+ * `minNextValue`. Used to keep the database sequence in step with the
+ * in-memory `claimCounter` after the demo seed generator or an admin reset
+ * moves that counter — without this, a live-database demo could hand out a
+ * claim_number that collides with (or trails behind) numbers the seeded,
+ * in-memory-only demo data already displays.
+ */
+export async function syncClaimNumberSequenceFloor(minNextValue: number): Promise<void> {
+  if (!isDbConfigured()) return;
+  const db = getDb();
+  await db.execute(sql`select setval('claim_number_seq', ${minNextValue}, false)`);
+}
+
 // --- expense line items ---------------------------------------------------
 
 function expenseToRow(e: ExpenseLineItem) {
@@ -273,9 +302,15 @@ export async function insertApproval(approval: Approval): Promise<void> {
 
 // --- status history (insert-only) ------------------------------------------
 // Shared table: exactly one of claim_id / cash_advance_id / liquidation_id /
-// delegation_id is set per row (server.ts's addHistory/addCaHistory/
-// addLiqHistory/addDelegationHistory each set a different one, matching the
-// union shape StatusHistory already has).
+// delegation_id / user_id / (master_data_key + master_data_id) is set per row
+// (server.ts's addHistory/addCaHistory/addLiqHistory/addDelegationHistory/
+// addUserHistory/addMasterDataHistory each set a different one, matching the
+// union shape StatusHistory already has). This is the one row-serializer
+// every insert path (persistStatusHistoryFireAndForget, the historical-import
+// transaction) shares, so it must map every scope, not just the claim one —
+// a hardcoded `userId: null` here previously dropped user- and master-data-
+// scoped entries even though addUserHistory/addMasterDataHistory pushed them
+// into the in-memory array correctly.
 
 function historyToRow(h: StatusHistory) {
   return {
@@ -284,7 +319,9 @@ function historyToRow(h: StatusHistory) {
     cashAdvanceId: h.cash_advance_id || null,
     liquidationId: h.liquidation_id || null,
     delegationId: h.delegation_id || null,
-    userId: null,
+    userId: h.user_id || null,
+    masterDataKey: h.master_data_key || null,
+    masterDataId: h.master_data_id || null,
     oldStatus: h.old_status,
     newStatus: h.new_status,
     changedBy: h.changed_by,
@@ -307,16 +344,20 @@ function historyFromRow(r: typeof statusHistoriesTable.$inferSelect): StatusHist
 
 /**
  * Fire-and-forget: called from server.ts's addHistory/addCaHistory/
- * addLiqHistory helpers, which together have ~15 call sites across routes
- * not otherwise touched in this migration pass (custodian decisions,
- * reassignment, etc.). Making those helpers async would ripple into all of
- * them; the underlying record's own status (persisted via persistClaim/
- * persistCashAdvance/persistLiquidation, always awaited) is the source of
- * truth, so a dropped audit row on a transient DB blip is an acceptable,
- * self-logged degradation rather than a reason to block the response.
+ * addLiqHistory/addDelegationHistory/addUserHistory/addMasterDataHistory
+ * helpers, which together have ~20 call sites across routes not otherwise
+ * touched in this migration pass (custodian decisions, reassignment, admin
+ * user edits, master-data edits, etc.). Making those helpers async would
+ * ripple into all of them; the underlying record's own status (persisted via
+ * persistClaim/persistCashAdvance/persistLiquidation/syncUsersToDb/
+ * persistMasterDataRecord, always awaited) is the source of truth, so a
+ * dropped audit row on a transient DB blip is an acceptable, self-logged
+ * degradation rather than a reason to block the response.
  */
 export function persistStatusHistoryFireAndForget(entry: StatusHistory): void {
-  if (!isDbConfigured() || (!entry.claim_id && !entry.cash_advance_id && !entry.liquidation_id && !entry.delegation_id)) return;
+  const hasScope = entry.claim_id || entry.cash_advance_id || entry.liquidation_id
+    || entry.delegation_id || entry.user_id || (entry.master_data_key && entry.master_data_id);
+  if (!isDbConfigured() || !hasScope) return;
   const db = getDb();
   db.insert(statusHistoriesTable).values(historyToRow(entry)).onConflictDoNothing()
     .catch((err: unknown) => console.error('[db] Could not persist status history entry:', err));
@@ -340,6 +381,48 @@ export async function clearCoreLoopInDb(): Promise<void> {
     await tx.update(claimsTable).set({ momId: null });
     await tx.delete(momsTable);
     await tx.delete(claimsTable);
+  });
+}
+
+// --- historical import (insert-only, one transaction per batch) -----------
+
+function importBatchToRow(b: ImportBatch) {
+  return {
+    id: b.id,
+    adminId: b.admin_id,
+    filename: b.filename,
+    totalRecords: b.total_records,
+    importedAt: new Date(b.imported_at),
+  };
+}
+
+/**
+ * Persists one Historical Import batch — the batch row, every imported
+ * claim and its line items, and the accompanying status-history entries —
+ * as a single transaction. All-or-nothing: if any row fails (e.g. a
+ * duplicate claim_number colliding with the unique constraint), the whole
+ * batch rolls back instead of leaving a partially-imported, uncommitted
+ * batch that only "exists" in the caller's in-memory arrays.
+ */
+export async function persistHistoricalImportBatch(
+  batch: ImportBatch,
+  claimsToInsert: Claim[],
+  expensesToInsert: ExpenseLineItem[],
+  historyToInsert: StatusHistory[],
+): Promise<void> {
+  if (!isDbConfigured()) return;
+  const db = getDb();
+  await db.transaction(async (tx: typeof db) => {
+    await tx.insert(importBatchesTable).values(importBatchToRow(batch));
+    for (const claim of claimsToInsert) {
+      await tx.insert(claimsTable).values(claimToRow(claim));
+    }
+    for (const item of expensesToInsert) {
+      await tx.insert(expenseLineItemsTable).values(expenseToRow(item));
+    }
+    for (const entry of historyToInsert) {
+      await tx.insert(statusHistoriesTable).values(historyToRow(entry));
+    }
   });
 }
 

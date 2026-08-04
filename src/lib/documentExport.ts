@@ -59,12 +59,18 @@ export function exportStructuredWord(
   URL.revokeObjectURL(url);
 }
 
-export async function exportStructuredPdf(
-  filename: string,
+/**
+ * Builds the PDF and returns its bytes as a Blob, without saving anything.
+ * The one source of truth for PDF *generation* — exportStructuredPdf below
+ * calls this then triggers a download; the client-copy preview modal calls
+ * it directly to render the exact same bytes in an <iframe> instead of a
+ * separate HTML approximation.
+ */
+export async function buildStructuredPdfBlob(
   title: string,
   subtitle: string,
   sections: ExportSection[],
-) {
+): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
   const pageWidth = pdf.internal.pageSize.getWidth();
@@ -131,5 +137,20 @@ export async function exportStructuredPdf(
     y += 8;
   }
 
-  pdf.save(`${safeFilename(filename)}.pdf`);
+  return pdf.output('blob');
+}
+
+export async function exportStructuredPdf(
+  filename: string,
+  title: string,
+  subtitle: string,
+  sections: ExportSection[],
+) {
+  const blob = await buildStructuredPdfBlob(title, subtitle, sections);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${safeFilename(filename)}.pdf`;
+  link.click();
+  URL.revokeObjectURL(url);
 }

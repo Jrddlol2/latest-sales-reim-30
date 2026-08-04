@@ -56,6 +56,36 @@ describe('fromServerClaim', () => {
     const claim = fromServerClaim({ id: 'c1', status: 'SomeFutureStatus', history: [] });
     expect(claim.status).toBe('SomeFutureStatus');
   });
+
+  it('does not invent approved/paid amounts for a legacy record in production mode', () => {
+    const approved = fromServerClaim({ id: 'c1', status: 'Approved', total_amount: '5000', history: [] });
+    expect(approved.approvedAmount).toBeUndefined();
+
+    const paid = fromServerClaim({ id: 'c1', status: 'Completed', total_amount: '5000', history: [] });
+    expect(paid.approvedAmount).toBeUndefined();
+    expect(paid.paidAmount).toBe(0);
+
+    // Explicit false behaves the same as the default — this isn't an opt-in.
+    const explicit = fromServerClaim({ id: 'c1', status: 'Approved', total_amount: '5000', history: [] }, false);
+    expect(explicit.approvedAmount).toBeUndefined();
+  });
+
+  it('infers a capped display amount for a legacy record only when demoModeEnabled is true', () => {
+    const approved = fromServerClaim({ id: 'c1', status: 'Approved', total_amount: '5000', history: [] }, true);
+    expect(approved.approvedAmount).toBe(1000);
+
+    const paid = fromServerClaim({ id: 'c1', status: 'Completed', total_amount: '500', history: [] }, true);
+    expect(paid.approvedAmount).toBe(500);
+    expect(paid.paidAmount).toBe(500);
+  });
+
+  it('always trusts an authoritative approved_amount/paid_amount from the server over any inference', () => {
+    const claim = fromServerClaim({
+      id: 'c1', status: 'Completed', total_amount: '5000', approved_amount: '900', paid_amount: '900', history: [],
+    }, true);
+    expect(claim.approvedAmount).toBe(900);
+    expect(claim.paidAmount).toBe(900);
+  });
 });
 
 describe('fromServerCashAdvance', () => {

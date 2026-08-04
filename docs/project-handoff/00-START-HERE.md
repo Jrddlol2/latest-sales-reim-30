@@ -58,7 +58,8 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current baseline is 67 tests across 10 files.
+The current baseline is 70 tests across 10 files (2026-08-04 follow-up
+session added 3 covering the demo-mode-gated financial fallback).
 
 ## Database-change rule
 
@@ -72,14 +73,38 @@ change affects persistence or record creation.
 
 ## Current priorities
 
-1. Replace the HTML client-copy preview with the exact generated PDF.
+A 2026-08-04 follow-up session closed items 1, 3, and 4 below (see
+[`HANDOFF-NEXT-STEPS.md`](HANDOFF-NEXT-STEPS.md)'s "Resolved this session"
+for specifics) while working without Microsoft/Google accounts available —
+that's why 2 and 5 are still open: they're blocked on external credentials
+(an Entra tenant/app registration; Google Workspace/Gmail), not on
+engineering effort.
+
+1. ~~Replace the HTML client-copy preview with the exact generated PDF.~~
+   Done — `MomClientPreviewModal.tsx` now renders the real generated PDF.
 2. Add real client email and internal Teams delivery with attachments, retries,
-   and delivery state.
-3. Replace the in-memory claim-number counter with an atomic database sequence
-   and unique constraint.
-4. Make historical imports transactional and durable.
+   and delivery state. **Still open — blocked on Google Workspace/Gmail and
+   an Entra app registration.**
+3. ~~Replace the in-memory claim-number counter with an atomic database sequence
+   and unique constraint.~~ Done — Postgres sequence + `UNIQUE` constraint,
+   in-memory counter kept only for the no-database mode.
+4. ~~Make historical imports transactional and durable.~~ Done — one
+   Postgres transaction per import batch.
 5. Implement Microsoft Entra authentication and server-side sessions.
+   **Still open — blocked on an Entra tenant/app registration.**
 6. Move uploads to private object storage with record-level authorization.
+   **Partially open** — the authorization *rule* is now in place (a file
+   only serves to someone who can already see the record it's attached to);
+   the storage location itself is still local disk, not object storage.
+
+Also closed this session, not on the original list above: notification
+preferences (persisted + enforced), implicit company creation (persisted),
+user/master-data audit history (persisted), delegation-expiry persistence
+plus an automatic hourly scheduler for stale-approver escalation (previously
+manual-only), the frontend's financial-amount fallback (now gated behind
+demo mode), and MOM list filter parity with the Claims list. Full detail in
+[`REMAINING-BACKEND-GAPS.md`](REMAINING-BACKEND-GAPS.md)'s "Resolved since
+this audit" table.
 
 ## Documents intentionally excluded
 

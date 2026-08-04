@@ -1,7 +1,9 @@
 # Remaining mock representations and backend gaps
 
-**Audit date:** 2026-08-04  
-**Repository baseline:** `33ad22b` (`main`)  
+**Audit date:** 2026-08-04
+**Updated:** 2026-08-04 (follow-up session — see "Resolved since this audit"
+below; original findings below that are kept for what's still open)
+**Repository baseline:** `33ad22b` (`main`)
 **Scope:** Current UI and server behavior that represents a production capability but is still mocked, process-local, non-durable, or dependent on a future external integration.
 
 ## Executive summary
@@ -11,26 +13,45 @@ advances, liquidations, approvals, review meetings, delegations, support,
 reference data, and system settings have Postgres write-through repositories and
 boot-time loading when `DEMO_MODE=false`.
 
-The largest remaining gaps are real identity, external email/Teams delivery,
-durable and authorized file storage, historical-import persistence, and atomic
-claim-number generation. Several smaller surfaces also look complete in the UI
-but only update process memory or infer values in the browser.
+A follow-up session (no Microsoft/Google accounts available in that
+environment) closed six of the original findings below: historical imports,
+notification preferences, implicit company creation, user/master-data audit
+history, delegation-expiry persistence + scheduled stale-approver escalation,
+and atomic claim-number generation. It also gated the frontend's legacy-record
+financial-amount fallback behind demo mode and fixed the `/uploads/:filename`
+authorization gap. See "Resolved since this audit" for specifics.
 
-## Prioritized findings
+**What's still genuinely open:** real identity (Entra), external email/Teams
+delivery, durable and authorized *file storage* (the authorization check on
+top of it is now fixed, the storage location itself is not), and a handful of
+smaller items below. All of the identity/delivery work is blocked on external
+accounts (Microsoft tenant, Google Workspace) that weren't available to the
+session that did the rest of this work — not on remaining engineering effort.
+
+## Resolved since this audit
+
+| Area | What changed |
+|---|---|
+| Human-readable claim numbers | `claims.claim_number` now has a `UNIQUE` constraint; a Postgres sequence (`claim_number_seq`) allocates it atomically when `DATABASE_URL` is set. In-memory counter kept only as the no-database fallback. |
+| Historical imports | `POST /api/imports` now builds every row first, then commits batch + claims + line items + history as one transaction (`persistHistoricalImportBatch`). A failure rejects the whole batch. |
+| File download authorization | `/uploads/:filename` resolves the file to its owning claim/expense-line-item/MOM/liquidation-line-item and applies that record's own access rule instead of accepting any logged-in user. |
+| Notification preferences | `PUT /api/me/notification-prefs` persists via `syncUsersToDb()`. `sendEmail()` now takes an `eventKey` and checks `shouldNotify()` for the 5 categories Settings > Notifications exposes. |
+| Automatically created companies | `getOrCreateCompany()` (real MOM create/update paths) now persists a newly created company; the demo seed generator uses a separate non-persisting variant. |
+| User/master-data audit history | `addUserHistory()`/`addMasterDataHistory()` now persist (previously write-only into the in-memory array); the row mapper's hardcoded `userId: null` was dropping these rows outright. |
+| Scheduled lifecycle work | Delegation expiry now persists when it flips (previously in-memory only). An hourly in-process scheduler runs delegation-expiry sync and stale-approver escalation automatically; the manual admin trigger still works alongside it. |
+| Client PDF preview | `MomClientPreviewModal.tsx` renders the literal generated PDF (`buildStructuredPdfBlob`) in an iframe instead of an HTML approximation. Delivery still doesn't attach it — see the email/Teams item below, still open. |
+| Financial display fallbacks (frontend) | `fromServerClaim()` only infers a capped display amount for a legacy record when `demoModeEnabled` is true; production leaves it unset instead of inventing a number. The server-side analytics equivalent (`buildAnalyticsRecords`) is **not** yet gated the same way — see below. |
+
+## Prioritized findings (still open)
 
 | Priority | Area | Current representation | Backend required |
 |---|---|---|---|
-| P0 | Authentication and identity | Microsoft sign-in terminates at a `501` placeholder. Protected routes trust the client-controlled `X-User-Id` header. | Microsoft Entra OIDC, validated server-side sessions, secure cookies, logout/expiry handling, and authoritative route authorization. |
-| P0 | Email and Microsoft Teams | `sendEmail()` only appends records to the in-memory `emails` or `teamsMessages` arrays. No message reaches an external inbox or Teams chat. | Real Gmail/SMTP and Microsoft Graph delivery, queueing/retry behavior, delivery status, and an audit trail of attempts. |
-| P0 | Historical imports | The UI reports a successful import, but the route only adds batches, claims, expenses, and history to in-memory arrays. | A transactional import service that persists the batch and all imported rows, validates duplicates, and supports rollback or compensation. |
-| P0 | File storage and access | Uploads are written to local disk, or an ephemeral temporary directory on Vercel. Downloads accept a spoofable `?uid=` identity and do not authorize access against the owning record. | Private object storage, attachment metadata, record-level authorization, safe download URLs, retention, and cleanup. |
-| P0 | Human-readable claim numbers | Claim references use a process-local counter that resets on restart. The database column has no uniqueness constraint. | A PostgreSQL sequence or transactionally locked counter, plus a unique constraint on `claims.claim_number`. |
-| P1 | Notification preferences | The Settings page reports that preferences were saved, but the route only mutates the current in-memory user. Notification creation does not consult those preferences. | Persist preferences and enforce event/channel choices in the notification dispatcher. |
-| P1 | Administrative audit history | User and master-data changes appear in the runtime activity feed but are not written through by the history repository. | Persist and reload user- and master-data-scoped history entries with all entity identifiers intact. |
-| P1 | Automatically created companies | Entering a new company while creating or editing a MOM adds it to the process-local company directory, but that implicit creation is not persisted. | Move get-or-create behavior into an async repository operation, ideally within the MOM/claim transaction. |
-| P1 | Scheduled lifecycle work | Stale-approver escalation is triggered manually by an Admin. Delegation expiration is calculated lazily during reads and is not durably written when it changes. | A durable scheduler or job queue with idempotent escalation and expiration jobs. |
-| P2 | Client PDF preview and delivery | The preview says it is exactly what the client receives, but it is an HTML approximation. The send route does not attach the generated PDF. | One canonical PDF builder used by preview, download, and backend delivery; attach those exact bytes to the outbound email. |
-| P2 | Financial display fallbacks | When approved or paid values are missing, the frontend infers them using the reimbursement cap. | Require authoritative financial amounts from the backend and expose missing/inconsistent values rather than inventing them in the UI. |
+| P0 | Authentication and identity | Microsoft sign-in terminates at a `501` placeholder. Protected routes trust the client-controlled `X-User-Id` header. | Microsoft Entra OIDC, validated server-side sessions, secure cookies, logout/expiry handling, and authoritative route authorization. **Blocked on an Entra tenant/app registration.** |
+| P0 | Email and Microsoft Teams | `sendEmail()` only appends records to the in-memory `emails` or `teamsMessages` arrays (now gated by per-category preferences, but still not delivered anywhere real). No message reaches an external inbox or Teams chat. | Real Gmail/SMTP and Microsoft Graph delivery, queueing/retry behavior, delivery status, and an audit trail of attempts. **Blocked on Google Workspace/Gmail and the Entra app registration.** |
+| P0 | File storage location | Uploads are written to local disk, or an ephemeral temporary directory on Vercel. Download *authorization* is now fixed (see above); the storage location itself is not. | Private object storage (Supabase Storage / S3), attachment metadata, retention, and cleanup. |
+| P1 | Financial display fallbacks (server-side) | `buildAnalyticsRecords()`'s claim branch infers `approvedAmount`/`paidAmount` from the reimbursement cap when the real field is absent, unconditionally (not gated on demo mode like the frontend equivalent now is). | `AnalyticsRecord.approvedAmount`/`paidAmount` are non-optional numbers summed directly into dashboard/report totals — gating this needs those summation sites audited for how to represent an incomplete record first, not a one-line change. |
+| P2 | System-wide filter unification | MOMs and Claims list views now have matching filter dimensions (search, status/type, client, location, date range), but as independently implemented, duplicated UI — not a shared component. Receipts' filter logic remains the richest and most deeply coupled to its own data model. | A true shared `FilterBar` component, if that level of unification is wanted, is a larger refactor touching all three list views (and Receipts' filter logic would need to be generalized first). |
+| P2 | Terminology/copy consistency | One confirmed inconsistency (bare "MOM" in a Settings description) was fixed. No further inconsistencies were found in a light pass (e.g. "Type of Account" phrasing is already consistent everywhere). | A broader button-verb/label consistency audit across the app, if wanted — not blocked on anything, just unstarted beyond the light pass. |
 
 ## Detailed evidence and recommendations
 
@@ -38,16 +59,13 @@ but only update process memory or infer values in the browser.
 
 Evidence:
 
-- `server.ts:685` implements `/api/auth/microsoft/start`, but returns `501`
-  even when the Microsoft environment variables are present.
-- `server.ts:775` derives identity from `X-User-Id`.
-- `src/lib/api.ts:27` stores the selected demo identity as `mockUserId` in
+- `server.ts`'s `/api/auth/microsoft/start` returns `501` even when the Microsoft environment variables are present.
+- `getUser()` derives identity from `X-User-Id`.
+- `src/lib/api.ts` stores the selected demo identity as `mockUserId` in
   browser `sessionStorage`.
-- `server.ts:302` generates fake Entra object IDs for seeded users.
-- `server.ts:1559` describes Admin edits to `reports_to` as a simulated Entra
-  hierarchy sync.
-- `server.ts:3233` exposes an Admin action that stands in for a scheduled
-  stale-approver escalation job.
+- `server.ts` generates fake Entra object IDs for seeded users.
+- Admin edits to `reports_to` are described as a simulated Entra hierarchy sync (`docs/project-handoff/HIERARCHY-SYNC-DESIGN.md`).
+- The Admin Dashboard's "Run Fallback Check" (now also running automatically on an hourly schedule — see "Resolved since this audit") stands in for a scheduled stale-approver escalation job that a real Entra sync would trigger.
 
 Production work:
 
@@ -58,7 +76,9 @@ Production work:
    `X-User-Id` and demo login in production.
 4. Decide whether organization hierarchy comes from Microsoft Graph, an HRIS,
    or an administered internal source, then run synchronization as a durable
-   scheduled job.
+   scheduled job (the in-process scheduler added this session for
+   delegation-expiry/stale-approver-escalation is a template for this, but a
+   real Graph sync is a separate, larger integration).
 5. Fetch and proxy/cache Microsoft profile photos only after the required Graph
    permission is approved.
 
@@ -66,157 +86,194 @@ Production work:
 
 Evidence:
 
-- `server.ts:346` defines `sendEmail()` as a mock transport.
+- `sendEmail()` in `server.ts` defines a mock transport, now with an optional `eventKey` parameter that checks `shouldNotify()` before creating a record — but the record itself still only ever lands in the in-memory `emails`/`teamsMessages` arrays.
 - Internal recipients are appended to `teamsMessages`; external recipients are
   appended to `emails`.
-- `server.ts:430` explicitly logs `MOCK TEAMS` or `MOCK EMAIL TRANSPORT`.
-- `server.ts:2223` marks a MOM completed and invokes the mock sender.
-- `src/pages/shared/MomDetail.tsx:83` displays a successful "Client copy sent"
-  toast after that call.
+- `server.ts` explicitly logs `MOCK TEAMS` or `MOCK EMAIL TRANSPORT`.
+- MOM completion invokes the mock sender.
+- `MomDetail.tsx` displays a successful "Client copy sent" toast after that call.
 
-Recommended design:
+Recommended design: see `docs/project-handoff/HANDOFF-NEXT-STEPS.md` sections
+1a–1c for the full write-up (Gmail API vs. Nodemailer/SMTP, Teams Graph API
+shape, attachment plumbing now that `buildMomPdfBlob()` returns bytes
+directly, outbox/queue design, and the storage-durability note for
+attachments on Vercel).
 
-- Deliver client mail through an approved Gmail/Google Workspace integration or
-  SMTP provider.
-- Deliver internal notifications through Microsoft Graph when per-user Teams
-  messages are required. A channel webhook is only suitable if notifications
-  are intentionally broadcast to one fixed channel.
-- Use a durable outbox/queue. Record `pending`, `sent`, `failed`, provider ID,
-  attempt count, and the last error.
-- Make MOM completion and delivery state explicit. A provider failure must not
-  silently count as successful delivery.
-- Retain in-app notification history, but base it on persisted delivery events
-  rather than the current process-local arrays.
+### 3. Historical import — RESOLVED
 
-### 3. Historical import is not durable
+Was: `POST /api/imports` created an import batch and imported records only in
+in-memory arrays, never calling `persistClaim()`/`persistExpenseLineItems()`
+or a repository for `import_batches`, despite `src/db/schema.ts` already
+defining that table.
 
-Evidence:
+Now: the route builds every claim/expense/history row in memory first, then
+(when `DATABASE_URL` is set) commits the batch row + every claim + every
+expense line item + every history entry as one Postgres transaction via
+`persistHistoricalImportBatch()` in `coreLoopRepo.ts`. Any failure — most
+notably a duplicate `claim_number` now hitting the new unique constraint —
+rolls back the whole batch and returns a 500 instead of reporting success
+while the batch only existed in-memory. In fully in-memory mode (no
+`DATABASE_URL`), the function no-ops and the route falls back to its
+previous in-memory-only behavior, matching every other domain's pattern.
 
-- `server.ts:6594` creates an import batch and imported records only in arrays.
-- The route does not call `persistClaim()`, `persistExpenseLineItems()`, or a
-  repository for `import_batches`.
-- `src/db/schema.ts:235` already defines the `import_batches` table, but no
-  repository currently uses it.
-- `src/pages/admin/HistoricalImport.tsx:112` tells the Admin that the import
-  completed successfully.
+### 4. Upload storage and attachment authorization — PARTIALLY RESOLVED
 
-This is higher risk than a cosmetic mock because the imported claims appear
-real until the process restarts. Implement the import as one database
-transaction: insert the batch, validate and insert claims and line items, insert
-history, then commit. A failed row should either reject the whole batch or be
-recorded through an explicit partial-import policy.
+Evidence (storage location — still open):
 
-### 4. Upload storage and attachment authorization
-
-Evidence:
-
-- `server.ts:480` selects a local `uploads` directory or the operating system's
+- `server.ts` selects a local `uploads` directory or the operating system's
   temporary directory.
-- `server.ts:714` serves attachments when any known user ID is supplied through
-  a header or `?uid=` query string.
-- The route does not verify that the user may access the claim, MOM, receipt, or
-  liquidation owning that filename.
 
-Move attachments to private object storage. Store an attachment record with the
-owner entity, uploader, media type, size, storage key, checksum, and timestamps.
-Every download should authorize the authenticated user against the linked
-business record before streaming the file or issuing a short-lived signed URL.
+Evidence (authorization — resolved):
 
-### 5. Claim-number generation is process-local
+- `/uploads/:filename` previously served an attachment to any known user ID
+  supplied through a header or `?uid=` query string, without verifying the
+  requester could access the claim/MOM/liquidation owning that filename.
+- Now, the route resolves the filename back to whichever claim (`receipt_url`),
+  expense line item (`receipt_url`, via its parent claim), MOM (`file_url`), or
+  liquidation line item (`receipt_url`, via its parent liquidation) references
+  it, and applies that record's own access predicate
+  (`canAccessClaim`/`canAccessMom`/`canAccessLiquidation` — now shared with
+  each entity's own detail route rather than duplicated logic). A file with no
+  resolvable owner is treated as not found. Verified live: owner/approver/
+  admin get 200 with correct content, an unrelated authenticated user gets
+  403, no identity gets 401.
 
-Evidence:
+Still open: move attachments to private object storage. Store an attachment
+record with the owner entity, uploader, media type, size, storage key,
+checksum, and timestamps. Every download should authorize the authenticated
+user against the linked business record before streaming the file or issuing
+a short-lived signed URL — the authorization *rule* now exists and is
+reusable; it just needs to be pointed at object-storage URLs instead of local
+disk paths once that migration happens.
 
-- `server.ts:132` initializes `claimCounter` to `123`.
-- `server.ts:2476` increments it to create `REIM-YYYY-NNNNNN` references.
-- `src/db/schema.ts:158` defines `claim_number` without `.unique()`.
+### 5. Claim-number generation — RESOLVED
 
-Use a database sequence or a row locked inside a transaction. Do not use
-`SELECT MAX(...) + 1`, because concurrent requests can still receive the same
-number. Add a database uniqueness constraint as a final integrity backstop.
+Was: `server.ts` initialized `claimCounter` to `123` as a process-local `let`,
+incremented at two call sites to create `REIM-YYYY-NNNNNN` references, with no
+`.unique()` constraint on `claims.claim_number`.
 
-### 6. Notification preferences are represented but not enforced
+Now: a Postgres sequence (`claim_number_seq`, `drizzle/0004_skinny_flatman.sql`)
+backs `nextClaimNumberFromDb()` in `coreLoopRepo.ts`, used via a shared
+`generateClaimNumber()` helper whenever `isDbConfigured()`. The in-memory
+counter remains as the fallback for the fully in-memory (no `DATABASE_URL`)
+mode only. `claims.claim_number` now has a `UNIQUE` constraint as a hard
+backstop. The demo seed generator's own numbering range is synced past the
+real sequence's floor (`syncClaimNumberSequenceFloor()`) after seeding and on
+admin reset, so a live-database demo doesn't hand out a claim number that
+collides with (or trails) the seeded, in-memory-only demo data.
 
-Evidence:
+### 6. Notification preferences — RESOLVED
 
-- `src/pages/shared/Settings.tsx:407` reports "Notification preferences saved".
-- `server.ts:1969` only assigns `user.notification_prefs = req.body` and does
-  not persist the changed user.
-- `sendEmail()` never checks `notification_prefs`, so disabling a channel has no
-  effect on subsequent notification creation.
+Was: `Settings.tsx` reported "Notification preferences saved" but the route
+only assigned `user.notification_prefs = req.body` without persisting the
+changed user, and `sendEmail()` never checked `notification_prefs`.
 
-Persist the preferences through the users repository, define the event-to-
-preference mapping centrally, and enforce it before enqueueing in-app, email, or
-Teams messages.
+Now: the route persists via `syncUsersToDb()`. `sendEmail()` accepts an
+`opts.eventKey` and checks a new `shouldNotify()` function before creating a
+record; wired into the claim submitted/resubmitted, approved, returned, ready,
+and all four delegation-lifecycle `sendEmail()` calls — the exact five
+categories Settings > Notifications exposes. A category is only suppressed
+when both toggles are off, since one delivery record still backs both
+channels (see `shouldNotify()`'s doc comment for the architectural reason a
+finer split isn't implemented yet). Everything without a matching UI
+category (custodian ops mail, escalation-to-admin, support messages, client
+CCs, cash-advance/liquidation lifecycle emails) is intentionally left
+unconditional, exactly as before — gating those would mean guessing at a
+category the UI doesn't actually expose.
 
-### 7. Some audit events remain process-local
+### 7. Audit events — RESOLVED (user/master-data); claim/CA/liquidation history was already durable
 
-Evidence:
+Was: `server.ts` pushed user-change and master-data-change history directly
+into `statusHistories` without ever persisting them; `coreLoopRepo.ts`'s
+history row mapper hardcoded `userId: null` and didn't map `master_data_key`/
+`master_data_id` even if a caller tried to persist one.
 
-- `server.ts:849` pushes user-change history directly into `statusHistories`.
-- `server.ts:880` does the same for master-data changes.
-- `src/db/coreLoopRepo.ts:280` maps persisted history, but sets `userId: null`
-  and does not map `master_data_key` or `master_data_id`.
+Now: `historyToRow()` maps `user_id`, `master_data_key`, and `master_data_id`
+correctly. `addUserHistory()`/`addMasterDataHistory()` call
+`persistStatusHistoryFireAndForget()` like every other history helper already
+did. New `loadUserHistoryFromDb()` (`usersRepo.ts`) and
+`loadMasterDataHistoryFromDb()` (`referenceDataRepo.ts`) reload these on boot
+when `DATABASE_URL` is set, following the same per-domain-repo pattern
+`cashAdvanceRepo.ts`/`workflowExtrasRepo.ts` already used for cash-advance/
+liquidation/delegation history against the same shared table.
 
-As a result, these entries can appear in Admin activity during the current
-process but disappear after restart. Extend the repository mapper and persistence
-guard to support user and master-data history, then verify those entries against
-the real database.
+### 8. Implicit company creation — RESOLVED
 
-### 8. Implicit company creation is not persisted
+Was: `getOrCreateCompany()` only pushed a newly-created company into the
+in-memory `companies` array; MOM create/update routes never called
+`persistCompany()` for it.
 
-Evidence:
+Now: `getOrCreateCompany()` is `async` and persists a newly created company
+via `persistCompany()`, awaited from both the MOM create and update routes.
+The demo seed generator was switched to a separate, deliberately
+non-persisting `getOrCreateCompanyInMemory()` (same lookup-or-create logic,
+no DB write) so repeated auto-seeding on every dev restart doesn't write
+regenerated demo company rows to a live database — seeded companies were
+never persisted before this change either; that invariant is preserved on
+purpose, not accidentally.
 
-- `server.ts:208` defines a synchronous `getOrCreateCompany()` that only pushes
-  into the `companies` array.
-- `server.ts:2162` and `server.ts:2196` call it from MOM create/update paths
-  without calling `persistCompany()` for a newly created company.
+### 9. Scheduled status changes — RESOLVED (delegation expiry persistence + automatic escalation); still process-local in the sense that it's an in-process timer, not an external job queue
 
-Return the created/existing company from an async repository operation and
-persist it before completing the MOM write. A transaction should cover both
-records when company creation and MOM creation occur together.
+Was: `syncDelegationStatuses()` expired delegations while another request
+happened to read or use them, but never called `persistDelegation()`, so the
+status flip didn't survive a restart. Stale-approver fallback escalation
+required an Admin to manually click "Run Fallback Check."
 
-### 9. Scheduled status changes are simulated or lazy
+Now: `syncDelegationStatuses()` fire-and-forget persists a flipped-to-Expired
+delegation. The escalation logic was factored into a shared
+`runStaleApproverFallbackCheck()`, called both by the still-available manual
+admin route and by a new hourly `setInterval` (skipped when `VERCEL=1`, the
+signal both the test harness and an actual Vercel deploy set, since a
+setInterval has no meaning across serverless invocations and would otherwise
+leak one live interval per test file). Both jobs are idempotent, so
+re-running on every tick is safe. This is a pragmatic in-process middle
+ground, not a database-backed job queue with idempotency keys — that's still
+the "real" answer for a genuinely distributed/serverless deployment, per the
+original recommendation below.
 
-Evidence:
+### 10. Client preview and delivery — PREVIEW RESOLVED, DELIVERY STILL OPEN
 
-- `server.ts:1511` expires delegations while another request happens to read or
-  use them.
-- That status mutation does not call `persistDelegation()`.
-- `server.ts:3233` requires an Admin request to run stale-approver fallback
-  escalation.
+Was: the preview said it was exactly what the client receives, but rendered
+HTML rows/paragraphs, not PDF bytes. `documentExport.ts` saved the generated
+PDF directly without exposing a reusable Blob.
 
-Use a scheduler/job worker with idempotency keys and database-backed job state.
-The same transition functions may still be called defensively on reads, but the
-scheduled path must persist the status and history.
+Now: `buildStructuredPdfBlob()` in `documentExport.ts` returns the PDF as a
+`Blob` (via jsPDF's `pdf.output('blob')`); `exportStructuredPdf()` (disk
+download) and the new `buildMomPdfBlob()` (preview) both call it, so there's
+one source of truth for PDF bytes. `MomClientPreviewModal.tsx` renders that
+blob in an `<iframe>`, regenerating it whenever the `mom` prop changes and
+revoking the object URL on unmount. Verified live: the iframe's `src` is a
+`blob:` URL whose fetched bytes start with `%PDF-1.3`.
 
-### 10. Client preview is not the delivered PDF
+Still open: the send route (`src/lib/api.ts`'s MOM send call) still sends an
+empty JSON request — attaching the actual PDF bytes to a real outbound email
+is blocked on the email/Teams delivery work in Section 2 above, which is
+itself blocked on external accounts.
 
-Evidence:
+### 11. Frontend financial fallbacks — RESOLVED (frontend); server-side analytics equivalent still open
 
-- `src/components/shared/MomClientPreviewModal.tsx:26` says the preview is
-  exactly what the client receives.
-- The component renders HTML rows and paragraphs rather than PDF bytes.
-- `src/lib/documentExport.ts:134` saves the generated PDF directly and does not
-  expose a reusable Blob for preview or attachment.
-- `src/lib/api.ts:1074` sends only an empty JSON request to the MOM send route.
+Was: `src/lib/api.ts`'s `fromServerClaim()` unconditionally calculated
+`fallbackApprovedAmount` with `Math.min(claimedAmount, 1000)` and substituted
+it whenever `approved_amount`/`paid_amount` was absent for a sufficiently
+advanced status — in both demo and (hypothetically) production.
 
-Refactor PDF generation into a function returning a Blob or byte buffer. Reuse
-the exact output for the embedded preview, local download, and outbound email
-attachment.
+Now: `fromServerClaim(c, demoModeEnabled)` only applies that inference when
+`demoModeEnabled` is true, threaded through from `/api/auth/config` via
+`loadWorkspace()`. Defaults to `false` (no inference) when the caller doesn't
+know the mode yet, since failing toward "flag it" is safer than failing
+toward "silently invent a number." Covered by 3 new tests in `api.test.ts`.
 
-### 11. Frontend financial fallbacks can hide incomplete backend data
-
-Evidence:
-
-- `src/lib/api.ts:316` calculates `fallbackApprovedAmount` with
-  `Math.min(claimedAmount, 1000)`.
-- The adapter substitutes that value when `approved_amount` or `paid_amount` is
-  absent for a sufficiently advanced status.
-
-The fallback is useful for legacy demo records, but it should not silently
-invent production financial values. In production mode, return authoritative
-amounts from the API and treat an absent amount as an incomplete/inconsistent
-record requiring investigation.
+Still open: `server.ts`'s `buildAnalyticsRecords()` (financial-records/
+analytics endpoint) has the exact same kind of inference for its claim
+branch, **not yet gated the same way**. Left un-gated deliberately this
+session: `AnalyticsRecord.approvedAmount`/`paidAmount` are non-optional
+`number` fields summed directly into dashboard/report totals (in this same
+function and in `src/lib/analytics.ts`), so switching the branch to
+`0`/`undefined` in production would zero out real reporting totals instead
+of just leaving one claim's own display blank. Needs those summation sites
+audited for how to represent an "incomplete record" before this is a safe
+change — flagged with a comment at the code site pointing back to this
+document.
 
 ## Intentionally demo-only behavior that does not need immediate replacement
 
@@ -226,7 +283,10 @@ strictly unavailable in production:
 - The role/account launcher and tab-scoped demo identities.
 - Randomized year-of-data generation and Admin seed/reset controls.
 - Form autofill buttons and generated sample receipt images.
-- Seeded users, companies, master data, avatars, and transaction history.
+- Seeded users, companies, master data, avatars, and transaction history —
+  including the seed generator's own non-persisting `getOrCreateCompanyInMemory()`
+  path (see item 8 above), which is a deliberate, not accidental, exception
+  to "implicit company creation now persists."
 
 These controls should remain for presentations. The production configuration
 must set `DEMO_MODE=false`, `AUTH_MODE=microsoft`,
@@ -238,28 +298,45 @@ must set `DEMO_MODE=false`, `AUTH_MODE=microsoft`,
 These items are not mock representations, but should be completed alongside
 the backend work above:
 
-- Wrap multi-record claim/MOM/expense writes in database transactions.
+- Wrap multi-record claim/MOM/expense writes in database transactions. (The
+  historical-import route now does this — item 3 above — as one example;
+  the original per-route sequential-awaited-upserts pattern elsewhere, e.g.
+  claim submission's persistClaim → persistExpenseLineItems → persistMom,
+  is unchanged.)
 - Add expiry, hashing, regeneration invalidation, and attempt throttling for
   release codes.
 - Replace `drizzle-kit push` with reviewed, ordered migrations in the release
-  pipeline.
+  pipeline. (`drizzle/0004_skinny_flatman.sql`, added this session, is
+  actually current with `schema.ts` — earlier drift between the migrations
+  folder and the live-pushed schema was caught and folded into that file —
+  but the underlying `db:push` workflow itself wasn't changed.)
 - Add structured logging, health/readiness endpoints, rate limiting, monitoring,
   alerting, backup/restore tests, and retention policies.
 - Keep the current app on one persistent Node process until routes read from the
   database per request or use a safe shared-cache design. The current in-memory
   read cache is not compatible with Vercel serverless or multiple application
-  instances.
+  instances. (The new scheduled-job `setInterval` reinforces this constraint —
+  it's explicitly skipped under `VERCEL=1` rather than adapted to run there.)
 
 ## Recommended implementation order
 
-1. Entra authentication and server sessions.
-2. Private object storage and attachment authorization.
-3. Durable notification outbox plus Gmail and Teams delivery.
-4. Transactional historical import.
-5. Atomic claim-number generation and uniqueness constraint.
-6. Notification-preference enforcement and complete audit persistence.
-7. Durable scheduled jobs for hierarchy escalation and delegation expiration.
-8. Exact PDF preview/attachment flow and removal of frontend financial fallbacks.
+1. Entra authentication and server sessions. **(blocked on an Entra tenant)**
+2. Private object storage and attachment authorization. (Authorization rule
+   now exists — item 4 above — storage migration itself still open.)
+3. Durable notification outbox plus Gmail and Teams delivery. **(blocked on
+   Google Workspace/Gmail and the Entra app registration)**
+4. ~~Transactional historical import.~~ Done this session.
+5. ~~Atomic claim-number generation and uniqueness constraint.~~ Done this session.
+6. ~~Notification-preference enforcement~~ (done) ~~and complete audit
+   persistence~~ (done — user/master-data history).
+7. ~~Durable scheduled jobs for hierarchy escalation and delegation
+   expiration.~~ Done this session, as an in-process scheduler — a real
+   database-backed job queue is still the "correct" answer for a genuinely
+   distributed deployment.
+8. ~~Exact PDF preview~~ (done) ~~/attachment flow~~ (still blocked on Section
+   2's delivery work) ~~and removal of frontend financial fallbacks~~ (done
+   for the frontend; server-side analytics equivalent still open — item 11
+   above).
 
 ## Validation baseline
 
@@ -270,3 +347,6 @@ following checks passed against that baseline:
 - `npm test` — 67 tests across 10 files
 - `npm run build`
 
+After the follow-up session's changes (this update), the same three checks
+pass with **70 tests across 10 files** (3 new tests covering the
+demo-mode-gated financial fallback).

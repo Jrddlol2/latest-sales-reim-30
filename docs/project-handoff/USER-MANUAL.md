@@ -98,9 +98,11 @@ Agreement (LOA) records. You can:
 - Edit a saved record at any time, including after it has been marked completed, so a
   client-requested correction can be recorded.
 
-Important prototype limitation: the current preview is an HTML approximation of the
-client copy, not the literal PDF file. **Send to client** records a mock outbox event and
-marks the record completed; it does not yet deliver a real email or attach the PDF.
+The preview now renders the literal generated PDF, not an HTML approximation
+(fixed 2026-08-04). Remaining prototype limitation: **Send to client** still
+records a mock outbox event and marks the record completed; it does not yet
+deliver a real email or attach the PDF — that's blocked on a real Gmail/Teams
+integration, see `docs/project-handoff/HANDOFF-NEXT-STEPS.md`.
 
 ### Requesting a cash advance
 
@@ -251,12 +253,15 @@ Everything below lives under the Admin section of the sidebar:
 | **Company Directory** | The client/company list requestors pick from when filling a MOM, with address and contact info that auto-fills the meeting details. |
 | **Historical Import** | Prototype CSV import for past claims. It currently reports success after adding records to process memory; imported batches and claims are not yet durable across a restart. Do not use it for a real migration until the transactional backend is completed. |
 | **Admin Reporting** | Charts and CSV export of claims across the whole org. |
-| **Audit Log** | A searchable activity feed. Core workflow history persists, but user/master-data audit events still have process-local persistence gaps, so it is not yet a complete production audit ledger. |
+| **Audit Log** | A searchable activity feed. Core workflow history and user/master-data audit events both persist (fixed 2026-08-04); real identity and delivery are still prototype-level, so it's not yet a complete production audit ledger. |
 | **System Emails** | The current process's mock email and Teams outbox—not a live inbox or durable provider log. It is searchable and has unread state, but neither delivery nor restart persistence is implemented. |
 
-The Admin Dashboard's **"Run Fallback Check"** button is the manual trigger for escalating
-any claim that's been stuck in a stale-approver state for too long without anyone
-transferring it — see [Handling a stale approval](#handling-a-stale-approval).
+Stale-approver escalation now also runs automatically on an hourly schedule
+(fixed 2026-08-04); the Admin Dashboard's **"Run Fallback Check"** button is
+still available as a manual trigger — useful for demoing without waiting on
+the schedule — for escalating any claim that's been stuck in a stale-approver
+state for too long without anyone transferring it — see
+[Handling a stale approval](#handling-a-stale-approval).
 
 ---
 
@@ -267,10 +272,13 @@ transferring it — see [Handling a stale approval](#handling-a-stale-approval).
 - **Support** — open a ticket if something's wrong or you need help. Set a priority, link
   it to a specific claim if relevant, and reply in the thread once it's open. Admins see
   and can respond to everyone's tickets; you only see your own.
-- **Settings** — your read-only directory profile, prototype notification preferences,
+- **Settings** — your read-only directory profile, notification preferences,
   delegation (Approvers only—see above), and an honest placeholder for future account
-  security. Notification preferences currently do not survive restart or control mock
-  delivery behavior.
+  security. Notification preferences now persist across restarts and control
+  whether the submitted/approved/returned/ready/delegation categories create
+  a notification at all (fixed 2026-08-04) — muting a category suppresses it
+  only when both its toggles are off, since one record still backs both the
+  in-app and "email" views.
 - **Receipt Archive** — every receipt you're authorized to view, with search, quick views,
   and detailed category/status/date/amount filters. Approvers also have team/client
   grouping.

@@ -88,9 +88,11 @@ the follow-up handoff work:
 - Client-copy PDF/Word exports omit internal-only fields such as Type of
   Account. `momSections(mom, 'client' | 'internal')` is the field-visibility
   source of truth.
-- The current client-copy preview is still an HTML approximation, not the exact
-  generated PDF. The current Send to client action writes only to the mock
-  outbox and does not deliver or attach a PDF.
+- The client-copy preview now renders the literal generated PDF (fixed
+  2026-08-04), not an HTML approximation. The Send to client action still
+  writes only to the mock outbox and does not deliver or attach a PDF —
+  that requires the real Gmail/Teams integration described in
+  `HANDOFF-NEXT-STEPS.md`.
 - Approvers can group Receipt Archive results by team member or by client; the
   richer receipt filters and quick views remain available to applicable roles.
 
@@ -339,7 +341,7 @@ Everything runs in a single Node process: `tsx server.ts` serves the Express API
 | Persistence | Supabase Postgres via Drizzle ORM + `pg` | 0.45 / 8 | Schema in `src/db/schema.ts` (25 tables). Core domains are live; see [Database persistence](#database-persistence) and `REMAINING-BACKEND-GAPS.md` for the remaining process-local paths and hosting constraint. |
 | PDF/doc export | jsPDF (+ html2canvas) | 3 | `src/lib/*Export.ts`, `documentExport.ts`. See dependency CVE note below. |
 | IDs | `uuid` | 14 | |
-| Testing | Vitest + `tsc` | 4 / 5.8 | 67 tests / 10 files. Run without `DATABASE_URL`, so they verify the in-memory code paths only — persistence itself was verified live against Supabase (see [Database persistence](#database-persistence)), not by the automated suite. |
+| Testing | Vitest + `tsc` | 4 / 5.8 | 70 tests / 10 files (as of the 2026-08-04 follow-up session). Run without `DATABASE_URL`, so they verify the in-memory code paths only — persistence itself was verified live against Supabase (see [Database persistence](#database-persistence)), not by the automated suite. |
 | Bundling (server) | esbuild | 0.25 | `npm run build` → `dist/server.cjs`. |
 | CI | GitHub Actions | — | `.github/workflows/ci.yml`: `npm ci`, type-check, test, build. |
 | Deploy target | A persistent-process host (Render/Railway/Fly.io) | — | `npm start` binds to `process.env.PORT`, ready for a standard web-service setup. **Not** Vercel serverless functions (`vercel.json`/`api/` are present but incompatible with the current persistence design — see [Database persistence](#database-persistence)). |
@@ -569,7 +571,7 @@ Copy `.env.example` into the deployment environment and set only environment-spe
 
 ## Testing
 
-The project uses Vitest. At the time this README was updated, the suite contains **67 tests in 10 test files**. The `test/` files run against the real Express app on an ephemeral port (no mocking); the `src/lib/` files unit-test framework-free logic.
+The project uses Vitest. As of the 2026-08-04 follow-up session, the suite contains **70 tests in 10 test files**. The `test/` files run against the real Express app on an ephemeral port (no mocking); the `src/lib/` files unit-test framework-free logic.
 
 | Test area | Files |
 |---|---|

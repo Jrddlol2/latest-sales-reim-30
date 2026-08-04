@@ -15,10 +15,10 @@
  * nothing) when DATABASE_URL isn't set, so the existing test suite — which
  * never sets it — keeps running purely in-memory with unchanged behavior.
  */
-import { eq } from 'drizzle-orm';
+import { eq, isNotNull } from 'drizzle-orm';
 import { getDb } from './index';
-import { users as usersTable } from './schema';
-import type { User } from '../serverTypes';
+import { users as usersTable, statusHistories as statusHistoriesTable } from './schema';
+import type { User, StatusHistory } from '../serverTypes';
 
 export const isDbConfigured = () => !!process.env.DATABASE_URL;
 
@@ -105,4 +105,32 @@ export async function clearUsersInDb(): Promise<void> {
   if (!isDbConfigured()) return;
   const db = getDb();
   await db.delete(usersTable);
+}
+
+function userHistoryFromRow(r: typeof statusHistoriesTable.$inferSelect): StatusHistory {
+  return {
+    id: r.id,
+    claim_id: '',
+    user_id: r.userId ?? undefined,
+    old_status: r.oldStatus,
+    new_status: r.newStatus,
+    changed_by: r.changedBy,
+    reason: r.reason ?? undefined,
+    timestamp: r.timestamp.toISOString(),
+  };
+}
+
+/**
+ * Loads user-scoped audit history (role/department/manager/employment-status/
+ * approval-authority changes made from Admin > User Accounts) — the same
+ * shared status_histories table core loop/cash-advance/delegation history
+ * reads from, filtered to rows this domain owns. Was previously write-only:
+ * addUserHistory() pushed into the in-memory array but nothing persisted or
+ * reloaded it, so these entries vanished on every restart.
+ */
+export async function loadUserHistoryFromDb(): Promise<StatusHistory[]> {
+  if (!isDbConfigured()) return [];
+  const db = getDb();
+  const rows = await db.select().from(statusHistoriesTable).where(isNotNull(statusHistoriesTable.userId));
+  return rows.map(userHistoryFromRow);
 }

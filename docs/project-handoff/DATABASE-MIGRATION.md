@@ -6,13 +6,17 @@ or second instance = total data loss."
 
 **Update (2026-08-04): mostly complete.** The server now runs against a real
 Supabase Postgres database via Drizzle ORM, and the migrated core workflow
-writes persist. Historical imports, notification preferences, implicit company
-creation, user/master-data audit events, the mock outbox, and `last_seen` still
-have process-local gaps documented in `REMAINING-BACKEND-GAPS.md`. See
-the project README's [Database persistence](PROJECT-README.md#database-persistence)
-section for the full picture (architecture, what's excluded and why, hosting
-constraints, RLS notes). This document keeps the original plan for
-historical context and lists what's genuinely still open.
+writes persist. A follow-up session on 2026-08-04 closed the historical-import,
+notification-preference, implicit-company-creation, and user/master-data
+audit-event gaps this note used to list — see
+[`REMAINING-BACKEND-GAPS.md`](REMAINING-BACKEND-GAPS.md)'s "Resolved since
+this audit" section for what changed and why. The mock outbox and `last_seen`
+remain intentionally process-local — see "Still open" item 5 below for why
+those two specifically are left as-is. See the project README's
+[Database persistence](PROJECT-README.md#database-persistence) section for
+the full picture (architecture, what's excluded and why, hosting constraints,
+RLS notes). This document keeps the original plan for historical context and
+lists what's genuinely still open.
 
 ## What's done
 
@@ -94,12 +98,16 @@ Vercel serverless functions without further work.
    this only affects what's *visibly shown* after a restart while still
    presenting), but the natural next step once the demo needs to show
    restart-to-restart continuity.
-2. **Multi-step writes aren't wrapped in real Postgres transactions.** A
-   route like claim submission calls several `persist*()` functions as
-   sequential awaited upserts (claim, then expense line items, then the
-   linked MOM), not one atomic transaction. Each individual call is a
-   complete, valid write; the risk is a failure mid-sequence leaving a
-   partial update, not corrupted data.
+2. **Most multi-step writes still aren't wrapped in real Postgres
+   transactions.** A route like claim submission calls several `persist*()`
+   functions as sequential awaited upserts (claim, then expense line items,
+   then the linked MOM), not one atomic transaction. Each individual call is
+   a complete, valid write; the risk is a failure mid-sequence leaving a
+   partial update, not corrupted data. One exception now exists: historical
+   import (`POST /api/imports`) commits its batch + claims + line items +
+   history as a single transaction via `persistHistoricalImportBatch()`
+   (2026-08-04 follow-up session) — the pattern to extend to other
+   multi-record routes if this becomes a priority.
 3. **`POST /api/admin/reset` clears and re-persists reference data, but this
    is the one route doing bulk multi-table clear+reseed** — worth a second
    look if its scope grows further.
@@ -108,9 +116,17 @@ Vercel serverless functions without further work.
    active development; before a real release pipeline exists, switch to
    `drizzle-kit generate` + an explicit `migrate()` step so schema changes
    are reviewable, ordered files instead of an implicit diff-and-apply.
-5. **Mock email/outbox, `last_seen`, and `import_batches` remain
-   intentionally in-memory-only** — see the README for why. Migrate them
-   only if a real need for that data to survive a restart shows up.
+   `drizzle/0004_skinny_flatman.sql` (added 2026-08-04 for the claim-number
+   sequence + unique constraint) is the first migration file that's
+   genuinely current with `schema.ts` as of this note — running
+   `drizzle-kit generate` also caught and folded in earlier drift between
+   the migrations folder and what had actually been pushed live.
+5. **Mock email/outbox and `last_seen` remain intentionally in-memory-only**
+   — see the README for why. Migrate them only if a real need for that data
+   to survive a restart shows up. `import_batches` no longer belongs on
+   this list: historical import now persists the batch and every imported
+   row transactionally (see item 2 above and
+   [`REMAINING-BACKEND-GAPS.md`](REMAINING-BACKEND-GAPS.md)).
 6. **Row-Level Security (RLS)** is off on every Supabase table (the
    dashboard flags this). Low-risk today (see the README's RLS section) but
    worth enabling with default-deny policies as cheap defense-in-depth.

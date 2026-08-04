@@ -247,7 +247,7 @@ function DelegationPanel() {
  * A separate danger action clears everything to an empty slate.
  */
 const DEMO_CATEGORIES: { key: keyof DemoSeedOptions; label: string; description: string }[] = [
-  { key: 'demoClaims', label: 'Reimbursement claims', description: 'Claims across every status (Draft → Completed), each with a MOM and line items.' },
+  { key: 'demoClaims', label: 'Reimbursement claims', description: 'Claims across every status (Draft → Completed), each with a Minutes of Meeting record and line items.' },
   { key: 'demoCashAdvances', label: 'Cash advances & liquidations', description: 'Advances in each stage (submitted, approved, released) plus their liquidations.' },
   { key: 'delegations', label: 'Approver delegations', description: 'Sample active and expired delegations to demo the coverage/delegation flow.' },
   { key: 'historicalBackfill', label: '12 months of history', description: 'A year of completed/rejected records across departments — powers analytics & reporting. Large.' },

@@ -301,8 +301,21 @@ function fromServerHistory(h: any, claimId: string, type: ClaimType): StatusHist
   };
 }
 
-/** A reimbursement claim. The server's `Claim` maps almost 1:1 onto the UI's. */
-export function fromServerClaim(c: any): Claim {
+/**
+ * A reimbursement claim. The server's `Claim` maps almost 1:1 onto the UI's.
+ *
+ * `demoModeEnabled` gates the legacy-record fallback below: when a claim
+ * reaches an approved/paid status without `approved_amount`/`paid_amount`
+ * set (older seed data predating those fields), demo mode infers a display
+ * value from the reimbursement cap so old demo records still render
+ * something reasonable. In production this must not happen — an absent
+ * amount on an approved claim is a data-integrity problem to surface and
+ * investigate, not paper over with an invented number a Finance user could
+ * mistake for the authoritative figure. Defaults to `false` (no inference)
+ * when the caller doesn't know the mode yet, since failing toward "flag it"
+ * is safer than failing toward "silently invent a number."
+ */
+export function fromServerClaim(c: any, demoModeEnabled = false): Claim {
   const submitted = (c.history || []).find((h: any) => h.new_status === 'Pending Approval');
   const approved = c.approved_at || (c.history || []).find((h: any) => h.new_status === 'Processing')?.timestamp;
   const paid = c.paid_at || (c.history || []).find((h: any) => h.new_status === 'Ready for Claim')?.timestamp;
@@ -313,7 +326,7 @@ export function fromServerClaim(c: any): Claim {
   const type: ClaimType = c.claim_type === 'Transport Reimbursement'
     ? 'Transport Reimbursement'
     : 'Reimbursement';
-  const fallbackApprovedAmount = Math.min(claimedAmount, 1000);
+  const fallbackApprovedAmount = demoModeEnabled ? Math.min(claimedAmount, 1000) : undefined;
   return {
     id: c.id,
     ref: c.claim_number || `REIM-${String(c.id).slice(0, 6)}`,
@@ -321,8 +334,8 @@ export function fromServerClaim(c: any): Claim {
     status: CLAIM_STATUS[c.status] ?? (c.status as ClaimStatus),
     total: claimedAmount,
     claimedAmount,
-    approvedAmount: c.approved_amount != null ? Number(c.approved_amount) : isApproved ? fallbackApprovedAmount : undefined,
-    paidAmount: c.paid_amount != null ? Number(c.paid_amount) : isPaid ? fallbackApprovedAmount : 0,
+    approvedAmount: c.approved_amount != null ? Number(c.approved_amount) : (isApproved ? fallbackApprovedAmount : undefined),
+    paidAmount: c.paid_amount != null ? Number(c.paid_amount) : (isPaid ? fallbackApprovedAmount ?? 0 : 0),
     submittedAt: submitted?.timestamp,
     approvedAt: approved || undefined,
     paidAt: paid || undefined,
@@ -577,8 +590,9 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
       apiFetch('/api/auth/config'),
     ]);
 
+  const demoModeEnabled = runtimeConfig?.demoModeEnabled === true;
   const claims: Claim[] = [
-    ...(rawClaims || []).map(fromServerClaim),
+    ...(rawClaims || []).map((c: any) => fromServerClaim(c, demoModeEnabled)),
     ...(rawAdvances || []).map(fromServerCashAdvance),
     ...(rawLiquidations || []).map(fromServerLiquidation),
   ];
@@ -632,7 +646,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
     paymentMethods: rawSettings?.paymentMethods || ['Cash', 'GCash', 'Bank Transfer', 'Check'],
     highValueThreshold: Number(rawSettings?.highValueThreshold) || 15000,
     categoryLimits: (rawSettings?.categoryLimits && typeof rawSettings.categoryLimits === 'object') ? rawSettings.categoryLimits : {},
-    demoModeEnabled: runtimeConfig?.demoModeEnabled === true,
+    demoModeEnabled,
   };
 }
 
