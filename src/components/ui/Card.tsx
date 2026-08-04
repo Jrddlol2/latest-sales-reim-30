@@ -3,7 +3,7 @@ import { cn } from './Button';
 
 export function Card({ children, className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("bg-surface-container-lowest border border-brand-border rounded-[14px] shadow-sm overflow-hidden", className)} {...props}>
+    <div className={cn("bg-surface-container-lowest border border-brand-border rounded-container shadow-sm overflow-hidden", className)} {...props}>
       {children}
     </div>
   );

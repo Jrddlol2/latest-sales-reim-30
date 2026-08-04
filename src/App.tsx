@@ -68,7 +68,7 @@ function RequireRoles({ roles, children }: { roles: UserRole[]; children: ReactN
 
   return (
     <div className="mx-auto max-w-xl p-6">
-      <div className="rounded-[14px] border border-brand-border bg-surface-container-lowest p-8 text-center shadow-sm">
+      <div className="rounded-container border border-brand-border bg-surface-container-lowest p-8 text-center shadow-sm">
         <span aria-hidden="true" className="material-symbols-outlined text-[40px] text-outline">lock</span>
         <h1 className="mt-3 font-headline-md text-on-surface">This page is not available for your role</h1>
         <p className="mt-2 text-body-md text-on-surface-variant">
@@ -76,7 +76,7 @@ function RequireRoles({ roles, children }: { roles: UserRole[]; children: ReactN
         </p>
         <Link
           to="/"
-          className="mt-6 inline-flex h-10 items-center justify-center rounded-[10px] bg-primary px-5 font-label-md text-on-primary"
+          className="mt-6 inline-flex h-10 items-center justify-center rounded-btn bg-primary px-5 font-label-md text-on-primary"
         >
           Return to dashboard
         </Link>

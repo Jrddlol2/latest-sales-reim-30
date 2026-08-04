@@ -31,7 +31,7 @@ export function LiquidationProgressCard({ claims }: { claims: Claim[] }) {
   );
 
   return (
-    <div className="bg-primary-container text-white p-6 rounded-[14px] shadow-sm relative overflow-hidden">
+    <div className="bg-primary-container text-white p-6 rounded-container shadow-sm relative overflow-hidden">
       <div className="relative z-10">
         <h4 className="font-headline-md mb-2">Liquidation Progress</h4>
         {openAdvances.length === 0 ? (

@@ -264,7 +264,7 @@ export function CompanyDirectory() {
                   <label className="font-label-sm block mb-1">Notes</label>
                   <textarea
                     rows={3}
-                    className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
+                    className="w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
                     value={notes}
                     onChange={e => setNotes(e.target.value)}
                   />

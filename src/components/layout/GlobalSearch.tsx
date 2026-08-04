@@ -185,7 +185,7 @@ export function GlobalSearch() {
         aria-activedescendant={open && results[activeIndex] ? `global-search-${results[activeIndex].id}` : undefined}
         value={query}
         placeholder="Search claims, meetings, receipts..."
-        className="h-10 w-10 rounded-full border border-outline-variant bg-surface-container py-2 pl-10 text-body-base text-on-surface outline-none transition-all placeholder:text-transparent focus:border-primary focus:bg-surface focus:ring-2 focus:ring-primary/20 sm:w-full sm:rounded-[8px] sm:pr-16 sm:placeholder:text-outline"
+        className="h-10 w-10 rounded-full border border-outline-variant bg-surface-container py-2 pl-10 text-body-base text-on-surface outline-none transition-all placeholder:text-transparent focus:border-primary focus:bg-surface focus:ring-2 focus:ring-primary/20 sm:w-full sm:rounded-btn sm:pr-16 sm:placeholder:text-outline"
         onFocus={() => setOpen(true)}
         onChange={event => { setQuery(event.target.value); setOpen(true); }}
         onKeyDown={handleInputKeyDown}

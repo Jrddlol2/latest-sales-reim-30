@@ -106,7 +106,7 @@ export function Modal({
           aria-describedby={descriptionId}
           tabIndex={-1}
           className={cn(
-            'w-full max-w-md max-h-[90vh] overflow-y-auto rounded-[14px] outline-none animate-in slide-in-from-bottom-4 duration-300',
+            'w-full max-w-md max-h-[90vh] overflow-y-auto rounded-container outline-none animate-in slide-in-from-bottom-4 duration-300',
             className,
           )}
           onClick={event => event.stopPropagation()}

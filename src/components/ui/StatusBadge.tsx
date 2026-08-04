@@ -39,7 +39,7 @@ export function StatusBadge({ status }: { status: ClaimStatus }) {
   }
 
   return (
-    <span className={`inline-flex items-center px-3 py-1 rounded-[6px] text-[12px] font-bold uppercase tracking-wider ${bgColor} ${textColor}`}>
+    <span className={`inline-flex items-center px-3 py-1 rounded-input text-[12px] font-bold uppercase tracking-wider ${bgColor} ${textColor}`}>
       {status}
     </span>
   );

@@ -94,7 +94,7 @@ export function MomDetail() {
               </Button>
             )}
             <details ref={exportMenuRef} className="relative">
-              <summary className="list-none inline-flex h-10 cursor-pointer items-center gap-2 rounded-[10px] border border-outline-variant bg-white px-4 font-label-md text-on-surface hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              <summary className="list-none inline-flex h-10 cursor-pointer items-center gap-2 rounded-btn border border-outline-variant bg-white px-4 font-label-md text-on-surface hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
                 <span className="material-symbols-outlined text-[18px]">download</span>
                 {exporting ? 'Exporting…' : 'Export'}
                 <span className="material-symbols-outlined text-[17px]">expand_more</span>
@@ -110,7 +110,7 @@ export function MomDetail() {
             </details>
             {fileUrl && (
               <details ref={moreMenuRef} className="relative">
-                <summary aria-label="More actions" className="list-none inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-[10px] border border-outline-variant bg-white text-on-surface hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                <summary aria-label="More actions" className="list-none inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-btn border border-outline-variant bg-white text-on-surface hover:bg-surface-container-low focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
                   <span className="material-symbols-outlined">more_vert</span>
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-lg border border-outline-variant bg-white p-1.5 shadow-lg">
@@ -207,7 +207,7 @@ export function MomDetail() {
 
             <section>
               <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Discussion & Outcomes</h3>
-              <div className="space-y-4 bg-surface-container-lowest border border-brand-border rounded-[10px] p-4">
+              <div className="space-y-4 bg-surface-container-lowest border border-brand-border rounded-btn p-4">
                 <div>
                   <h4 className="text-label-sm font-semibold mb-1">Summary / Description</h4>
                   <p className="text-body-sm text-on-surface-variant whitespace-pre-wrap">{mom.description || mom.summary || 'No description provided.'}</p>
@@ -233,7 +233,7 @@ export function MomDetail() {
           {showAttachment && (
             <section className="mt-6 border-t border-outline-variant pt-6">
               <h3 className="text-label-sm uppercase tracking-wider text-outline mb-3">Supporting file</h3>
-              <div className="flex flex-col gap-3 rounded-[10px] border border-brand-border bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-3 rounded-btn border border-brand-border bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="material-symbols-outlined rounded-lg bg-primary/10 p-2 text-primary">description</span>
                   <div className="min-w-0">

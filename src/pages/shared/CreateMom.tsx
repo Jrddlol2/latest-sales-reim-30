@@ -113,7 +113,7 @@ export function CreateMom() {
               <button
                 type="button"
                 onClick={() => { setSource(MinutesSource.TEMPLATE); setAttachment(null); }}
-                className={`min-h-20 rounded-[10px] border p-4 text-left transition-colors ${source === MinutesSource.TEMPLATE ? 'border-primary bg-primary/8 ring-1 ring-primary' : 'border-outline-variant bg-white hover:border-primary/40'}`}
+                className={`min-h-20 rounded-btn border p-4 text-left transition-colors ${source === MinutesSource.TEMPLATE ? 'border-primary bg-primary/8 ring-1 ring-primary' : 'border-outline-variant bg-white hover:border-primary/40'}`}
               >
                 <span className="flex items-center gap-2 font-semibold text-on-surface">
                   <span className="material-symbols-outlined text-primary">edit_note</span>
@@ -124,7 +124,7 @@ export function CreateMom() {
               <button
                 type="button"
                 onClick={() => setSource(MinutesSource.UPLOADED)}
-                className={`min-h-20 rounded-[10px] border p-4 text-left transition-colors ${source === MinutesSource.UPLOADED ? 'border-primary bg-primary/8 ring-1 ring-primary' : 'border-outline-variant bg-white hover:border-primary/40'}`}
+                className={`min-h-20 rounded-btn border p-4 text-left transition-colors ${source === MinutesSource.UPLOADED ? 'border-primary bg-primary/8 ring-1 ring-primary' : 'border-outline-variant bg-white hover:border-primary/40'}`}
               >
                 <span className="flex items-center gap-2 font-semibold text-on-surface">
                   <span className="material-symbols-outlined text-primary">upload_file</span>
@@ -135,7 +135,7 @@ export function CreateMom() {
             </div>
 
             {source === MinutesSource.UPLOADED && (
-              <div className="rounded-[10px] border border-dashed border-outline-variant bg-surface-container-low p-4">
+              <div className="rounded-btn border border-dashed border-outline-variant bg-surface-container-low p-4">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -248,11 +248,11 @@ export function CreateMom() {
             </div>
             <div>
               <Label>Discussion</Label>
-              <textarea rows={6} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" value={form.discussion} onChange={event => setForm(current => ({ ...current, discussion: event.target.value }))} />
+              <textarea rows={6} className="w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" value={form.discussion} onChange={event => setForm(current => ({ ...current, discussion: event.target.value }))} />
             </div>
             <div>
               <Label>Action Items</Label>
-              <textarea rows={4} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" value={form.actionItems} onChange={event => setForm(current => ({ ...current, actionItems: event.target.value }))} />
+              <textarea rows={4} className="w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" value={form.actionItems} onChange={event => setForm(current => ({ ...current, actionItems: event.target.value }))} />
             </div>
           </section>}
 

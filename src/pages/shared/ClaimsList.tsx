@@ -158,7 +158,7 @@ export function ClaimsList() {
               iconColorClass="bg-tertiary-fixed text-on-tertiary-fixed-variant"
               trend={`${completedClaims.length} completed claim${completedClaims.length === 1 ? '' : 's'}`}
               trendIcon="check_circle"
-              trendColorClass="text-[#0D9488]"
+              trendColorClass="text-success"
             />
           </div>
 

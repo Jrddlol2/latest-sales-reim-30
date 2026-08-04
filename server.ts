@@ -1,9 +1,14 @@
-﻿import express from 'express';
+﻿// Loads .env for local dev (e.g. DATABASE_URL). Never overrides a variable
+// the host environment already set, so this is a no-op in production, where
+// real env vars are configured directly (see .env.example's own note).
+import 'dotenv/config';
+import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import multer from 'multer';
 // NOTE: `vite` is imported dynamically inside the dev-only branch of createApp()
 // so it never loads in a production/serverless bundle (Vercel), where it isn't used.
@@ -23,8 +28,44 @@ import {
   getTodayIsoDate,
 } from './src/lib/reimbursementPolicy';
 import { normalizeExpenseCategory } from './src/lib/expenseCategories';
+import { isDbConfigured, loadUsersFromDb, syncUsersToDb, clearUsersInDb } from './src/db/usersRepo';
+import {
+  persistMom, persistClaim, persistExpenseLineItems, insertApproval,
+  persistStatusHistoryFireAndForget, loadCoreLoopFromDb, clearCoreLoopInDb,
+} from './src/db/coreLoopRepo';
+import {
+  persistCashAdvance, persistLiquidation, persistLiquidationLineItems,
+  persistLiquidationLineItem, deleteLiquidationLineItem, loadCashAdvanceLoopFromDb, clearCashAdvanceLoopInDb,
+} from './src/db/cashAdvanceRepo';
+import {
+  persistCompany, loadCompaniesFromDb, persistMasterDataRecord, loadMasterDataTable, type MasterDataKey,
+  persistFieldDefinition, loadFieldDefinitionsFromDb, persistSystemSettings, loadSystemSettingsFromDb,
+  clearReferenceDataInDb,
+} from './src/db/referenceDataRepo';
+import {
+  persistDelegation, loadDelegationsFromDb, loadDelegationHistoryFromDb, persistReviewMeeting, loadReviewMeetingsFromDb,
+  persistSupportRequest, insertSupportMessage, loadSupportRequestsFromDb, clearWorkflowExtrasInDb,
+} from './src/db/workflowExtrasRepo';
 
 const LIQUIDATION_DEADLINE_DAYS = 7;
+
+/**
+ * Generate a 6-character release/claim code the requestor must quote back to
+ * confirm receipt. Uses crypto.randomBytes (not Math.random) so codes aren't
+ * predictable, and excludes ambiguous characters (0/O, 1/I) so a custodian can
+ * read it aloud without confusion. See docs/SYSTEM-AUDIT-2026-08-03.md (release
+ * codes). Production hardening still owes expiry, hashed storage, and attempt
+ * throttling — tracked in the README known-limitations section.
+ */
+const RELEASE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function generateReleaseCode(length = 6): string {
+  const bytes = crypto.randomBytes(length);
+  let code = '';
+  for (let i = 0; i < length; i++) {
+    code += RELEASE_CODE_ALPHABET[bytes[i] % RELEASE_CODE_ALPHABET.length];
+  }
+  return code;
+}
 
 let moms: Mom[] = [];
 let claims: Claim[] = [];
@@ -504,8 +545,84 @@ export async function createApp() {
     ? authMode === 'demo'
     : process.env.ENABLE_DEMO_LOGIN.toLowerCase() === 'true');
 
-  if (!demoModeEnabled) {
+  // --- Users persistence bootstrap (docs/DATABASE-MIGRATION.md, step 4) ---
+  // Postgres, when configured, is the source of truth: load existing rows so
+  // real data survives a restart. An empty table means either a fresh
+  // database (persist the in-memory demo seed that already ran at module
+  // load) or DEMO_MODE=false with nothing real yet (stay empty — never
+  // auto-seed fake users into a production-postured database). Without
+  // DATABASE_URL (e.g. the test suite) this block is inert and `users`
+  // keeps behaving exactly as it always has: pure in-memory.
+  let usersLoadedFromDb = false;
+  if (isDbConfigured()) {
+    try {
+      const dbUsers = await loadUsersFromDb();
+      if (dbUsers.length > 0) {
+        users.length = 0;
+        users.push(...dbUsers);
+        usersLoadedFromDb = true;
+      } else if (demoModeEnabled && process.env.AUTO_SEED !== 'false') {
+        await syncUsersToDb(users);
+      } else {
+        users.length = 0;
+      }
+    } catch (err) {
+      console.error('[db] Could not load users from Postgres — falling back to the in-memory demo seed for this boot:', err);
+    }
+  } else if (!demoModeEnabled) {
     users.length = 0;
+  }
+
+  // --- Core loop persistence bootstrap (moms/claims/expenses/approvals) ---
+  // Loading from Postgres here (rather than reseeding) only happens with
+  // DEMO_MODE=false — see coreLoopRepo.ts's file header for why the demo
+  // seed generator itself isn't gated yet. Every route still writes through
+  // to Postgres regardless of DEMO_MODE, so this load reflects real
+  // transactions the moment a real cutover happens.
+  if (isDbConfigured() && !demoModeEnabled) {
+    try {
+      const loaded = await loadCoreLoopFromDb();
+      moms = loaded.moms;
+      claims = loaded.claims;
+      expenses = loaded.expenses;
+      approvals = loaded.approvals;
+      statusHistories.push(...loaded.statusHistories);
+    } catch (err) {
+      console.error('[db] Could not load the core reimbursement loop from Postgres for this boot:', err);
+    }
+    try {
+      const loadedCa = await loadCashAdvanceLoopFromDb();
+      cashAdvances = loadedCa.cashAdvances;
+      liquidations = loadedCa.liquidations;
+      liquidationLineItems = loadedCa.liquidationLineItems;
+      statusHistories.push(...loadedCa.statusHistories);
+    } catch (err) {
+      console.error('[db] Could not load cash advances/liquidations from Postgres for this boot:', err);
+    }
+    try {
+      companies = await loadCompaniesFromDb();
+      departments = await loadMasterDataTable('departments');
+      costCenters = await loadMasterDataTable('cost-centers');
+      businessUnits = await loadMasterDataTable('business-units');
+      branches = await loadMasterDataTable('branches');
+      projectCodes = await loadMasterDataTable('project-codes');
+      vendors = await loadMasterDataTable('vendors');
+      fieldDefinitions = await loadFieldDefinitionsFromDb();
+      const loadedSettings = await loadSystemSettingsFromDb();
+      if (loadedSettings) systemSettings = loadedSettings;
+      delegations = await loadDelegationsFromDb();
+      statusHistories.push(...(await loadDelegationHistoryFromDb()));
+      reviewMeetings = await loadReviewMeetingsFromDb();
+      const loadedSupport = await loadSupportRequestsFromDb();
+      supportRequests = loadedSupport.requests;
+      supportMessages = loadedSupport.messages;
+    } catch (err) {
+      console.error('[db] Could not load reference data/delegations/support from Postgres for this boot:', err);
+    }
+  } else if (!demoModeEnabled) {
+    // No DATABASE_URL and DEMO_MODE=false: stay empty rather than serving
+    // fake reference data in a production posture (matches the users
+    // bootstrap's same fallback a few lines up).
     companies = [];
     departments = [];
     costCenters = [];
@@ -635,6 +752,16 @@ export async function createApp() {
     });
   });
 
+  // Set true only while seedYearOfData() is running. The demo seed generator
+  // calls the same addHistory/addCaHistory/addLiqHistory/addDelegationHistory
+  // helpers real routes use, but its claims/cash-advances/liquidations/
+  // delegations are demo-only and never persisted (see coreLoopRepo.ts's file
+  // header) — so their history's fire-and-forget insert would otherwise
+  // FK-violate against a parent row Postgres never received. Suppressing it
+  // during seeding avoids hundreds of wasted, always-failing queries on every
+  // boot/reseed rather than trying to skip it at each individual call site.
+  let suppressHistoryPersistence = false;
+
   // Helper to get current user from header (mock auth). This is the ONE seam
   // identity is derived through — every route below calls this, never the
   // header directly (the /uploads/:filename gate is the one documented
@@ -674,7 +801,7 @@ export async function createApp() {
     );
 
   const addHistory = (claimId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
-    statusHistories.push({
+    const entry = {
       id: uuidv4(),
       claim_id: claimId,
       old_status: oldStatus,
@@ -682,11 +809,15 @@ export async function createApp() {
       changed_by: changedBy,
       reason,
       timestamp: new Date().toISOString()
-    });
+    };
+    statusHistories.push(entry);
+    // Fire-and-forget: see coreLoopRepo.ts's comment on why this isn't
+    // awaited at each of addHistory's dozen call sites.
+    if (!suppressHistoryPersistence) persistStatusHistoryFireAndForget(entry);
   };
 
   const addCaHistory = (caId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
-    statusHistories.push({
+    const entry = {
       id: uuidv4(),
       claim_id: '',
       cash_advance_id: caId,
@@ -695,11 +826,13 @@ export async function createApp() {
       changed_by: changedBy,
       reason,
       timestamp: new Date().toISOString()
-    });
+    };
+    statusHistories.push(entry);
+    if (!suppressHistoryPersistence) persistStatusHistoryFireAndForget(entry);
   };
 
   const addLiqHistory = (liqId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
-    statusHistories.push({
+    const entry = {
       id: uuidv4(),
       claim_id: '',
       liquidation_id: liqId,
@@ -708,7 +841,9 @@ export async function createApp() {
       changed_by: changedBy,
       reason,
       timestamp: new Date().toISOString()
-    });
+    };
+    statusHistories.push(entry);
+    if (!suppressHistoryPersistence) persistStatusHistoryFireAndForget(entry);
   };
 
   const addUserHistory = (userId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
@@ -725,7 +860,7 @@ export async function createApp() {
   };
 
   const addDelegationHistory = (delegationId: string, oldStatus: string, newStatus: string, changedBy: string, reason?: string) => {
-    statusHistories.push({
+    const entry = {
       id: uuidv4(),
       claim_id: '',
       delegation_id: delegationId,
@@ -734,7 +869,9 @@ export async function createApp() {
       changed_by: changedBy,
       reason,
       timestamp: new Date().toISOString()
-    });
+    };
+    statusHistories.push(entry);
+    if (!suppressHistoryPersistence) persistStatusHistoryFireAndForget(entry);
   };
 
   // Master Data (Phase 1 MDM) — one history helper shared by every entity's
@@ -1124,6 +1261,7 @@ export async function createApp() {
 
   interface MasterDataEntityConfig<T extends MasterDataRecord> {
     key: string;   // used in the URL, e.g. 'departments'
+    dbKey: MasterDataKey; // matching key in referenceDataRepo.ts's table map
     label: string; // used in error messages, e.g. 'Department'
     store: () => T[];
     validateFields: (body: any, existing: T[], editingId?: string) => { errors: string[]; fields: Partial<T> };
@@ -1144,7 +1282,7 @@ export async function createApp() {
       res.json([...config.store()].sort((a, b) => a.name.localeCompare(b.name)));
     });
 
-    app.post(base, (req, res) => {
+    app.post(base, async (req, res) => {
       const user = getUser(req);
       if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1154,10 +1292,15 @@ export async function createApp() {
       const now = new Date().toISOString();
       const record = { id: uuidv4(), active: true, created_at: now, updated_at: now, ...fields } as T;
       config.store().push(record);
+      try {
+        await persistMasterDataRecord(config.dbKey, record);
+      } catch (err) {
+        console.error(`[db] Could not persist new ${config.label} to Postgres:`, err);
+      }
       res.json(record);
     });
 
-    app.put(`${base}/:id`, (req, res) => {
+    app.put(`${base}/:id`, async (req, res) => {
       const user = getUser(req);
       if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1174,6 +1317,11 @@ export async function createApp() {
         }
       });
       record.updated_at = new Date().toISOString();
+      try {
+        await persistMasterDataRecord(config.dbKey, record);
+      } catch (err) {
+        console.error(`[db] Could not persist ${config.label} changes to Postgres:`, err);
+      }
       res.json(record);
     });
   };
@@ -1202,32 +1350,32 @@ export async function createApp() {
     };
 
   registerMasterDataRoutes<Department>({
-    key: 'departments', label: 'Department',
+    key: 'departments', dbKey: 'departments', label: 'Department',
     store: () => departments,
     validateFields: validateNamedCatalogEntity('Department'),
   });
   registerMasterDataRoutes<CostCenter>({
-    key: 'cost-centers', label: 'Cost Center',
+    key: 'cost-centers', dbKey: 'cost-centers', label: 'Cost Center',
     store: () => costCenters,
     validateFields: validateNamedCatalogEntity('Cost Center'),
   });
   registerMasterDataRoutes<BusinessUnit>({
-    key: 'business-units', label: 'Business Unit',
+    key: 'business-units', dbKey: 'business-units', label: 'Business Unit',
     store: () => businessUnits,
     validateFields: validateNamedCatalogEntity('Business Unit'),
   });
   registerMasterDataRoutes<Branch>({
-    key: 'branches', label: 'Branch',
+    key: 'branches', dbKey: 'branches', label: 'Branch',
     store: () => branches,
     validateFields: validateNamedCatalogEntity('Branch'),
   });
   registerMasterDataRoutes<ProjectCode>({
-    key: 'project-codes', label: 'Project Code',
+    key: 'project-codes', dbKey: 'project-codes', label: 'Project Code',
     store: () => projectCodes,
     validateFields: validateNamedCatalogEntity('Project Code'),
   });
   registerMasterDataRoutes<Vendor>({
-    key: 'vendors', label: 'Vendor',
+    key: 'vendors', dbKey: 'vendors', label: 'Vendor',
     store: () => vendors,
     validateFields: validateNamedCatalogEntity('Vendor'),
   });
@@ -1281,7 +1429,7 @@ export async function createApp() {
     return null;
   };
 
-  app.post('/api/field-definitions', (req, res) => {
+  app.post('/api/field-definitions', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1311,10 +1459,15 @@ export async function createApp() {
       updated_at: now,
     };
     fieldDefinitions.push(def);
+    try {
+      await persistFieldDefinition(def);
+    } catch (err) {
+      console.error('[db] Could not persist new field definition to Postgres:', err);
+    }
     res.json(def);
   });
 
-  app.put('/api/field-definitions/:id', (req, res) => {
+  app.put('/api/field-definitions/:id', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1333,6 +1486,11 @@ export async function createApp() {
         }
       });
     def.updated_at = new Date().toISOString();
+    try {
+      await persistFieldDefinition(def);
+    } catch (err) {
+      console.error('[db] Could not persist field definition changes to Postgres:', err);
+    }
     res.json(def);
   });
 
@@ -1423,7 +1581,7 @@ export async function createApp() {
   // §5: when a requestor's manager changes, any claim already Pending
   // Approval under their old approver stays put — but the old approver gets
   // notified and offered a transfer, with a 7-day fallback to Admin.
-  const detectStaleApprovers = (requestorId: string, oldManagerId: string | null, newManagerId: string | null, changedBy: string) => {
+  const detectStaleApprovers = async (requestorId: string, oldManagerId: string | null, newManagerId: string | null, changedBy: string) => {
     if (!oldManagerId || oldManagerId === newManagerId) return;
     const requestor = users.find(u => u.id === requestorId);
     const oldApprover = users.find(u => u.id === oldManagerId);
@@ -1435,7 +1593,7 @@ export async function createApp() {
       c.status === ClaimStatus.PENDING_APPROVAL
     );
 
-    affected.forEach(claim => {
+    for (const claim of affected) {
       claim.approver_stale_since = new Date().toISOString();
       claim.pending_transfer_to = newManagerId || null;
       claim.approver_stale_reason = `${requestor?.name || 'This requestor'} no longer reports to ${oldApprover?.name || 'you'}.`;
@@ -1452,7 +1610,13 @@ export async function createApp() {
 You can keep reviewing ${claimNumber} yourself, or transfer it to ${newApprover?.name || 'the new manager'} from your Approver Inbox.
 
 If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be escalated to an Admin for manual reassignment.`);
-    });
+
+      try {
+        await persistClaim(claim);
+      } catch (err) {
+        console.error('[db] Could not persist stale-approver flag to Postgres:', err);
+      }
+    }
   };
 
   // Prototype account picker. It intentionally exposes only the fields needed
@@ -1487,7 +1651,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     res.json(systemSettings);
   });
 
-  app.put('/api/admin/settings', (req, res) => {
+  app.put('/api/admin/settings', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) {
       return res.status(403).json({ error: 'Forbidden' });
@@ -1511,13 +1675,18 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       }
       systemSettings.categoryLimits = cleaned;
     }
+    try {
+      await persistSystemSettings(systemSettings);
+    } catch (err) {
+      console.error('[db] Could not persist system settings to Postgres:', err);
+    }
     res.json(systemSettings);
   });
 
   // Admin: Update a user's role/department/job title/reporting manager.
   // Configuration action, deliberately separate from claim approval/processing
   // permissions - segregation of duties for claims is untouched by this route.
-  app.put('/api/users/:id', (req, res) => {
+  app.put('/api/users/:id', async (req, res) => {
     const admin = getUser(req);
     if (!admin || admin.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1553,6 +1722,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     }
 
     const changed: string[] = [];
+    const staleFlaggedClaims: Claim[] = [];
 
     if (role !== undefined && role !== target.role) {
       addUserHistory(target.id, target.role, role, admin.id, `Changed ${target.name}'s role`);
@@ -1588,7 +1758,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       // Simulated Entra ID sync consequences — docs/hierarchy-sync-design.md §3, §5
       recalcApprovalAuthority(oldManagerId);
       recalcApprovalAuthority(reports_to);
-      detectStaleApprovers(target.id, oldManagerId, reports_to, admin.id);
+      await detectStaleApprovers(target.id, oldManagerId, reports_to, admin.id);
     }
     if (employment_status !== undefined && employment_status !== target.employment_status) {
       addUserHistory(target.id, target.employment_status || 'Active', employment_status, admin.id, `Changed ${target.name}'s employment status`);
@@ -1603,6 +1773,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
             c.approver_stale_since = new Date().toISOString();
             c.pending_transfer_to = null;
             c.approver_stale_reason = `${target.name} is now marked Inactive.`;
+            staleFlaggedClaims.push(c);
           }
         });
       }
@@ -1616,6 +1787,20 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       changed.push('can_approve_reimbursements');
     }
 
+    // recalcApprovalAuthority() above can touch users other than `target`
+    // (the old/new manager), so sync the whole array rather than just one
+    // row. A sync failure doesn't fail the request — the in-memory state
+    // (already authoritative for this process) is correct either way; it
+    // just means this write hasn't durably landed yet, which self-heals on
+    // the next successful sync rather than breaking a live demo over a
+    // transient DB blip.
+    try {
+      await syncUsersToDb(users);
+      for (const claim of staleFlaggedClaims) await persistClaim(claim);
+    } catch (err) {
+      console.error('[db] Could not persist user/claim changes to Postgres:', err);
+    }
+
     res.json({ user: target, changed });
   });
 
@@ -1627,7 +1812,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     res.json([...companies].sort((a, b) => a.name.localeCompare(b.name)));
   });
 
-  app.post('/api/companies', (req, res) => {
+  app.post('/api/companies', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1647,10 +1832,15 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       contact_person, contact_email
     };
     companies.push(company);
+    try {
+      await persistCompany(company);
+    } catch (err) {
+      console.error('[db] Could not persist new company to Postgres:', err);
+    }
     res.json(company);
   });
 
-  app.post('/api/companies/import', (req, res) => {
+  app.post('/api/companies/import', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1663,11 +1853,11 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     let skipped = 0;
     const errors: Array<{ row: number; error: string }> = [];
 
-    rows.forEach((raw: any, index: number) => {
+    for (const [index, raw] of rows.entries()) {
       const name = String(raw?.name || '').trim();
       if (!name) {
         errors.push({ row: index + 2, error: 'Company name is required.' });
-        return;
+        continue;
       }
 
       const values = {
@@ -1685,8 +1875,13 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
         const company: Company = { id: uuidv4(), name, ...values };
         companies.push(company);
         addMasterDataHistory('companies', company.id, 'import', '(new)', name, user.id);
+        try {
+          await persistCompany(company);
+        } catch (err) {
+          console.error('[db] Could not persist imported company to Postgres:', err);
+        }
         inserted++;
-        return;
+        continue;
       }
 
       let changed = false;
@@ -1698,9 +1893,17 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
           changed = true;
         }
       });
-      if (changed) updated++;
-      else skipped++;
-    });
+      if (changed) {
+        try {
+          await persistCompany(existing);
+        } catch (err) {
+          console.error('[db] Could not persist updated company to Postgres:', err);
+        }
+        updated++;
+      } else {
+        skipped++;
+      }
+    }
 
     res.json({ inserted, updated, skipped, errors, total: rows.length });
   });
@@ -1711,7 +1914,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
   // reference data ONLY: it must never be read by claim approval routing,
   // which stays 100% derived from requestor.reports_to / an active
   // ApproverDelegation, per CLAUDE.md's segregation-of-duties rule.
-  app.put('/api/companies/:id', (req, res) => {
+  app.put('/api/companies/:id', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1738,6 +1941,11 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
         }
       });
 
+    try {
+      await persistCompany(company);
+    } catch (err) {
+      console.error('[db] Could not persist company changes to Postgres:', err);
+    }
     res.json(company);
   });
   app.post('/api/login', (req, res) => {
@@ -1916,7 +2124,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     res.json(flatReceipts);
   });
 
-  app.post('/api/moms', (req, res) => {
+  app.post('/api/moms', async (req, res) => {
     const user = getUser(req);
     if (!user || !user.reports_to) return res.status(403).json({ error: 'Forbidden: You must have a designated manager (reports_to) to submit.' });
 
@@ -1953,10 +2161,15 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
 
     getOrCreateCompany(mom.client);
     moms.push(mom);
+    try {
+      await persistMom(mom);
+    } catch (err) {
+      console.error('[db] Could not persist new MOM to Postgres:', err);
+    }
     res.json(mom);
   });
 
-  app.put('/api/moms/:id', (req, res) => {
+  app.put('/api/moms/:id', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -1999,10 +2212,15 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     mom.participants_external = req.body.participants_external ?? mom.participants_external;
     mom.custom_fields = req.body.custom_fields ?? mom.custom_fields;
 
+    try {
+      await persistMom(mom);
+    } catch (err) {
+      console.error('[db] Could not persist MOM changes to Postgres:', err);
+    }
     res.json(mom);
   });
 
-  app.post('/api/moms/:id/send', (req, res) => {
+  app.post('/api/moms/:id/send', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -2043,6 +2261,11 @@ ${user.name}`;
       { plain: true, recipientName: mom.contact_person || 'Valued Client', fromLabel: `${user.name} <${user.email}>` }
     );
 
+    try {
+      await persistMom(mom);
+    } catch (err) {
+      console.error('[db] Could not persist MOM changes to Postgres:', err);
+    }
     res.json(mom);
   });
 
@@ -2153,7 +2376,7 @@ ${user.name}`;
     });
   });
 
-  app.post('/api/claims', (req, res) => {
+  app.post('/api/claims', async (req, res) => {
     const user = getUser(req);
     if (!user || !user.reports_to) return res.status(403).json({ error: 'Forbidden: You must have a designated manager (reports_to) to submit.' });
     
@@ -2302,6 +2525,17 @@ ${user.name}`;
     claims.push(claim);
     if (mom) mom.claim_id = claimId; // link MOM to claim
 
+    // Order matters: the claim row must exist before addHistory's
+    // fire-and-forget insert (status_histories.claim_id FKs to it), and
+    // before persisting the mom (moms.claim_id FKs to claims.id too).
+    try {
+      await persistClaim(claim);
+      await persistExpenseLineItems(claim.id, expenses.filter(e => e.claim_id === claim.id));
+      if (mom) await persistMom(mom);
+    } catch (err) {
+      console.error('[db] Could not persist new claim to Postgres:', err);
+    }
+
     addHistory(
       claim.id,
       ClaimStatus.DRAFT,
@@ -2415,7 +2649,7 @@ You'll receive another email as soon as ${approverName} makes a decision.`
   };
 
   // Approver (or active delegate) confirms a proposed Review Meeting time.
-  app.post('/api/review-meetings/:id/confirm', (req, res) => {
+  app.post('/api/review-meetings/:id/confirm', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -2444,6 +2678,11 @@ Reference:
 ${claimNumber}`
     );
 
+    try {
+      await persistReviewMeeting(rm);
+    } catch (err) {
+      console.error('[db] Could not persist review meeting confirmation to Postgres:', err);
+    }
     res.json(rm);
   });
 
@@ -2451,7 +2690,7 @@ ${claimNumber}`
   // optionally with a reason. The Requestor must propose a new time via
   // PUT /api/review-meetings/:id/reschedule before the meeting can move
   // forward again.
-  app.post('/api/review-meetings/:id/decline', (req, res) => {
+  app.post('/api/review-meetings/:id/decline', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -2480,13 +2719,18 @@ Required Action:
 Please log in to the system and propose a new date/time for this Review Meeting.`
     );
 
+    try {
+      await persistReviewMeeting(rm);
+    } catch (err) {
+      console.error('[db] Could not persist review meeting decline to Postgres:', err);
+    }
     res.json(rm);
   });
 
   // Requestor proposes a new date/time for their own Review Meeting - reused
   // after a decline (or any time before the meeting is Completed), re-opening
   // the same pending-confirmation cycle rather than a separate claim step.
-  app.put('/api/review-meetings/:id/reschedule', (req, res) => {
+  app.put('/api/review-meetings/:id/reschedule', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -2529,6 +2773,11 @@ Required Action:
 Please log in to the system and confirm or decline this new time.`
     );
 
+    try {
+      await persistReviewMeeting(rm);
+    } catch (err) {
+      console.error('[db] Could not persist review meeting reschedule to Postgres:', err);
+    }
     res.json(rm);
   });
 
@@ -2536,7 +2785,7 @@ Please log in to the system and confirm or decline this new time.`
   // it, and sends it back to Pending Approval with a fresh Approval record.
   // The prior "Returned" decision and status-history entry are never
   // touched - this only ever appends new rows.
-  app.put('/api/claims/:id/resubmit', (req, res) => {
+  app.put('/api/claims/:id/resubmit', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -2630,9 +2879,10 @@ Please log in to the system and confirm or decline this new time.`
     if (policyError) return res.status(400).json({ error: policyError });
 
     // Re-link the MOM if the requestor swapped it out for a different one.
+    let unlinkedOldMom: Mom | undefined;
     if (claim.mom_id !== mom_id) {
-      const oldMom = moms.find(m => m.id === claim.mom_id);
-      if (oldMom) oldMom.claim_id = undefined;
+      unlinkedOldMom = moms.find(m => m.id === claim.mom_id);
+      if (unlinkedOldMom) unlinkedOldMom.claim_id = undefined;
     }
     if (mom) mom.claim_id = claim.id;
 
@@ -2702,6 +2952,14 @@ You'll receive another email as soon as ${approverName} makes a decision.`
       );
     }
 
+    try {
+      await persistClaim(claim);
+      await persistExpenseLineItems(claim.id, expenses.filter(e => e.claim_id === claim.id));
+      if (unlinkedOldMom) await persistMom(unlinkedOldMom);
+      if (mom) await persistMom(mom);
+    } catch (err) {
+      console.error('[db] Could not persist resubmitted claim to Postgres:', err);
+    }
     res.json(claim);
   });
 
@@ -2741,7 +2999,7 @@ You'll receive another email as soon as ${approverName} makes a decision.`
     res.json(relevant.map(rm => ({ meeting_date: rm.meeting_date, meeting_time: rm.meeting_time })));
   });
 
-  app.post('/api/claims/:id/approve', (req, res) => {
+  app.post('/api/claims/:id/approve', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -2765,7 +3023,16 @@ You'll receive another email as soon as ${approverName} makes a decision.`
     ) {
       return res.status(403).json({ error: 'Not your direct report' });
     }
-    
+
+    // Workflow guard: an approval decision is only valid while the claim is
+    // awaiting one. Reimbursements enter the queue as Pending Approval and leave
+    // it the moment a decision is recorded, so any other status here means a
+    // replay or an out-of-order API call (e.g. re-approving a completed or
+    // already-rejected claim). See docs/SYSTEM-AUDIT-2026-08-03.md.
+    if (claim.status !== ClaimStatus.PENDING_APPROVAL) {
+      return res.status(409).json({ error: `This claim is "${claim.status}" and is no longer awaiting an approval decision.` });
+    }
+
     const { decision, comment, review_meeting_date, review_meeting_time } = req.body; // Approved, Rejected, Returned
     if (!['Approved', 'Rejected', 'Returned'].includes(decision)) return res.status(400).json({ error: 'Invalid decision' });
     if ((decision === 'Rejected' || decision === 'Returned') && !comment) {
@@ -2790,8 +3057,8 @@ You'll receive another email as soon as ${approverName} makes a decision.`
     }
     
     const oldStatus = claim.status;
-    let newStatus = claim.status;
-    
+    let newStatus: ClaimStatus = claim.status;
+
     if (decision === 'Approved') newStatus = ClaimStatus.PROCESSING;
     else if (decision === 'Rejected') newStatus = ClaimStatus.REJECTED;
     else if (decision === 'Returned') newStatus = ClaimStatus.RETURNED;
@@ -2800,19 +3067,21 @@ You'll receive another email as soon as ${approverName} makes a decision.`
     claim.updated_at = new Date().toISOString();
     
     
-    approvals.push({
+    const newApproval: Approval = {
       id: uuidv4(),
       claim_id: claim.id,
       approver_id: user.id,
       decision,
       comment: comment || '',
       timestamp: new Date().toISOString()
-    });
-    
+    };
+    approvals.push(newApproval);
+
     addHistory(claim.id, oldStatus, newStatus, user.id, comment || undefined);
 
+    let newReviewMeeting: ReviewMeeting | undefined;
     if (review_meeting_date && review_meeting_time) {
-      reviewMeetings.push({
+      newReviewMeeting = {
         id: uuidv4(),
         claim_id: claim.id,
         requestor_id: claim.requestor_id,
@@ -2821,7 +3090,8 @@ You'll receive another email as soon as ${approverName} makes a decision.`
         meeting_time: review_meeting_time,
         status: ReviewMeetingStatus.CONFIRMED,
         created_at: new Date().toISOString()
-      });
+      };
+      reviewMeetings.push(newReviewMeeting);
       addHistory(
         claim.id,
         newStatus,
@@ -2902,12 +3172,20 @@ ${actionText}`;
       });
     }
 
+    try {
+      await persistClaim(claim);
+      await insertApproval(newApproval);
+      if (newReviewMeeting) await persistReviewMeeting(newReviewMeeting);
+    } catch (err) {
+      console.error('[db] Could not persist approval decision to Postgres:', err);
+    }
+
     res.json(claim);
   });
 
   // docs/hierarchy-sync-design.md §5: the flagged old approver (or an Admin,
   // any time, per §7) hands a stale claim off to the suggested new approver.
-  app.post('/api/claims/:id/transfer-approver', (req, res) => {
+  app.post('/api/claims/:id/transfer-approver', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -2939,6 +3217,11 @@ ${actionText}`;
     sendEmail(targetApproverId, `Reimbursement now assigned to you - ${claimNumber}`,
       `${claimNumber} has been transferred to you for review following an organizational change.`);
 
+    try {
+      await persistClaim(claim);
+    } catch (err) {
+      console.error('[db] Could not persist approver transfer to Postgres:', err);
+    }
     res.json(claim);
   });
 
@@ -2947,7 +3230,7 @@ ${actionText}`;
   // prototype, so an Admin can trigger a check manually. `force: true` skips
   // the day-count gate purely so the behavior is demoable without waiting 7
   // real days; the day-based check is what a real cron would use.
-  app.post('/api/admin/run-fallback-check', (req, res) => {
+  app.post('/api/admin/run-fallback-check', async (req, res) => {
     const admin = getUser(req);
     if (!admin || admin.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
@@ -2978,11 +3261,17 @@ Manual reassignment may be needed.`);
       }
     });
 
+    try {
+      for (const claim of escalated) await persistClaim(claim);
+    } catch (err) {
+      console.error('[db] Could not persist fallback escalation to Postgres:', err);
+    }
+
     res.json({ escalatedCount: escalated.length, escalated: escalated.map(c => c.id) });
   });
 
   // Generate, Edit or Regenerate Claim Code (Release Code) - Custodian
-  app.post('/api/custodian/claims/:id/decision', (req, res) => {
+  app.post('/api/custodian/claims/:id/decision', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.CUSTODIAN) {
       return res.status(403).json({ error: 'Forbidden: Only Custodians can make processing decisions.' });
@@ -3027,6 +3316,11 @@ Manual reassignment may be needed.`);
           `${user.name} ${decision.toLowerCase()}ed ${claimNumber} during payment processing.\n\nReason: ${comment.trim()}`
         );
       }
+      try {
+        await persistClaim(claim);
+      } catch (err) {
+        console.error('[db] Could not persist custodian decision to Postgres:', err);
+      }
       return res.json(claim);
     }
 
@@ -3045,6 +3339,11 @@ Manual reassignment may be needed.`);
         `Cash Advance Rejected - CADV-${cashAdvance.id.substring(0, 6)}`,
         `${user.name} rejected this Cash Advance before funds were released.\n\nReason: ${comment.trim()}`
       );
+      try {
+        await persistCashAdvance(cashAdvance);
+      } catch (err) {
+        console.error('[db] Could not persist custodian cash advance decision to Postgres:', err);
+      }
       return res.json(cashAdvance);
     }
 
@@ -3063,6 +3362,11 @@ Manual reassignment may be needed.`);
         `Liquidation Returned - LIQ-${liquidation.id.substring(0, 6)}`,
         `${user.name} returned this Liquidation for correction before refund collection.\n\nReason: ${comment.trim()}`
       );
+      try {
+        await persistLiquidation(liquidation);
+      } catch (err) {
+        console.error('[db] Could not persist custodian liquidation decision to Postgres:', err);
+      }
       return res.json(liquidation);
     }
 
@@ -3070,32 +3374,53 @@ Manual reassignment may be needed.`);
   });
 
   // Generate, Edit or Regenerate Claim Code (Release Code) - Custodian
-  app.put('/api/claims/:id/claim-code', (req, res) => {
+  app.put('/api/claims/:id/claim-code', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.CUSTODIAN) return res.status(403).json({ error: 'Forbidden' });
 
     const claim = claims.find(c => c.id === req.params.id);
     if (!claim) return res.status(404).json({ error: 'Claim not found' });
 
+    // Workflow guard: a claim code is only meaningful once the claim is being
+    // processed for release. Allow generation while Processing and re-generation
+    // while Ready for Claim (custodian re-issuing a lost code), but never on a
+    // draft, pending, completed, rejected, or returned claim.
+    if (![ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM].includes(claim.status)) {
+      return res.status(409).json({ error: `A claim code can only be generated for a claim in Processing or Ready for Claim (this one is "${claim.status}").` });
+    }
+
     const { code } = req.body;
     const isRegen = !!claim.release_code;
-    claim.release_code = code || Math.random().toString(36).substring(2, 8).toUpperCase();
-    
+    claim.release_code = code || generateReleaseCode();
+
     addHistory(claim.id, claim.status, claim.status, user.id, isRegen ? `Regenerated Claim Code to ${claim.release_code}` : `Generated Claim Code ${claim.release_code}`);
-    
+
+    try {
+      await persistClaim(claim);
+    } catch (err) {
+      console.error('[db] Could not persist claim code to Postgres:', err);
+    }
     res.json(claim);
   });
 
   // Mark Ready for Claim - Custodian
-  app.post('/api/claims/:id/ready-for-claim', (req, res) => {
+  app.post('/api/claims/:id/ready-for-claim', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.CUSTODIAN) return res.status(403).json({ error: 'Forbidden' });
 
     const claim = claims.find(c => c.id === req.params.id);
     if (!claim) return res.status(404).json({ error: 'Claim not found' });
 
+    // Workflow guard: only a claim currently in Processing can be released to
+    // Ready for Claim. This makes the transition idempotent-safe and blocks
+    // marking a draft, pending, completed, rejected, or already-ready claim as
+    // ready out of sequence (which would otherwise reset paid_at/amounts).
+    if (claim.status !== ClaimStatus.PROCESSING) {
+      return res.status(409).json({ error: `Only a claim in Processing can be marked Ready for Claim (this one is "${claim.status}").` });
+    }
+
     if (!claim.release_code) {
-      claim.release_code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      claim.release_code = generateReleaseCode();
     }
 
     const { payment_method } = req.body;
@@ -3132,16 +3457,21 @@ This is an automatically generated email, please do not reply.
 ${requestor?.name || 'Requestor'}
 BSM Assistant | BSD - IT Security Business`;
 
-    sendEmail(claim.requestor_id, emailSubject, emailBody, undefined, { 
+    sendEmail(claim.requestor_id, emailSubject, emailBody, undefined, {
       plain: true,
       fromLabel: "SharePoint Online <no-reply@sharepointonline.com>"
     });
 
+    try {
+      await persistClaim(claim);
+    } catch (err) {
+      console.error('[db] Could not persist ready-for-claim to Postgres:', err);
+    }
     res.json(claim);
   });
 
   // Complete Claim - Requestor confirming they received payment
-  app.post('/api/claims/:id/claim', (req, res) => {
+  app.post('/api/claims/:id/claim', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -3186,6 +3516,11 @@ BSM Assistant | BSD - IT Security Business`;
       `You've confirmed receipt of your reimbursement ${claimNumber} (PHP ${claim.total_amount}). This claim is now complete.`
     );
 
+    try {
+      await persistClaim(claim);
+    } catch (err) {
+      console.error('[db] Could not persist claim completion to Postgres:', err);
+    }
     res.json(claim);
   });
 
@@ -3506,7 +3841,7 @@ BSM Assistant | BSD - IT Security Business`;
 
   // --- CASH ADVANCE & LIQUIDATION ENDPOINTS ---
 
-  const recalculateLiquidation = (liquidationId: string) => {
+  const recalculateLiquidation = async (liquidationId: string) => {
     const liq = liquidations.find(l => l.id === liquidationId);
     if (!liq) return;
     const ca = cashAdvances.find(c => c.id === liq.cashAdvanceId);
@@ -3524,6 +3859,16 @@ BSM Assistant | BSD - IT Security Business`;
       liq.varianceType = LiquidationVarianceType.REFUND_DUE;
     } else {
       liq.varianceType = LiquidationVarianceType.REIMBURSEMENT_DUE;
+    }
+
+    // Every call site is a line-item add/edit/delete or a submit — persist
+    // both the recalculated totals and the current full line-item set here
+    // once, rather than duplicating it at each of the five call sites.
+    try {
+      await persistLiquidation(liq);
+      await persistLiquidationLineItems(liquidationId, items);
+    } catch (err) {
+      console.error('[db] Could not persist recalculated liquidation to Postgres:', err);
     }
   };
 
@@ -3595,7 +3940,7 @@ BSM Assistant | BSD - IT Security Business`;
   });
 
   // 3. Create a cash advance request
-  app.post('/api/cash-advances', (req, res) => {
+  app.post('/api/cash-advances', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     if (!user.reports_to) return res.status(403).json({ error: 'Forbidden: You must have a designated manager (reports_to) to submit.' });
@@ -3639,12 +3984,20 @@ BSM Assistant | BSD - IT Security Business`;
     };
 
     cashAdvances.push(cashAdvance);
+    // Persist before logging history: addCaHistory's insert is fire-and-forget
+    // and would otherwise race ahead of this row, FK-violating against a
+    // cash_advance_id that doesn't exist in Postgres yet.
+    try {
+      await persistCashAdvance(cashAdvance);
+    } catch (err) {
+      console.error('[db] Could not persist new cash advance to Postgres:', err);
+    }
     addCaHistory(caId, '', CashAdvanceStatus.DRAFT, user.id, 'Cash Advance Draft Created');
     res.json(cashAdvance);
   });
 
   // 4. Update cash advance in Draft or Rejected status
-  app.put('/api/cash-advances/:id', (req, res) => {
+  app.put('/api/cash-advances/:id', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -3684,11 +4037,16 @@ BSM Assistant | BSD - IT Security Business`;
       ca.momId = momId || undefined;
     }
 
+    try {
+      await persistCashAdvance(ca);
+    } catch (err) {
+      console.error('[db] Could not persist cash advance changes to Postgres:', err);
+    }
     res.json(ca);
   });
 
   // 5. Submit Cash Advance
-  app.post('/api/cash-advances/:id/submit', (req, res) => {
+  app.post('/api/cash-advances/:id/submit', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -3728,11 +4086,16 @@ Purpose: ${ca.purpose}
 You'll receive another email as soon as a decision is made.`
     );
 
+    try {
+      await persistCashAdvance(ca);
+    } catch (err) {
+      console.error('[db] Could not persist cash advance submission to Postgres:', err);
+    }
     res.json(ca);
   });
 
   // 6. Approve or Reject Cash Advance
-  app.post('/api/cash-advances/:id/approve', (req, res) => {
+  app.post('/api/cash-advances/:id/approve', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.APPROVER) return res.status(403).json({ error: 'Forbidden' });
 
@@ -3773,11 +4136,16 @@ You'll receive another email as soon as a decision is made.`
       `Your Cash Advance request for PHP ${ca.amount} has been ${decision} by ${user.name}.${comment ? `\n\nComment: ${comment}` : ''}`
     );
 
+    try {
+      await persistCashAdvance(ca);
+    } catch (err) {
+      console.error('[db] Could not persist cash advance decision to Postgres:', err);
+    }
     res.json(ca);
   });
 
   // 7. Release Cash Advance (Custodian only)
-  app.post('/api/cash-advances/:id/release', (req, res) => {
+  app.post('/api/cash-advances/:id/release', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.CUSTODIAN) return res.status(403).json({ error: 'Forbidden: Only Custodians can release Cash Advances.' });
 
@@ -3811,6 +4179,11 @@ You'll receive another email as soon as a decision is made.`
       `Your Cash Advance for PHP ${ca.amount} has been released by ${user.name}.\n\nRelease Reference: ${releaseReference}\n\nPlease file your liquidation within ${LIQUIDATION_DEADLINE_DAYS} days.`
     );
 
+    try {
+      await persistCashAdvance(ca);
+    } catch (err) {
+      console.error('[db] Could not persist cash advance release to Postgres:', err);
+    }
     res.json(ca);
   });
 
@@ -3889,7 +4262,7 @@ You'll receive another email as soon as a decision is made.`
   });
 
   // 10. Initiate liquidation for a Released Cash Advance
-  app.post('/api/liquidations', (req, res) => {
+  app.post('/api/liquidations', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -3925,13 +4298,23 @@ You'll receive another email as soon as a decision is made.`
     };
 
     liquidations.push(liquidation);
+    // Persist before logging history: addLiqHistory's insert is
+    // fire-and-forget and would otherwise race ahead of this row, FK-violating
+    // against a liquidation_id that doesn't exist in Postgres yet. `ca`
+    // already exists in DB from its own earlier lifecycle, so addCaHistory
+    // here is safe either way.
+    try {
+      await persistLiquidation(liquidation);
+    } catch (err) {
+      console.error('[db] Could not persist new liquidation to Postgres:', err);
+    }
     addLiqHistory(liquidationId, '', LiquidationStatus.DRAFT, user.id, 'Liquidation Draft Started');
     addCaHistory(ca.id, ca.status, ca.status, user.id, 'Liquidation Started');
     res.json(liquidation);
   });
 
   // 11. Add a line item to a Liquidation (editable only in Draft or ReturnedForRevision)
-  app.post('/api/liquidations/:id/line-items', (req, res) => {
+  app.post('/api/liquidations/:id/line-items', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -3973,13 +4356,13 @@ You'll receive another email as soon as a decision is made.`
     };
 
     liquidationLineItems.push(newItem);
-    recalculateLiquidation(l.id);
+    await recalculateLiquidation(l.id);
 
     res.json(newItem);
   });
 
   // 12. Update a line item in a Liquidation
-  app.put('/api/liquidations/:id/line-items/:itemId', (req, res) => {
+  app.put('/api/liquidations/:id/line-items/:itemId', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -4016,12 +4399,12 @@ You'll receive another email as soon as a decision is made.`
     if (attachment_type !== undefined) item.attachment_type = attachment_type;
     if (or_number !== undefined) item.or_number = or_number;
 
-    recalculateLiquidation(l.id);
+    await recalculateLiquidation(l.id);
     res.json(item);
   });
 
   // 13. Delete a line item from a Liquidation
-  app.delete('/api/liquidations/:id/line-items/:itemId', (req, res) => {
+  app.delete('/api/liquidations/:id/line-items/:itemId', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -4041,13 +4424,13 @@ You'll receive another email as soon as a decision is made.`
     if (index === -1) return res.status(404).json({ error: 'Line item not found' });
 
     liquidationLineItems.splice(index, 1);
-    recalculateLiquidation(l.id);
+    await recalculateLiquidation(l.id);
 
     res.json({ success: true });
   });
 
   // 14. Submit a Liquidation report
-  app.post('/api/liquidations/:id/submit', (req, res) => {
+  app.post('/api/liquidations/:id/submit', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -4062,7 +4445,7 @@ You'll receive another email as soon as a decision is made.`
     const liqPolicyError = checkCategoryLimits(liquidationLineItems.filter(i => i.liquidationId === l.id));
     if (liqPolicyError) return res.status(400).json({ error: liqPolicyError });
 
-    recalculateLiquidation(l.id);
+    await recalculateLiquidation(l.id);
 
     // The requestor can declare how they'll return an over-advance up front;
     // the custodian confirms/records the actual method later when collecting.
@@ -4086,11 +4469,16 @@ You'll receive another email as soon as a decision is made.`
       );
     }
 
+    try {
+      await persistLiquidation(l);
+    } catch (err) {
+      console.error('[db] Could not persist liquidation submission to Postgres:', err);
+    }
     res.json(l);
   });
 
   // 15. Approve/Reviewed or Return a Liquidation report (Approver only)
-  app.post('/api/liquidations/:id/review', (req, res) => {
+  app.post('/api/liquidations/:id/review', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.APPROVER) return res.status(403).json({ error: 'Forbidden' });
 
@@ -4115,6 +4503,10 @@ You'll receive another email as soon as a decision is made.`
       return res.status(400).json({ error: 'A comment is required when returning a Liquidation for revision.' });
     }
 
+    // Set only by the REIMBURSEMENT_DUE branch below; persisted alongside
+    // the liquidation/cash-advance at the end regardless of which branch ran.
+    let shortFallClaim: Claim | undefined;
+
     if (decision === 'Returned') {
       const oldStatus = l.status;
       l.status = LiquidationStatus.RETURNED_FOR_REVISION;
@@ -4126,7 +4518,7 @@ You'll receive another email as soon as a decision is made.`
         `Your Liquidation report has been returned for revision by ${user.name}.\n\nReason: ${comment}`
       );
     } else {
-      recalculateLiquidation(l.id);
+      await recalculateLiquidation(l.id);
 
       if (l.varianceType === LiquidationVarianceType.SETTLED) {
         const oldStatus = l.status;
@@ -4152,7 +4544,7 @@ You'll receive another email as soon as a decision is made.`
         const numStr = String(claimCounter++).padStart(6, '0');
         const claimNumber = `REIM-${year}-${numStr}`;
 
-        const shortFallClaim: Claim = {
+        shortFallClaim = {
           id: claimId,
           claim_number: claimNumber,
           requestor_id: l.requestorId,
@@ -4185,6 +4577,17 @@ You'll receive another email as soon as a decision is made.`
           receipt_url: shortFallClaim.receipt_url
         });
 
+        // Persist before logging history: addHistory's insert is
+        // fire-and-forget and would otherwise race ahead of this brand-new
+        // claim row, FK-violating against a claim_id that doesn't exist in
+        // Postgres yet.
+        try {
+          await persistClaim(shortFallClaim);
+          await persistExpenseLineItems(claimId, expenses.filter(e => e.claim_id === claimId));
+        } catch (err) {
+          console.error('[db] Could not persist shortfall claim to Postgres:', err);
+        }
+
         addHistory(claimId, ClaimStatus.DRAFT, ClaimStatus.PROCESSING, user.id, 'Automatic creation from Cash Advance Liquidation Shortfall');
         addLiqHistory(l.id, oldStatus, LiquidationStatus.CLOSED, user.id, `Liquidation Approved & Closed. Shortfall reimbursement claim created: ${claimNumber}`);
         addCaHistory(ca.id, oldCaStatus, CashAdvanceStatus.LIQUIDATED, user.id, 'Liquidation Closed (Reimbursement Payout Queued)');
@@ -4208,11 +4611,21 @@ You'll receive another email as soon as a decision is made.`
       }
     }
 
+    try {
+      await persistLiquidation(l);
+      await persistCashAdvance(ca);
+      if (shortFallClaim) {
+        await persistClaim(shortFallClaim);
+        await persistExpenseLineItems(shortFallClaim.id, expenses.filter(e => e.claim_id === shortFallClaim!.id));
+      }
+    } catch (err) {
+      console.error('[db] Could not persist liquidation review to Postgres:', err);
+    }
     res.json(l);
   });
 
   // 16. Collect refund and close Liquidation (Custodian only)
-  app.post('/api/liquidations/:id/collect-refund', (req, res) => {
+  app.post('/api/liquidations/:id/collect-refund', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.CUSTODIAN) return res.status(403).json({ error: 'Forbidden: Only Custodians can collect refunds.' });
 
@@ -4257,6 +4670,16 @@ You'll receive another email as soon as a decision is made.`
       `Your Liquidation has been marked as Closed. Custodian ${user.name} has verified collection of your refund of PHP ${Math.abs(l.varianceAmount)}.${referenceNote ? `\n\nReference: ${referenceNote}` : ''}`
     );
 
+    // refundReference/refundCollectedAt above are ad-hoc (any-cast) fields
+    // with no schema column — not persisted. The same information (who,
+    // when, via what method) is already captured durably in the addLiqHistory
+    // reason text a few lines up, so nothing is actually lost.
+    try {
+      await persistLiquidation(l);
+      if (ca) await persistCashAdvance(ca);
+    } catch (err) {
+      console.error('[db] Could not persist refund collection to Postgres:', err);
+    }
     res.json(l);
   });
 
@@ -4279,7 +4702,7 @@ You'll receive another email as soon as a decision is made.`
 
   // Approver requests a delegation. Starts Pending - routing does not change
   // until the delegate explicitly accepts (see /accept below).
-  app.post('/api/delegations', (req, res) => {
+  app.post('/api/delegations', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.APPROVER) return res.status(403).json({ error: 'Forbidden' });
 
@@ -4312,6 +4735,14 @@ You'll receive another email as soon as a decision is made.`
       updated_at: now
     };
     delegations.push(delegation);
+    // Persist before logging history: addDelegationHistory's insert is
+    // fire-and-forget and would otherwise race ahead of this row, FK-violating
+    // against a delegation_id that doesn't exist in Postgres yet.
+    try {
+      await persistDelegation(delegation);
+    } catch (err) {
+      console.error('[db] Could not persist new delegation to Postgres:', err);
+    }
     addDelegationHistory(id, '', DelegationStatus.PENDING, user.id, `Delegation requested to ${delegate.name}`);
 
     sendEmail(
@@ -4324,7 +4755,7 @@ You'll receive another email as soon as a decision is made.`
   });
 
   // Delegate accepts a Pending request - only now does routing actually change.
-  app.post('/api/delegations/:id/accept', (req, res) => {
+  app.post('/api/delegations/:id/accept', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     syncDelegationStatuses();
@@ -4347,11 +4778,16 @@ You'll receive another email as soon as a decision is made.`
       `${user.name} has accepted your request to cover approvals from ${delegation.start_date} to ${delegation.end_date}. Claims from your direct reports will now route to them for that period.`
     );
 
+    try {
+      await persistDelegation(delegation);
+    } catch (err) {
+      console.error('[db] Could not persist delegation acceptance to Postgres:', err);
+    }
     res.json(delegation);
   });
 
   // Delegate declines - request never takes effect, approver has to pick someone else.
-  app.post('/api/delegations/:id/decline', (req, res) => {
+  app.post('/api/delegations/:id/decline', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -4375,12 +4811,17 @@ You'll receive another email as soon as a decision is made.`
       `${user.name} has declined your request to cover approvals from ${delegation.start_date} to ${delegation.end_date}.${reason ? `\n\nReason: ${reason}` : ''}\n\nPlease choose a different delegate if you still need coverage for this period.`
     );
 
+    try {
+      await persistDelegation(delegation);
+    } catch (err) {
+      console.error('[db] Could not persist delegation decline to Postgres:', err);
+    }
     res.json(delegation);
   });
 
   // Approver cancels their own delegation early, whether it's still Pending
   // or already Active.
-  app.post('/api/delegations/:id/cancel', (req, res) => {
+  app.post('/api/delegations/:id/cancel', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -4402,11 +4843,16 @@ You'll receive another email as soon as a decision is made.`
       `${user.name} has cancelled the delegation ${oldStatus === DelegationStatus.ACTIVE ? 'that was active' : 'request'} covering ${delegation.start_date} to ${delegation.end_date}. ${oldStatus === DelegationStatus.ACTIVE ? 'You no longer need to act on their behalf.' : 'No action is needed.'}`
     );
 
+    try {
+      await persistDelegation(delegation);
+    } catch (err) {
+      console.error('[db] Could not persist delegation cancellation to Postgres:', err);
+    }
     res.json(delegation);
   });
 
   // Admin: Reassign Approver
-  app.put('/api/claims/:id/reassign', (req, res) => {
+  app.put('/api/claims/:id/reassign', async (req, res) => {
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
     
@@ -4434,35 +4880,37 @@ You'll receive another email as soon as a decision is made.`
     claim.escalated_to_admin = false;
     claim.updated_at = new Date().toISOString();
 
+    addHistory(claim.id, claim.status, claim.status, user.id,
+      `Admin reassigned from ${oldApproverName} to ${newApproverName}. Reason: ${reason}`);
 
-    statusHistories.push({
-      id: uuidv4(),
-      claim_id: claim.id,
-      old_status: claim.status,
-      new_status: claim.status,
-      changed_by: user.id,
-      reason: `Admin reassigned from ${oldApproverName} to ${newApproverName}. Reason: ${reason}`,
-      timestamp: new Date().toISOString()
-    });
-    
+    try {
+      await persistClaim(claim);
+    } catch (err) {
+      console.error('[db] Could not persist admin reassignment to Postgres:', err);
+    }
     res.json(claim);
   });
 
   // Admin: Seed Data
-  app.post('/api/admin/seed', (req, res) => {
+  app.post('/api/admin/seed', async (req, res) => {
     if (!demoModeEnabled) return res.status(404).json({ error: 'Demo data tools are disabled.' });
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
     try {
-      seedYearOfData({
-        demoClaims: true,
-        demoCashAdvances: true,
-        delegations: true,
-        historicalBackfill: false,
-        reviewMeetings: false,
-        supportRequests: false,
-      });
+      suppressHistoryPersistence = true;
+      try {
+        await seedYearOfData({
+          demoClaims: true,
+          demoCashAdvances: true,
+          delegations: true,
+          historicalBackfill: false,
+          reviewMeetings: false,
+          supportRequests: false,
+        });
+      } finally {
+        suppressHistoryPersistence = false;
+      }
       res.json({ success: true });
     } catch (err: any) {
       console.error('Failed to seed mock data:', err);
@@ -4488,7 +4936,12 @@ You'll receive another email as soon as a decision is made.`
     supportRequests: true,
   };
 
-  function seedYearOfData(options: SeedDataOptions = FULL_SEED_OPTIONS) {
+  // resetUsers=false lets the boot-time auto-seed call (below) reseed the
+  // not-yet-DB-backed domains (claims, moms, etc.) on every restart, exactly
+  // as before persistence existed, without clobbering real users that were
+  // just loaded from Postgres. Explicit admin seed/reset routes always pass
+  // the default (true) — an admin choosing to reseed means reseed everything.
+  async function seedYearOfData(options: SeedDataOptions = FULL_SEED_OPTIONS, resetUsers = true) {
     moms = [];
     claims = [];
     expenses = [];
@@ -4513,9 +4966,21 @@ You'll receive another email as soon as a decision is made.`
     vendors = buildInitialVendors();
     fieldDefinitions = buildInitialFieldDefinitions();
 
-    users.length = 0;
-    users.push(...buildDefaultUsers());
-    applyHierarchySyncDefaults(users);
+    if (resetUsers) {
+      users.length = 0;
+      users.push(...buildDefaultUsers());
+      applyHierarchySyncDefaults(users);
+
+      // Reseeding always produces the same fixed demo user set — clear the
+      // table first (not just upsert) so any previously-persisted user that
+      // isn't part of that set doesn't linger as an orphan.
+      try {
+        await clearUsersInDb();
+        await syncUsersToDb(users);
+      } catch (err) {
+        console.error('[db] Could not persist reseeded users to Postgres:', err);
+      }
+    }
 
     const rDate = (daysAgo: number) => {
       const d = new Date();
@@ -5868,25 +6333,30 @@ You'll receive another email as soon as a decision is made.`
   // selective Data Management panel - unset fields default to false (a
   // narrower run than "everything"). No body (the original "Generate 1 Year
   // of History" button) still means "generate everything," unchanged.
-  app.post('/api/admin/seed-year', (req, res) => {
+  app.post('/api/admin/seed-year', async (req, res) => {
     if (!demoModeEnabled) return res.status(404).json({ error: 'Demo data tools are disabled.' });
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
 
     try {
       const requestedOptions = req.body && req.body.options;
-      if (requestedOptions && typeof requestedOptions === 'object') {
-        const selective: SeedDataOptions = {
-          demoClaims: !!requestedOptions.demoClaims,
-          demoCashAdvances: !!requestedOptions.demoCashAdvances,
-          delegations: !!requestedOptions.delegations,
-          historicalBackfill: !!requestedOptions.historicalBackfill,
-          reviewMeetings: !!requestedOptions.reviewMeetings,
-          supportRequests: !!requestedOptions.supportRequests,
-        };
-        seedYearOfData(selective);
-      } else {
-        seedYearOfData();
+      suppressHistoryPersistence = true;
+      try {
+        if (requestedOptions && typeof requestedOptions === 'object') {
+          const selective: SeedDataOptions = {
+            demoClaims: !!requestedOptions.demoClaims,
+            demoCashAdvances: !!requestedOptions.demoCashAdvances,
+            delegations: !!requestedOptions.delegations,
+            historicalBackfill: !!requestedOptions.historicalBackfill,
+            reviewMeetings: !!requestedOptions.reviewMeetings,
+            supportRequests: !!requestedOptions.supportRequests,
+          };
+          await seedYearOfData(selective);
+        } else {
+          await seedYearOfData();
+        }
+      } finally {
+        suppressHistoryPersistence = false;
       }
       res.json({ success: true });
     } catch (err: any) {
@@ -5899,7 +6369,7 @@ You'll receive another email as soon as a decision is made.`
   // and any delegations or reassignments made during a demo, but keeps the
   // standard org chart in place, so the next thing anyone does is create
   // something from scratch rather than looking at a random empty app.
-  app.post('/api/admin/reset', (req, res) => {
+  app.post('/api/admin/reset', async (req, res) => {
     if (!demoModeEnabled) return res.status(404).json({ error: 'Demo data tools are disabled.' });
     const user = getUser(req);
     if (!user || user.role !== UserRole.ADMIN) return res.status(403).json({ error: 'Forbidden' });
@@ -5934,6 +6404,28 @@ You'll receive another email as soon as a decision is made.`
     users.length = 0;
     users.push(...buildDefaultUsers());
     applyHierarchySyncDefaults(users);
+    try {
+      await clearUsersInDb();
+      await syncUsersToDb(users);
+      // Every domain above was just wiped and (for companies/master
+      // data/field definitions) reseeded to fixed defaults — clear their
+      // Postgres tables too so no orphaned row from before the reset lingers,
+      // then persist the fresh reseeded reference data back.
+      await clearCoreLoopInDb();
+      await clearCashAdvanceLoopInDb();
+      await clearWorkflowExtrasInDb();
+      await clearReferenceDataInDb();
+      for (const company of companies) await persistCompany(company);
+      for (const dept of departments) await persistMasterDataRecord('departments', dept);
+      for (const cc of costCenters) await persistMasterDataRecord('cost-centers', cc);
+      for (const bu of businessUnits) await persistMasterDataRecord('business-units', bu);
+      for (const branch of branches) await persistMasterDataRecord('branches', branch);
+      for (const pc of projectCodes) await persistMasterDataRecord('project-codes', pc);
+      for (const vendor of vendors) await persistMasterDataRecord('vendors', vendor);
+      for (const field of fieldDefinitions) await persistFieldDefinition(field);
+    } catch (err) {
+      console.error('[db] Could not persist reset state to Postgres:', err);
+    }
 
     claimCounter = 123;
 
@@ -5970,7 +6462,7 @@ You'll receive another email as soon as a decision is made.`
     res.json({ ...request, messages });
   });
 
-  app.post('/api/support', (req, res) => {
+  app.post('/api/support', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     if (user.role === UserRole.ADMIN) return res.status(403).json({ error: 'Admins manage support requests and cannot file their own.' });
@@ -6001,11 +6493,16 @@ You'll receive another email as soon as a decision is made.`
         `A new support request has been created by ${user.name}.\n\nPriority: ${newRequest.priority}\nSubject: ${subject}\nDescription: ${description}`,
       );
     });
-    
+
+    try {
+      await persistSupportRequest(newRequest);
+    } catch (err) {
+      console.error('[db] Could not persist new support request to Postgres:', err);
+    }
     res.status(201).json(newRequest);
   });
 
-  app.post('/api/support/:id/messages', (req, res) => {
+  app.post('/api/support/:id/messages', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     
@@ -6036,11 +6533,17 @@ You'll receive another email as soon as a decision is made.`
     } else {
       sendEmail(request.requestor_id, `New message on Support Request: ${request.subject}`, `${user.name}: ${message}`);
     }
-    
+
+    try {
+      await persistSupportRequest(request);
+      await insertSupportMessage(newMessage);
+    } catch (err) {
+      console.error('[db] Could not persist support message to Postgres:', err);
+    }
     res.status(201).json(newMessage);
   });
 
-  app.put('/api/support/:id', (req, res) => {
+  app.put('/api/support/:id', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     
@@ -6068,7 +6571,12 @@ You'll receive another email as soon as a decision is made.`
     }
     
     request.updated_at = new Date().toISOString();
-    
+
+    try {
+      await persistSupportRequest(request);
+    } catch (err) {
+      console.error('[db] Could not persist support request changes to Postgres:', err);
+    }
     res.json(request);
   });
 
@@ -6171,12 +6679,20 @@ You'll receive another email as soon as a decision is made.`
   }
 
   // Auto-seed on startup unless explicitly disabled. This runs in production
-  // too, so a fresh serverless cold start has demo data to serve. NOTE: the
-  // backend is in-memory — state does not persist across cold starts. That is
-  // a deliberate prototype limitation; see PRODUCTION-PASS.md #3 (persistent DB).
+  // too, so a fresh serverless cold start has demo data to serve. Claims,
+  // MOMs, cash advances, etc. are not DB-backed yet (docs/DATABASE-MIGRATION.md
+  // is mid-migration — see PRODUCTION-PASS.md #3), so this still reseeds them
+  // in memory every boot; `resetUsers: !usersLoadedFromDb` is the one
+  // exception, so a boot that just loaded real users from Postgres doesn't
+  // immediately overwrite them with the fixed demo set.
   if (demoModeEnabled && process.env.AUTO_SEED !== 'false') {
     try {
-      seedYearOfData();
+      suppressHistoryPersistence = true;
+      try {
+        await seedYearOfData(undefined, !usersLoadedFromDb);
+      } finally {
+        suppressHistoryPersistence = false;
+      }
       console.log('Auto-seeded 1 year of mock data on startup.');
     } catch (err: any) {
       console.error('Failed to auto-seed mock data on startup:', err);

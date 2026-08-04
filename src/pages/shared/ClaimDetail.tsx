@@ -569,7 +569,7 @@ export function ClaimDetail() {
                   onChange={e => { setReceiptCode(e.target.value); setReceiptError(''); }}
                   onKeyDown={e => { if (e.key === 'Enter') handleConfirmReceipt(); }}
                   placeholder="Release code"
-                  className={`w-full bg-white border ${receiptError ? 'border-error' : 'border-[#CBD5E1]'} rounded-[6px] px-4 py-2.5 font-mono-data tracking-widest text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none uppercase`}
+                  className={`w-full bg-white border ${receiptError ? 'border-error' : 'border-brand-field-border'} rounded-input px-4 py-2.5 font-mono-data tracking-widest text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none uppercase`}
                 />
                 {receiptError && <p id="receipt-code-error" role="alert" className="text-error text-xs mt-1">{receiptError}</p>}
               </div>

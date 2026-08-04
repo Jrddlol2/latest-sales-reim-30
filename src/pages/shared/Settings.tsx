@@ -460,13 +460,14 @@ export function Settings() {
                       </div>
                     )}
                     <div>
-                      <Button variant="outline" size="sm" onClick={() => addToast('Photo updated successfully', 'success')}>Change Photo</Button>
+                      <Button variant="outline" size="sm" disabled title="Your photo comes from your Microsoft account once sign-in is connected.">Change Photo</Button>
+                      <p className="text-body-sm text-outline mt-1">Managed by your Microsoft account.</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4 pt-4">
                     <div>
                       <label className="block font-label-sm text-outline mb-1">Full Name</label>
-                      <input type="text" className="w-full px-4 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg font-body-base focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" defaultValue={currentUser.name} />
+                      <input type="text" className="w-full px-4 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg font-body-base text-on-surface-variant focus:outline-none" defaultValue={currentUser.name} disabled />
                     </div>
                     <div>
                       <label className="block font-label-sm text-outline mb-1">Email Address</label>
@@ -481,8 +482,13 @@ export function Settings() {
                       <input type="text" className="w-full px-4 py-2 bg-surface-container-lowest border border-outline-variant rounded-lg font-body-base text-on-surface-variant focus:outline-none" defaultValue={currentUser.role} disabled />
                     </div>
                   </div>
-                  <div className="pt-4 flex justify-end gap-3">
-                    <Button onClick={() => addToast('Changes saved successfully', 'success')}>Save Changes</Button>
+                  <div className="flex items-start gap-2 rounded-lg border border-outline-variant bg-surface-container-low p-3 mt-2">
+                    <span className="material-symbols-outlined text-[20px] text-outline">badge</span>
+                    <p className="text-body-sm text-on-surface-variant">
+                      Your profile details come from your organization's directory and can't be edited here.
+                      Once Microsoft Entra ID sign-in is connected, name, email, department, role, and photo
+                      will sync automatically from your Microsoft account.
+                    </p>
                   </div>
                 </>
               )}

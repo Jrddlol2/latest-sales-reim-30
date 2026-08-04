@@ -63,7 +63,7 @@ export function DynamicFieldRenderer({ entity, values, onChange, errors = {}, cl
             ) : fd.input_type === 'textarea' ? (
               <textarea 
                 {...accessibilityProps}
-                className={`w-full bg-white border ${errors[fd.key] ? 'border-error' : 'border-[#CBD5E1]'} rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none`}
+                className={`w-full bg-white border ${errors[fd.key] ? 'border-error' : 'border-brand-field-border'} rounded-input px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none`}
                 rows={3}
                 value={values[fd.key] || ''} 
                 onChange={e => onChange(fd.key, e.target.value)} 

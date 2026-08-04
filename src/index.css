@@ -43,10 +43,15 @@
   --color-on-background: #191b23;
   --color-surface-variant: #e1e2ed;
 
+  /* Scrim used behind modals/dialogs (apply with an opacity, e.g. bg-scrim/40) */
+  --color-scrim: #0f172a;
+
   /* Custom brand tokens */
   --color-brand-canvas: #F8FAFC;
   --color-brand-slate: #0F172A;
   --color-brand-border: #E2E8F0;
+  /* Slightly stronger border reserved for interactive form controls (inputs, selects, textareas) */
+  --color-brand-field-border: #CBD5E1;
   --color-brand-table-header: #F1F5F9;
   --color-brand-row-hover: #EFF6FF;
   --color-brand-primary: #2563EB;

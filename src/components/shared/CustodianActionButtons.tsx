@@ -205,7 +205,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
               onChange={event => { setCorrectionComment(event.target.value); setError(''); }}
               rows={4}
               placeholder="Describe the missing document, incorrect amount, or required correction..."
-              className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-y"
+              className="w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-y"
               disabled={isSubmitting}
             />
           </div>
@@ -233,7 +233,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
               onChange={event => { setCorrectionComment(event.target.value); setError(''); }}
               rows={4}
               placeholder="Explain why this request cannot proceed..."
-              className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-y"
+              className="w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-y"
               disabled={isSubmitting}
             />
           </div>

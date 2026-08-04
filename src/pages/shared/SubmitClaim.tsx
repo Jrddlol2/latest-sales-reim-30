@@ -982,7 +982,7 @@ export function SubmitClaim() {
                       <Label>Discussion</Label>
                       <textarea
                         rows={6}
-                        className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
+                        className="w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
                         value={momCore.discussion}
                         onChange={e => setMomCore(p => ({ ...p, discussion: e.target.value }))}
                       />
@@ -991,7 +991,7 @@ export function SubmitClaim() {
                       <Label>Action Items</Label>
                       <textarea
                         rows={4}
-                        className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
+                        className="w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
                         value={momCore.actionItems}
                         onChange={e => setMomCore(p => ({ ...p, actionItems: e.target.value }))}
                         placeholder="List owners, next steps, and target dates."

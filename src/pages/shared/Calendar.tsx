@@ -305,7 +305,7 @@ export function Calendar() {
                 <div className="space-y-3 pt-2 border-t border-outline-variant">
                   <textarea
                     rows={2}
-                    className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
+                    className="w-full bg-white border border-brand-field-border rounded-input px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
                     placeholder="Reason (optional)"
                     value={declineReason}
                     onChange={e => setDeclineReason(e.target.value)}
@@ -333,11 +333,11 @@ export function Calendar() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label htmlFor="reschedule-date" className="text-xs text-outline uppercase tracking-wider font-medium">Review date</label>
-                      <input id="reschedule-date" type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
+                      <input id="reschedule-date" type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="w-full bg-white border border-brand-field-border rounded-input px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
                     </div>
                     <div>
                       <label htmlFor="reschedule-time" className="text-xs text-outline uppercase tracking-wider font-medium">Review time</label>
-                      <input id="reschedule-time" type="time" value={newTime} onChange={e => setNewTime(e.target.value)} className="w-full bg-white border border-[#CBD5E1] rounded-[6px] px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
+                      <input id="reschedule-time" type="time" value={newTime} onChange={e => setNewTime(e.target.value)} className="w-full bg-white border border-brand-field-border rounded-input px-3 py-2 text-body-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none" />
                     </div>
                   </div>
                   <div className="flex justify-end gap-2">

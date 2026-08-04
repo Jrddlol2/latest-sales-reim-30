@@ -23,6 +23,7 @@ export const employmentStatusEnum = pgEnum('employment_status', ['Active', 'Inac
 export const delegationStatusEnum = pgEnum('delegation_status', ['Pending', 'Active', 'Declined', 'Expired', 'Cancelled']);
 export const momStatusEnum = pgEnum('mom_status', ['Draft', 'Completed']);
 export const minutesSourceEnum = pgEnum('minutes_source', ['Template', 'Uploaded']);
+export const momDocumentTypeEnum = pgEnum('mom_document_type', ['MoM', 'LOA']);
 export const fieldEntityEnum = pgEnum('field_entity', ['mom', 'claim']);
 export const fieldInputTypeEnum = pgEnum('field_input_type', ['text', 'number', 'dropdown', 'date', 'textarea']);
 export const reviewMeetingStatusEnum = pgEnum('review_meeting_status', [
@@ -88,6 +89,7 @@ export const moms = pgTable('moms', {
   // a circular NOT NULL <-> NOT NULL dependency between the two tables.
   claimId: text('claim_id').references((): AnyPgColumn => claims.id),
   requestorId: text('requestor_id').references(() => users.id),
+  documentType: momDocumentTypeEnum('document_type').notNull().default('MoM'),
   client: text('client'),
   contactPerson: text('contact_person'),
   contactPersonEmail: text('contact_person_email'),
@@ -323,6 +325,10 @@ export const liquidations = pgTable('liquidations', {
   varianceType: liquidationVarianceTypeEnum('variance_type').notNull(),
   status: liquidationStatusEnum('status').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // Refund-due variance: declared at submission, then the actual method the
+  // custodian recorded on collection — see Liquidation.refundMethod's own
+  // comment in serverTypes.ts.
+  refundMethod: text('refund_method'),
 });
 
 export const liquidationLineItems = pgTable('liquidation_line_items', {
@@ -373,6 +379,11 @@ export const systemSettings = pgTable('system_settings', {
   expenseCategories: text('expense_categories').array().notNull(),
   highValueThreshold: numeric('high_value_threshold', { precision: 12, scale: 2 }).notNull(),
   paymentMethods: text('payment_methods').array().notNull(),
+  // JSON-serialized Record<string, number> — per-category reimbursement caps.
+  // Currently always {} in practice (see server.ts's own comment on the
+  // in-memory field) but is a real, admin-editable field via PUT
+  // /api/admin/settings, so it needs a column like any other mutable state.
+  categoryLimits: text('category_limits'),
 });
 
 // Replaces `lastSeenStore: Record<userId, Record<section, isoTimestamp>>` —

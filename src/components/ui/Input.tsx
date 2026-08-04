@@ -7,7 +7,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
       <input
         ref={ref}
         className={cn(
-          "w-full bg-white border border-[#CBD5E1] rounded-[6px] px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none",
+          "w-full bg-white border border-brand-field-border rounded-input px-4 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none",
           className
         )}
         {...props}
@@ -24,11 +24,18 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
   ({ className, containerClassName, children, ...props }, ref) => {
     return (
-      <div className={cn("relative w-full", containerClassName)}>
+      // `className` is applied to both the wrapper and the <select> — the
+      // chevron below is positioned absolute against this wrapper, so if a
+      // caller's width utility (e.g. `w-44`) only reached the <select>, the
+      // wrapper stayed at its default w-full and the chevron floated off to
+      // the wrapper's true right edge instead of sitting inside the visible,
+      // narrower control. Non-width classes (padding, text size, etc.)
+      // landing on this wrapper too is harmless — it's an invisible div.
+      <div className={cn("relative w-full", className, containerClassName)}>
         <select
           ref={ref}
           className={cn(
-            "w-full appearance-none bg-white border border-[#CBD5E1] rounded-[6px] pl-4 pr-10 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none disabled:bg-surface-container-low disabled:text-outline",
+            "w-full appearance-none bg-white border border-brand-field-border rounded-input pl-4 pr-10 py-2.5 text-body-base focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none disabled:bg-surface-container-low disabled:text-outline",
             className
           )}
           {...props}
