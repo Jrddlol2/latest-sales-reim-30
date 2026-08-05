@@ -32,7 +32,13 @@ export function MomClientPreviewModal({ mom, onClose, footer }: MomClientPreview
       .then(blob => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
-        setPdfUrl(objectUrl);
+        // Chrome's built-in PDF viewer's default "Automatic" zoom shrinks a
+        // portrait page to fit the whole thing in view, which reads as tiny
+        // in a modal-sized iframe — #view=FitH scales to the pane's width
+        // instead, and navpanes=0 hides the thumbnail rail that would
+        // otherwise eat into that width. Standard PDF open-parameters
+        // fragment, honored on blob: URLs the same as http(s) ones.
+        setPdfUrl(`${objectUrl}#view=FitH&navpanes=0`);
       })
       .catch(() => {
         if (!cancelled) setError('Could not generate the PDF preview.');
@@ -45,7 +51,7 @@ export function MomClientPreviewModal({ mom, onClose, footer }: MomClientPreview
   }, [mom]);
 
   return (
-    <Modal isOpen onClose={onClose} titleId="client-preview-title" className="max-w-3xl">
+    <Modal isOpen onClose={onClose} titleId="client-preview-title" className="max-w-4xl">
       <div className="bg-surface-container-lowest rounded-xl w-full shadow-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-start justify-between gap-4 border-b border-outline-variant p-5">
           <div className="min-w-0">

@@ -81,6 +81,12 @@ export interface Company {
   address?: string;
   contactPerson?: string;
   contactEmail?: string;
+  // True when this record was auto-created from a requestor typing an
+  // unlisted client name rather than deliberately added by an admin — shown
+  // as a "Pending review" badge in Company Directory. Never blocks the
+  // company from being selected/used elsewhere.
+  pendingReview?: boolean;
+  createdBy?: string;
 }
 
 export const FIELD_ENTITIES = [

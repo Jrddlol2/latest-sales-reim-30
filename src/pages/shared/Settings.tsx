@@ -9,6 +9,7 @@ import { useAppContext, DemoSeedOptions, FULL_DEMO_SEED_OPTIONS } from '../../co
 import { useToast } from '../../components/shared/ToastContext';
 import { requestDelegation, acceptDelegation, declineDelegation, cancelDelegation, updateNotificationPrefs, ApiError } from '../../lib/api';
 import { UserRole, DelegationStatus } from '../../types';
+import { FieldDefinitionsAdmin } from '../admin/FieldDefinitionsAdmin';
 
 const STATUS_STYLE: Record<string, string> = {
   [DelegationStatus.ACTIVE]: 'bg-green-100 text-green-800',
@@ -333,8 +334,9 @@ function DemoDataPanel() {
       <div className="border-t border-outline-variant pt-6">
         <h4 className="font-headline-sm text-error mb-1">Danger zone</h4>
         <p className="text-body-sm text-outline mb-4">
-          Empty every claim, MOM, cash advance, liquidation, history entry, email and support ticket
-          without reseeding — ideal for presenting a workflow from the very first step.
+          Empty every claim, Minutes of Meeting record, cash advance, liquidation, history entry, email
+          and support ticket without reseeding — ideal for presenting a workflow from the very first
+          step.
         </p>
         <Button
           variant="outline"
@@ -358,9 +360,9 @@ function DemoDataPanel() {
       >
         {confirmAction === 'clear' ? (
           <p>
-            This permanently removes <strong>every</strong> claim, MOM, cash advance, liquidation,
-            status-history entry, email and support ticket. Users and master data are kept, and the
-            app lands on an empty slate.
+            This permanently removes <strong>every</strong> claim, Minutes of Meeting record, cash
+            advance, liquidation, status-history entry, email and support ticket. Users and master
+            data are kept, and the app lands on an empty slate.
           </p>
         ) : (
           <p>
@@ -412,12 +414,16 @@ export function Settings() {
     }
   };
 
+  const isAdmin = currentUser.role === UserRole.ADMIN;
   const tabs = [
     { id: 'profile', label: 'Profile' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'delegation', label: 'Delegation' },
+    // Dropdown-option management (MoM Category, Type of Account, etc.) is
+    // admin-only — everyone else just uses whatever choices are configured.
+    ...(isAdmin ? [{ id: 'field-definitions', label: 'Dropdown Fields' }] : []),
     // The demo-data generator lives in its own admin-only category.
-    ...(currentUser.role === UserRole.ADMIN && demoModeEnabled ? [{ id: 'demo-data', label: 'Demo Data' }] : []),
+    ...(isAdmin && demoModeEnabled ? [{ id: 'demo-data', label: 'Demo Data' }] : []),
     { id: 'security', label: 'Security' },
   ];
 
@@ -430,12 +436,15 @@ export function Settings() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div className="md:col-span-1 space-y-2">
+      {/* Fixed-width tab rail instead of a 1/3-of-viewport grid column — the
+          content side (especially Dropdown Fields' table + options editor)
+          needs real width, not a share proportional to the tab labels. */}
+      <div className="flex flex-col md:flex-row gap-8">
+        <div className="md:w-52 md:shrink-0 space-y-2">
           {tabs.map(t => (
             <button
               key={t.id}
-              className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${activeTab === t.id ? 'bg-primary-container text-on-primary-container font-bold' : 'text-on-surface-variant hover:bg-surface-container-high'}`}
+              className={`w-full text-left px-4 py-2.5 rounded-lg transition-colors ${activeTab === t.id ? 'bg-primary-container text-on-primary-container font-bold' : 'text-on-surface-variant hover:bg-surface-container-high'}`}
               onClick={() => setActiveTab(t.id)}
             >
               {t.label}
@@ -443,7 +452,12 @@ export function Settings() {
           ))}
         </div>
 
-        <div className="md:col-span-2 space-y-6">
+        <div className="min-w-0 flex-1 space-y-6">
+          {activeTab === 'field-definitions' && isAdmin ? (
+            // Brings its own header, tabs, and table — rendered raw instead
+            // of nested inside another Card so it doesn't double up on chrome.
+            <FieldDefinitionsAdmin />
+          ) : (
           <Card>
             <CardHeader>
               <h3 className="font-headline-md text-on-surface">{tabs.find(t => t.id === activeTab)?.label}</h3>
@@ -555,6 +569,7 @@ export function Settings() {
               )}
             </CardContent>
           </Card>
+          )}
         </div>
       </div>
     </div>

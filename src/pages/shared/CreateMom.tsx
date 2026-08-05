@@ -6,9 +6,11 @@ import { Input, Label, Select } from '../../components/ui/Input';
 import { DynamicFieldRenderer } from '../../components/shared/DynamicFieldRenderer';
 import { MomClientPreviewModal } from '../../components/shared/MomClientPreviewModal';
 import { ContactPersonsField } from '../../components/shared/ContactPersonsField';
+import { CompanyPicker } from '../../components/shared/CompanyPicker';
 import { useAppContext } from '../../components/AppContext';
 import { useToast } from '../../components/shared/ToastContext';
 import { createMom, updateMom } from '../../lib/api';
+import { validateDynamicFields } from '../../lib/dynamicFieldValidation';
 import { exportMomPdf, exportMomWord } from '../../lib/momExport';
 import { MomContact, contactsFromMom, serializeContacts, joinDesignations } from '../../lib/momContacts';
 import { MOM, MomDocumentType, DOCUMENT_TYPE_LABEL, MinutesSource } from '../../types';
@@ -24,7 +26,7 @@ function splitEmails(value?: string): string[] {
 export function CreateMom() {
   const navigate = useNavigate();
   const { id } = useParams();
-  const { companies, moms, currentUser, refresh } = useAppContext();
+  const { companies, moms, currentUser, refresh, fieldDefinitions } = useAppContext();
   const { addToast } = useToast();
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -122,6 +124,16 @@ export function CreateMom() {
       addToast('Client, purpose, and date of meeting are required.', 'error');
       return;
     }
+    // Validate the dynamic MoM fields exactly as DynamicFieldRenderer shows them
+    // (entity 'mom', active, minus the excluded legacy designation column).
+    const activeMomFields = fieldDefinitions.filter(
+      fd => fd.entity === 'mom' && fd.active && fd.key !== 'contact_person_designation',
+    );
+    const { firstError } = validateDynamicFields(activeMomFields, customFields);
+    if (firstError) {
+      addToast(firstError.message, 'error');
+      return;
+    }
     // Fold a half-typed address in the box into the list before validating.
     const pending = emailDraft.trim().replace(/,$/, '');
     const emails = pending && EMAIL_RE.test(pending) && !clientEmails.includes(pending)
@@ -157,7 +169,7 @@ export function CreateMom() {
         isEdit
           ? 'Changes saved.'
           : status === 'Draft'
-            ? 'MOM draft saved.'
+            ? `${DOCUMENT_TYPE_LABEL[documentType]} draft saved.`
             : `${DOCUMENT_TYPE_LABEL[documentType]} finalized.`,
         'success',
       );
@@ -217,11 +229,15 @@ export function CreateMom() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <Label required>Client / Company</Label>
-              <Select value={form.client} onChange={event => selectCompany(event.target.value)}>
-                <option value="">Select a company</option>
-                {companies.map(company => <option key={company.id} value={company.name}>{company.name}</option>)}
-              </Select>
+              <Label required htmlFor="mom-client">Client / Company</Label>
+              <CompanyPicker
+                id="mom-client"
+                value={form.client}
+                companies={companies}
+                onSelectExisting={company => selectCompany(company.name)}
+                onChangeText={name => setForm(current => ({ ...current, client: name }))}
+                placeholder="Who did you meet with?"
+              />
             </div>
             <div>
               <Label required>Purpose of Meeting</Label>

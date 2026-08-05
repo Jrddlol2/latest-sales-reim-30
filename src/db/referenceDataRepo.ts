@@ -42,6 +42,8 @@ function companyToRow(c: Company) {
     contactPerson: c.contact_person ?? null,
     contactEmail: c.contact_email ?? null,
     defaultApproverId: c.default_approver_id || null,
+    pendingReview: c.pending_review ?? false,
+    createdBy: c.created_by || null,
   };
 }
 
@@ -60,6 +62,8 @@ function companyFromRow(r: typeof companiesTable.$inferSelect): Company {
     contact_person: r.contactPerson ?? undefined,
     contact_email: r.contactEmail ?? undefined,
     default_approver_id: r.defaultApproverId ?? undefined,
+    pending_review: r.pendingReview ?? false,
+    created_by: r.createdBy ?? undefined,
   };
 }
 

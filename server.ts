@@ -5,6 +5,7 @@ import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -28,7 +29,10 @@ import {
   getTodayIsoDate,
 } from './src/lib/reimbursementPolicy';
 import { normalizeExpenseCategory } from './src/lib/expenseCategories';
+import { isClaimTypeEnabled, COMING_SOON_MESSAGE } from './src/lib/featureFlags';
 import { isDbConfigured, loadUsersFromDb, syncUsersToDb, clearUsersInDb, loadUserHistoryFromDb } from './src/db/usersRepo';
+import { getDb } from './src/db/index';
+import { sql } from 'drizzle-orm';
 import {
   persistMom, persistClaim, persistExpenseLineItems, insertApproval,
   persistStatusHistoryFireAndForget, loadCoreLoopFromDb, clearCoreLoopInDb,
@@ -47,6 +51,38 @@ import {
   persistDelegation, loadDelegationsFromDb, loadDelegationHistoryFromDb, persistReviewMeeting, loadReviewMeetingsFromDb,
   persistSupportRequest, insertSupportMessage, loadSupportRequestsFromDb, clearWorkflowExtrasInDb,
 } from './src/db/workflowExtrasRepo';
+import pino from 'pino';
+import pinoHttp from 'pino-http';
+
+// Server-only — deliberately not under src/lib/ (which is shared with the
+// Vite-bundled frontend); pino depends on Node built-ins that have no
+// business in a browser bundle, so this stays a server.ts-local concern.
+// Pretty-printed in dev for readability, plain JSON in production (what a
+// log aggregator actually wants to ingest).
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport: process.env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } },
+});
+
+// Every request gets a correlation ID (reused from an inbound X-Request-Id
+// if the caller already set one, e.g. a load balancer) and a structured
+// start/finish log line — this is the "can I trace one request through the
+// logs" capability that plain console.log calls can't give you. Existing
+// console.log/console.error call sites elsewhere (mock-transport debug
+// output, [db] persistence-failure warnings) are unchanged by this — this
+// adds request-level tracing, it doesn't retrofit every log line in the file.
+const httpLogger = pinoHttp({
+  logger,
+  genReqId: (req, res) => {
+    const existing = req.headers['x-request-id'];
+    const id = (typeof existing === 'string' && existing) || crypto.randomUUID();
+    res.setHeader('X-Request-Id', id);
+    return id;
+  },
+  autoLogging: {
+    ignore: (req) => req.url === '/healthz' || req.url === '/readyz',
+  },
+});
 
 const LIQUIDATION_DEADLINE_DAYS = 7;
 
@@ -243,13 +279,23 @@ const getOrCreateCompanyInMemory = (name?: string | null): void => {
  * — unlike the seed generator, a company an admin can already see in the
  * Company Directory right after a real MOM submission should still be there
  * after a restart (docs/project-handoff/REMAINING-BACKEND-GAPS.md #8).
+ *
+ * A company created this way — from a requestor's free-typed client name,
+ * not deliberately added by an admin — is immediately usable (it's already
+ * pushed into `companies` before this returns) but flagged `pending_review`
+ * so Company Directory can surface it for enrichment/merging without
+ * blocking the requestor's submission on that review happening first. The
+ * CompanyPicker UI (src/components/shared/CompanyPicker.tsx) already nudges
+ * the requestor toward an existing near-match before they get here — this is
+ * the server-side floor for whatever gets through regardless (a client that
+ * skipped the picker, an older bundle, direct API use).
  */
-const getOrCreateCompany = async (name?: string | null): Promise<void> => {
+const getOrCreateCompany = async (name?: string | null, createdByUserId?: string): Promise<void> => {
   if (!name || !name.trim()) return;
   const trimmed = name.trim();
   const exists = companies.some(c => c.name.toLowerCase() === trimmed.toLowerCase());
   if (exists) return;
-  const created: Company = { id: uuidv4(), name: trimmed };
+  const created: Company = { id: uuidv4(), name: trimmed, pending_review: true, created_by: createdByUserId };
   companies.push(created);
   try {
     await persistCompany(created);
@@ -724,13 +770,39 @@ export async function createApp() {
   };
   const microsoftAuthConfigured = Object.values(microsoftAuth).every(Boolean);
 
-  // --- P1 #7 HTTP security middleware (prototype-level pass) -------------
-  // contentSecurityPolicy is off: the SPA loads a Google Fonts CDN stylesheet
-  // and Vite's dev-mode inline HMR scripts, and a real CSP needs to be tuned
-  // against the actual asset list — not something to guess at here. The
-  // other helmet defaults (X-Frame-Options, X-Content-Type-Options, HSTS,
-  // etc.) apply as-is.
-  app.use(helmet({ contentSecurityPolicy: false }));
+  // --- P1 #7 HTTP security middleware -------------------------------------
+  // contentSecurityPolicy is now on. It used to be off because the SPA loaded
+  // a Google Fonts CDN stylesheet and needed to allow that external origin —
+  // fonts are self-hosted now (src/main.tsx's @fontsource imports), so the
+  // whole app has no legitimate external-origin dependency left, and the
+  // policy can be `'self'`-only for everything except the two exceptions
+  // below. `upgradeInsecureRequests` is disabled: local dev serves plain
+  // http://localhost, and helmet's default would rewrite those requests to
+  // https and break them.
+  const isProdEnv = process.env.NODE_ENV === 'production';
+
+  // Mounted before helmet/cors so even a request helmet would otherwise
+  // reject still gets a correlation ID and a logged start/finish line.
+  app.use(httpLogger);
+
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:', 'blob:'], // data: for inline/base64 assets, blob: for client-generated PDF/receipt previews
+        // Vite's dev server injects an inline HMR client script and relies on
+        // eval-based sourcemaps — both are dev-only; the production build
+        // emits only external, hashed <script> files, so the built app needs
+        // neither.
+        scriptSrc: isProdEnv ? ["'self'"] : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'"], // Tailwind/inline component styles
+        connectSrc: isProdEnv ? ["'self'"] : ["'self'", 'ws:'], // ws: for Vite's dev HMR websocket
+        upgradeInsecureRequests: null, // local dev serves plain http://localhost; helmet's default would rewrite requests to https and break them
+      },
+    },
+  }));
 
   // Same-origin by default (the Express app serves its own built frontend on
   // this port — no cross-origin caller has a legitimate reason to hit these
@@ -746,6 +818,69 @@ export async function createApp() {
   // 10 MB cap on /api/upload. 1 MB is generous headroom for the largest
   // legitimate payload (a claim with many line items).
   app.use(express.json({ limit: '1mb' }));
+
+  // --- Health / readiness ---------------------------------------------------
+  // Unauthenticated, top-level (not under /api), and registered before the
+  // rate limiters below so a monitoring probe polling every few seconds is
+  // never throttled or mistaken for auth abuse.
+  // /healthz — liveness: this process is up and handling requests at all.
+  app.get('/healthz', (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+  });
+  // /readyz — readiness: liveness plus "can actually serve traffic that
+  // depends on it." When no DATABASE_URL is configured the app runs fully
+  // in-memory by design (see isDbConfigured() callers throughout), so
+  // readiness in that mode is the same as liveness. When a database IS
+  // configured, a real round-trip query is required — DATABASE_URL being
+  // *set* doesn't mean the database is actually reachable right now.
+  app.get('/readyz', async (_req, res) => {
+    if (!isDbConfigured()) {
+      return res.status(200).json({ status: 'ok', database: 'not_configured' });
+    }
+    try {
+      await getDb().execute(sql`select 1`);
+      res.status(200).json({ status: 'ok', database: 'reachable' });
+    } catch (err: any) {
+      res.status(503).json({ status: 'unavailable', database: 'unreachable', error: err?.message });
+    }
+  });
+
+  // --- Rate limiting -------------------------------------------------------
+  // Auth endpoints are the highest-value target for credential/enumeration
+  // abuse — a tight cap here matters even before real sign-in exists (the
+  // mock X-User-Id path and the /api/auth/microsoft/start hand-off both sit
+  // behind this same door). Generous elsewhere: this is meant to blunt a
+  // runaway client or script, not to throttle normal interactive use.
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many authentication attempts. Please try again in a few minutes.' },
+    // /api/auth/config is a public, side-effect-free capability read (login
+    // mode flags) that the frontend's own bootstrap fetches on every single
+    // page load/navigation, not an auth *attempt* — counting it here meant a
+    // user just clicking around the app for a while could get locked out of
+    // loading any page. The actual attempt surface (/api/auth/microsoft/start
+    // and anything else under this prefix) stays limited.
+    skip: (req) => req.path === '/config',
+  });
+  app.use('/api/auth', authLimiter);
+
+  // Every other mutating request (GET/HEAD/OPTIONS pass through unlimited —
+  // reads are cheap and this app's own polling-free UI doesn't hammer them
+  // anyway; the risk is repeated writes).
+  const writeLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please slow down and try again shortly.' },
+  });
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    return writeLimiter(req, res, next);
+  });
 
   // Public, secret-free capability endpoint used by the sign-in screen. The
   // response shape stays stable when Entra is enabled; only these flags change.
@@ -1157,22 +1292,25 @@ export async function createApp() {
         const mom = moms.find(candidate => candidate.id === claim.mom_id);
         const items = expenses.filter(item => item.claim_id === claim.id);
         const claimedAmount = Number(claim.total_amount) || 0;
-        // Same legacy-record inference src/lib/api.ts's fromServerClaim() gates
-        // on demoModeEnabled (docs/project-handoff/REMAINING-BACKEND-GAPS.md
-        // #11) — this one isn't gated the same way yet. Unlike that one,
-        // AnalyticsRecord.approvedAmount/paidAmount are non-optional numbers
-        // summed directly into dashboard/report totals (below and in
-        // src/lib/analytics.ts), so silently switching this branch to 0 or
-        // undefined in production would zero out real reporting totals
-        // instead of just leaving one claim's display blank — needs those
-        // summation sites audited for how to represent "incomplete record"
-        // before this can be gated the same way, not a one-line change.
+        // Gated on demoModeEnabled 2026-08-05, matching src/lib/api.ts's
+        // fromServerClaim() (docs/project-handoff/REMAINING-BACKEND-GAPS.md
+        // #11). AnalyticsRecord.approvedAmount/paidAmount stay non-optional
+        // numbers (unlike the frontend Claim type) since they're summed
+        // directly into dashboard/report totals just below and in
+        // src/lib/analytics.ts/downloadAnalyticsCsv — an `undefined` would
+        // need every summation site + the CSV's .toFixed(2) call updated to
+        // treat "unknown" as distinct from "zero". Demo mode keeps the old
+        // plausible-looking inference so seeded dashboards still populate;
+        // production falls back to 0 instead of inventing a number — an
+        // approved claim missing its real approved_amount is a
+        // data-integrity problem to investigate, not paper over with a
+        // number a Finance user could mistake for the authoritative figure.
         const approvedAmount = Number(claim.approved_amount)
-          || ([ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(claim.status)
+          || (demoModeEnabled && [ClaimStatus.APPROVED, ClaimStatus.PROCESSING, ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(claim.status)
             ? Math.min(claimedAmount, REIMBURSEMENT_CAP)
             : 0);
         const paidAmount = Number(claim.paid_amount)
-          || ([ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(claim.status) ? approvedAmount : 0);
+          || (demoModeEnabled && [ClaimStatus.READY_FOR_CLAIM, ClaimStatus.COMPLETED].includes(claim.status) ? approvedAmount : 0);
         return {
           id: claim.id,
           ref: claim.claim_number || `REIM-${claim.id.slice(0, 6)}`,
@@ -2029,7 +2167,11 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     const company: Company = {
       id: uuidv4(), name: name.trim(), industry, notes,
       address, business_unit_id, cost_center_id, default_department_id, currency, tax_id, default_approver_id,
-      contact_person, contact_email
+      contact_person, contact_email,
+      // Deliberately added by an admin, who already filled in whatever
+      // details they had — nothing here needs a later review pass.
+      pending_review: false,
+      created_by: user.id,
     };
     companies.push(company);
     try {
@@ -2132,14 +2274,24 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     if (industry !== undefined) company.industry = industry;
     if (notes !== undefined) company.notes = notes;
 
-    (['address', 'business_unit_id', 'cost_center_id', 'default_department_id', 'currency', 'tax_id', 'default_approver_id', 'contact_person', 'contact_email'] as const)
+    const enrichmentFields = ['address', 'business_unit_id', 'cost_center_id', 'default_department_id', 'currency', 'tax_id', 'default_approver_id', 'contact_person', 'contact_email'] as const;
+    (['pending_review', ...enrichmentFields] as const)
       .forEach(field => {
         const value = req.body[field];
         if (value !== undefined && company[field] !== value) {
           addMasterDataHistory('companies', company.id, field, String(company[field] ?? '(none)'), String(value || '(none)'), user.id);
-          company[field] = value;
+          (company as any)[field] = value;
         }
       });
+
+    // Any substantive edit is itself an implicit review — an admin who just
+    // touched the name or an enrichment field has looked at the record, even
+    // if they didn't explicitly clear the flag via the "Mark reviewed" action.
+    const editedSomethingElse = name !== undefined || industry !== undefined || notes !== undefined
+      || enrichmentFields.some(field => req.body[field] !== undefined);
+    if (editedSomethingElse && req.body.pending_review === undefined) {
+      company.pending_review = false;
+    }
 
     try {
       await persistCompany(company);
@@ -2350,7 +2502,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
       custom_fields: req.body.custom_fields || undefined
     };
 
-    await getOrCreateCompany(mom.client);
+    await getOrCreateCompany(mom.client, user.id);
     moms.push(mom);
     try {
       await persistMom(mom);
@@ -2384,7 +2536,7 @@ If no action is taken within ${STALE_APPROVER_FALLBACK_DAYS} days, this will be 
     }
 
     mom.client = req.body.client ?? mom.client;
-    await getOrCreateCompany(mom.client);
+    await getOrCreateCompany(mom.client, user.id);
     mom.contact_person = req.body.contact_person ?? mom.contact_person;
     mom.contact_person_email = req.body.contact_person_email ?? mom.contact_person_email;
     mom.cc_client = req.body.cc_client ?? mom.cc_client;
@@ -4138,6 +4290,9 @@ BSM Assistant | BSD - IT Security Business`;
   app.post('/api/cash-advances', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    // Soft-launch gate — mirrors the UI, but enforced here so a crafted
+    // request can't create a gated type either. See src/lib/featureFlags.ts.
+    if (!isClaimTypeEnabled('Cash Advance')) return res.status(403).json({ error: COMING_SOON_MESSAGE });
     if (!user.reports_to) return res.status(403).json({ error: 'Forbidden: You must have a designated manager (reports_to) to submit.' });
 
     // Rule 4: A Requestor may only have ONE active (unliquidated) CashAdvance at a time — block creation of a new one with a friendly message if one is already open.
@@ -4448,6 +4603,7 @@ You'll receive another email as soon as a decision is made.`
   app.post('/api/liquidations', async (req, res) => {
     const user = getUser(req);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!isClaimTypeEnabled('Liquidation')) return res.status(403).json({ error: COMING_SOON_MESSAGE });
 
     const { cashAdvanceId } = req.body;
     if (!cashAdvanceId) return res.status(400).json({ error: 'Cash Advance ID is required.' });

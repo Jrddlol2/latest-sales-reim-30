@@ -36,6 +36,13 @@
       "when": 1785849840505,
       "tag": "0004_skinny_flatman",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785901491706,
+      "tag": "0005_bored_colonel_america",
+      "breakpoints": true
     }
   ]
 }

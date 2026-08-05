@@ -639,6 +639,8 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
       address: c.address || undefined,
       contactPerson: c.contact_person || undefined,
       contactEmail: c.contact_email || undefined,
+      pendingReview: Boolean(c.pending_review),
+      createdBy: c.created_by || undefined,
     })),
     emails: (rawOutbox || []).map(fromServerEmail),
     supportRequests: (rawSupport || []).map(fromServerSupport),

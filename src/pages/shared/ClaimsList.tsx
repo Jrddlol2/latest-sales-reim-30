@@ -1,15 +1,16 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardHeader } from '../../components/ui/Card';
+import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { Input, Label, Select } from '../../components/ui/Input';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { KPICard } from '../../components/ui/KPICard';
 import { LiquidationProgressCard } from '../../components/shared/LiquidationProgressCard';
 import { ClaimProgressTracker } from '../../components/shared/ClaimProgressTracker';
 import { useAppContext } from '../../components/AppContext';
 import { Pagination } from '../../components/ui/Pagination';
-import { ClaimStatus, UserRole } from '../../types';
+import { GroupByControl, GroupSection, GroupMetric } from '../../components/shared/GroupByControl';
+import { FilterBar } from '../../components/shared/FilterBar';
+import { Claim, ClaimStatus, UserRole } from '../../types';
 import { formatMoney } from '../../lib/money';
 import { formatDate } from '../../lib/date';
 import { claimTypeIcon, FINANCE_VISIBLE_STATUSES, getRequestAmountPresentation, isFinanceVisibleClaim } from '../../lib/claimWorkflow';
@@ -25,10 +26,11 @@ export function ClaimsList() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
+  const [requestorFilter, setRequestorFilter] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [groupBy, setGroupBy] = useState<'none' | 'client' | 'requestor'>('none');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
@@ -41,6 +43,18 @@ export function ClaimsList() {
     () => Array.from(new Set(myClaims.map(c => c.client).filter((v): v is string => !!v))).sort(),
     [myClaims]
   );
+  // Finance sees every requestor's approved-onward records, so a requestor
+  // filter/grouping is meaningful there; a requestor's own list is single-person.
+  const requestorOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of myClaims) {
+      if (c.requestorId && !map.has(c.requestorId)) {
+        map.set(c.requestorId, users.find(u => u.id === c.requestorId)?.name || 'Unknown requestor');
+      }
+    }
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [myClaims, users]);
+  const reimbursedOf = (claim: Claim) => claim.paidAmount || claim.approvedAmount || 0;
   const locationOptions = useMemo(
     () => Array.from(new Set(myClaims.map(c => c.location).filter((v): v is string => !!v))).sort(),
     [myClaims]
@@ -72,25 +86,43 @@ export function ClaimsList() {
       const matchesStatus = statusFilter ? claim.status === statusFilter : true;
       const matchesType = typeFilter ? claim.type === typeFilter : true;
       const matchesClient = clientFilter ? claim.client === clientFilter : true;
+      const matchesRequestor = requestorFilter ? claim.requestorId === requestorFilter : true;
       const matchesLocation = locationFilter ? claim.location === locationFilter : true;
       const submitted = new Date(claim.submittedAt || claim.createdAt).getTime();
       const matchesFrom = dateFrom ? submitted >= new Date(`${dateFrom}T00:00:00`).getTime() : true;
       const matchesTo = dateTo ? submitted <= new Date(`${dateTo}T23:59:59`).getTime() : true;
-      return matchesSearch && matchesStatus && matchesType && matchesClient && matchesLocation && matchesFrom && matchesTo;
+      return matchesSearch && matchesStatus && matchesType && matchesClient && matchesRequestor && matchesLocation && matchesFrom && matchesTo;
     });
-  }, [myClaims, searchQuery, statusFilter, typeFilter, clientFilter, locationFilter, dateFrom, dateTo]);
+  }, [myClaims, searchQuery, statusFilter, typeFilter, clientFilter, requestorFilter, locationFilter, dateFrom, dateTo]);
 
   const totalPages = Math.ceil(filteredClaims.length / itemsPerPage);
   const paginatedClaims = filteredClaims.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const advancedFilterCount = [clientFilter, locationFilter, dateFrom || dateTo].filter(Boolean).length;
-  const hasAdvancedFilters = advancedFilterCount > 0;
 
-  const clearAdvancedFilters = () => {
-    setClientFilter('');
-    setLocationFilter('');
-    setDateFrom('');
-    setDateTo('');
-  };
+  // Grouped view (finance's Approved Records): bucket by client or requestor,
+  // each with an approved/paid subtotal + count.
+  const groups = useMemo(() => {
+    if (groupBy === 'none') return [];
+    const map = new Map<string, Claim[]>();
+    for (const c of filteredClaims) {
+      const key = groupBy === 'client' ? (c.client || '—') : (c.requestorId || 'unknown');
+      const bucket = map.get(key);
+      if (bucket) bucket.push(c);
+      else map.set(key, [c]);
+    }
+    return Array.from(map.entries()).map(([key, items]) => {
+      const label = groupBy === 'client'
+        ? (key === '—' ? 'No client' : key)
+        : (users.find(u => u.id === key)?.name || 'Unknown requestor');
+      const total = items.reduce((sum, c) => sum + reimbursedOf(c), 0);
+      return { key, label, items, total };
+    }).sort((a, b) => b.total - a.total);
+  }, [filteredClaims, groupBy, users]);
+
+  const groupByOptions = [
+    { value: 'none', label: 'List', icon: 'view_list' },
+    { value: 'client', label: 'By Client', icon: 'domain' },
+    { value: 'requestor', label: 'By Requestor', icon: 'person' },
+  ];
 
   const exportFinancialRecords = () => {
     const csv = buildFinancialRecordsCsv(filteredClaims, users);
@@ -108,7 +140,7 @@ export function ClaimsList() {
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, statusFilter, typeFilter, clientFilter, locationFilter, dateFrom, dateTo]);
+  }, [searchQuery, statusFilter, typeFilter, clientFilter, requestorFilter, locationFilter, dateFrom, dateTo]);
 
 
   return (
@@ -123,16 +155,19 @@ export function ClaimsList() {
           </p>
         </div>
         {isFinance ? (
-          <Button
-            variant="outline"
-            className="gap-2 shrink-0"
-            onClick={exportFinancialRecords}
-            disabled={filteredClaims.length === 0}
-            aria-label="Export filtered financial records to CSV"
-          >
-            <span className="material-symbols-outlined text-[18px]">download</span>
-            Export CSV
-          </Button>
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <GroupByControl value={groupBy} options={groupByOptions} onChange={v => setGroupBy(v as typeof groupBy)} />
+            <Button
+              variant="outline"
+              className="gap-2 shrink-0"
+              onClick={exportFinancialRecords}
+              disabled={filteredClaims.length === 0}
+              aria-label="Export filtered financial records to CSV"
+            >
+              <span className="material-symbols-outlined text-[18px]">download</span>
+              Export CSV
+            </Button>
+          </div>
         ) : (
           <Button className="gap-2" onClick={() => navigate('/claims/new')}>
             <span className="material-symbols-outlined text-[20px]">add</span>
@@ -189,140 +224,84 @@ export function ClaimsList() {
         </>
       )}
 
+      <FilterBar
+        searchValue={searchQuery}
+        onSearchChange={setSearchQuery}
+        searchPlaceholder="Search claims..."
+        quickFilters={[
+          {
+            type: 'select', key: 'status', label: 'Status', placeholder: 'All Statuses',
+            value: statusFilter, onChange: setStatusFilter,
+            options: (isFinance ? FINANCE_VISIBLE_STATUSES : Object.values(ClaimStatus)).map(s => ({ value: s, label: s })),
+          },
+          {
+            type: 'select', key: 'type', label: 'Claim type', placeholder: 'All Types',
+            value: typeFilter, onChange: setTypeFilter,
+            options: ['Reimbursement', 'Transport Reimbursement', 'Cash Advance', 'Liquidation'].map(t => ({ value: t, label: t })),
+          },
+        ]}
+        advancedFilters={[
+          {
+            type: 'select', key: 'client', label: 'Client', placeholder: 'All Clients',
+            value: clientFilter, onChange: setClientFilter,
+            options: clientOptions.map(c => ({ value: c, label: c })),
+          },
+          ...(isFinance ? [{
+            type: 'select' as const, key: 'requestor', label: 'Requestor', placeholder: 'All Requestors',
+            value: requestorFilter, onChange: setRequestorFilter,
+            options: requestorOptions.map(r => ({ value: r.id, label: r.name })),
+          }] : []),
+          {
+            type: 'select', key: 'location', label: 'Location', placeholder: 'All Locations',
+            value: locationFilter, onChange: setLocationFilter,
+            options: locationOptions.map(l => ({ value: l, label: l })),
+          },
+          {
+            type: 'dateRange', key: 'submitted', label: 'Submitted',
+            fromValue: dateFrom, toValue: dateTo, onFromChange: setDateFrom, onToChange: setDateTo,
+          },
+        ]}
+        popoverDescription="Narrow claims by client, location, or submitted date."
+      />
+
       <Card>
-        <CardHeader className="p-4">
-          <div className="w-full space-y-3">
-            <div className="flex flex-col sm:flex-row gap-3 w-full">
-              <div className="relative flex-1 min-w-0">
-                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline">search</span>
-                <Input
-                  className="pl-10 py-1.5"
-                  placeholder="Search claims..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                />
-              </div>
-              <Select
-                aria-label="Filter by status"
-                className="w-full sm:w-44 py-1.5"
-                value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value)}
+        {groupBy === 'none' ? (
+          <>
+            {renderClaimsBody(paginatedClaims)}
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
+          </>
+        ) : (
+          <div className="p-4 space-y-5">
+            <p className="text-sm text-outline">
+              {groups.length} {groupBy === 'client' ? (groups.length === 1 ? 'client' : 'clients') : (groups.length === 1 ? 'requestor' : 'requestors')}
+              {' · '}{filteredClaims.length} claim{filteredClaims.length === 1 ? '' : 's'}
+            </p>
+            {groups.length === 0 ? (
+              <div className="p-8 text-center text-on-surface-variant">No claims found.</div>
+            ) : groups.map(group => (
+              <GroupSection
+                key={group.key}
+                icon={groupBy === 'client' ? 'domain' : 'person'}
+                title={group.label}
+                badge={`${group.items.length} claim${group.items.length === 1 ? '' : 's'}`}
+                metrics={<GroupMetric label="Reimbursed" value={formatMoney(group.total)} />}
               >
-                <option value="">All Statuses</option>
-                {(isFinance ? FINANCE_VISIBLE_STATUSES : Object.values(ClaimStatus)).map(status => (
-                  <option key={status} value={status}>{status}</option>
-                ))}
-              </Select>
-              <Select
-                aria-label="Filter by claim type"
-                className="w-full sm:w-44 py-1.5"
-                value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value)}
-              >
-                <option value="">All Types</option>
-                <option value="Reimbursement">Reimbursement</option>
-                <option value="Transport Reimbursement">Transport Reimbursement</option>
-                <option value="Cash Advance">Cash Advance</option>
-                <option value="Liquidation">Liquidation</option>
-              </Select>
-              <div className="relative w-full sm:w-auto">
-                <Button
-                  variant="outline"
-                  className={`w-full sm:w-auto gap-2 justify-center ${hasAdvancedFilters ? 'border-primary text-primary bg-primary/5' : ''}`}
-                  onClick={() => setShowAdvancedFilters(current => !current)}
-                  aria-expanded={showAdvancedFilters}
-                >
-                  <span className="material-symbols-outlined text-[18px]">tune</span>
-                  Filters
-                  {advancedFilterCount > 0 && (
-                    <span className="min-w-5 h-5 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center">
-                      {advancedFilterCount}
-                    </span>
-                  )}
-                </Button>
-
-                {showAdvancedFilters && (
-                  <div className="absolute right-0 top-full mt-2 z-30 w-[min(420px,calc(100vw-3rem))] rounded-xl border border-outline-variant bg-white shadow-xl p-5">
-                    <div className="flex items-start justify-between gap-4 mb-5">
-                      <div>
-                        <h3 className="font-headline-sm text-on-surface">More filters</h3>
-                        <p className="text-xs text-outline mt-1">Narrow claims by client, location, or submitted date.</p>
-                      </div>
-                      <button
-                        type="button"
-                        aria-label="Close filters"
-                        className="text-outline hover:text-on-surface"
-                        onClick={() => setShowAdvancedFilters(false)}
-                      >
-                        <span className="material-symbols-outlined">close</span>
-                      </button>
-                    </div>
-                    <div className="space-y-4">
-                      <div>
-                        <Label>Client</Label>
-                        <Select value={clientFilter} onChange={e => setClientFilter(e.target.value)}>
-                          <option value="">All Clients</option>
-                          {clientOptions.map(client => <option key={client} value={client}>{client}</option>)}
-                        </Select>
-                      </div>
-                      <div>
-                        <Label>Location</Label>
-                        <Select value={locationFilter} onChange={e => setLocationFilter(e.target.value)}>
-                          <option value="">All Locations</option>
-                          {locationOptions.map(location => <option key={location} value={location}>{location}</option>)}
-                        </Select>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <Label>Submitted from</Label>
-                          <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-                        </div>
-                        <div>
-                          <Label>Submitted to</Label>
-                          <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-3 mt-5 pt-4 border-t border-outline-variant">
-                      <Button variant="ghost" size="sm" onClick={clearAdvancedFilters} disabled={!hasAdvancedFilters}>
-                        Clear
-                      </Button>
-                      <Button size="sm" onClick={() => setShowAdvancedFilters(false)}>Done</Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {hasAdvancedFilters && (
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <span className="text-xs font-semibold text-outline">Filtered by</span>
-                {clientFilter && (
-                  <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setClientFilter('')}>
-                    {clientFilter}<span className="material-symbols-outlined text-[14px]">close</span>
-                  </button>
-                )}
-                {locationFilter && (
-                  <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setLocationFilter('')}>
-                    {locationFilter}<span className="material-symbols-outlined text-[14px]">close</span>
-                  </button>
-                )}
-                {(dateFrom || dateTo) && (
-                  <button
-                    className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold"
-                    onClick={() => { setDateFrom(''); setDateTo(''); }}
-                  >
-                    {dateFrom || 'Any date'} – {dateTo || 'Today'}
-                    <span className="material-symbols-outlined text-[14px]">close</span>
-                  </button>
-                )}
-                <button className="text-xs font-semibold text-outline hover:text-primary ml-1" onClick={clearAdvancedFilters}>
-                  Clear all
-                </button>
-              </div>
-            )}
+                {renderClaimsBody(group.items)}
+              </GroupSection>
+            ))}
           </div>
-        </CardHeader>
+        )}
+      </Card>
+    </div>
+  );
+
+  function renderClaimsBody(items: Claim[]) {
+    return (
+      <>
         <div className="overflow-x-auto hidden md:block">
           <table className="w-full min-w-[1040px] text-left">
             <thead className="bg-brand-table-header text-on-surface-variant font-label-sm uppercase tracking-wider">
@@ -339,7 +318,7 @@ export function ClaimsList() {
               </tr>
             </thead>
             <tbody className="divide-y divide-brand-border font-body-base">
-              {paginatedClaims.map(claim => {
+              {items.map(claim => {
                 const amounts = getRequestAmountPresentation(claim);
                 return (
                 <tr key={claim.id} className="hover:bg-brand-row-hover transition-colors cursor-pointer" onClick={() => navigate(`/claims/${claim.id}`)}>
@@ -375,7 +354,7 @@ export function ClaimsList() {
                   </td>
                 </tr>
               );})}
-              {filteredClaims.length === 0 && (
+              {items.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-6 py-8 text-center text-on-surface-variant">
                     No claims found.
@@ -385,10 +364,10 @@ export function ClaimsList() {
             </tbody>
           </table>
         </div>
-        
+
         {/* Mobile View */}
         <div className="md:hidden divide-y divide-outline-variant">
-          {paginatedClaims.map(claim => {
+          {items.map(claim => {
             const amounts = getRequestAmountPresentation(claim);
             const reimbursementTitle = amounts.reimbursementAmount !== undefined
               ? amounts.reimbursementLabel
@@ -424,18 +403,13 @@ export function ClaimsList() {
               </div>
             </div>
           );})}
-          {filteredClaims.length === 0 && (
+          {items.length === 0 && (
             <div className="p-8 text-center text-on-surface-variant">
               No claims found.
             </div>
           )}
         </div>
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setCurrentPage}
-        />
-      </Card>
-    </div>
-  );
+      </>
+    );
+  }
 }

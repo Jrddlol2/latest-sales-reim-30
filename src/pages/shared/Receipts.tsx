@@ -5,10 +5,12 @@ import { Modal } from '../../components/shared/Modal';
 import { Card, CardContent } from '../../components/ui/Card';
 import { formatMoney } from '../../lib/money';
 import { Button } from '../../components/ui/Button';
-import { Input, Label, Select } from '../../components/ui/Input';
+import { Select } from '../../components/ui/Input';
 import { Pagination } from '../../components/ui/Pagination';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { useAppContext } from '../../components/AppContext';
+import { GroupByControl } from '../../components/shared/GroupByControl';
+import { FilterBar } from '../../components/shared/FilterBar';
 import { uploadUrl } from '../../lib/api';
 import { ClaimStatus, UserRole } from '../../types';
 import { TeamAnalytics } from '../../components/shared/TeamAnalytics';
@@ -48,7 +50,6 @@ export function Receipts() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'highest' | 'lowest' | 'missing'>('newest');
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptRecord | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [groupBy, setGroupBy] = useState<'none' | 'member' | 'client'>('none');
@@ -177,36 +178,6 @@ export function Receipts() {
 
   const totalPages = Math.ceil(filteredReceipts.length / itemsPerPage);
   const paginatedReceipts = filteredReceipts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const advancedFilterCount = [
-    selectedMember,
-    claimStatusFilter,
-    claimTypeFilter,
-    clientFilter,
-    dateFrom || dateTo,
-    amountMin || amountMax,
-  ].filter(Boolean).length;
-  const hasAdvancedFilters = advancedFilterCount > 0;
-  const hasAnyFilters = Boolean(
-    searchTerm || selectedCategory || receiptStatus !== 'all' || hasAdvancedFilters
-  );
-
-  const clearAdvancedFilters = () => {
-    setSelectedMember('');
-    setClaimStatusFilter('');
-    setClaimTypeFilter('');
-    setClientFilter('');
-    setAmountMin('');
-    setAmountMax('');
-    setDateFrom('');
-    setDateTo('');
-  };
-
-  const clearAllFilters = () => {
-    setSearchTerm('');
-    setSelectedCategory('');
-    setReceiptStatus('all');
-    clearAdvancedFilters();
-  };
 
   const applyThisMonth = () => {
     const now = new Date();
@@ -372,20 +343,13 @@ export function Receipts() {
     </div>
   );
 
+  const groupByOptions = [
+    { value: 'none', label: 'List', icon: 'view_list' },
+    { value: 'client', label: 'By Client', icon: 'domain' },
+    ...(canGroupByMember ? [{ value: 'member', label: 'By Team Member', icon: 'person' }] : []),
+  ];
   const groupControl = (
-    <div className="flex items-center gap-2">
-      <span className="material-symbols-outlined text-[18px] text-outline">workspaces</span>
-      <Select
-        aria-label="Group expenses"
-        className="w-full sm:w-48"
-        value={groupBy}
-        onChange={e => setGroupBy(e.target.value as typeof groupBy)}
-      >
-        <option value="none">No grouping</option>
-        {canGroupByMember && <option value="member">By team member</option>}
-        <option value="client">By client</option>
-      </Select>
-    </div>
+    <GroupByControl value={groupBy} options={groupByOptions} onChange={v => setGroupBy(v as typeof groupBy)} />
   );
 
   return (
@@ -399,6 +363,7 @@ export function Receipts() {
               : 'Review individual expenses, linked claims, and the supporting receipts behind them.'}
           </p>
         </div>
+        <div className="shrink-0">{groupControl}</div>
       </div>
 
       {isApprover && (
@@ -425,16 +390,6 @@ export function Receipts() {
         </div>
       )}
 
-      {isApprover && scope === 'team' && (
-        <TeamAnalytics
-          members={teamMembers}
-          claims={claims}
-          lineItems={lineItems}
-          title="Team Expense Analytics"
-          description="Compare reported expenses, reimbursements, and receipt completeness across direct reports."
-        />
-      )}
-
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="p-4">
           <p className="font-label-sm text-outline uppercase tracking-wider">Total Expense Amount</p>
@@ -458,135 +413,68 @@ export function Receipts() {
         </Card>
       </div>
 
-      {/* Filter Bar */}
-      <div className="relative rounded-xl border border-outline-variant bg-white p-4">
-        <div className="flex flex-col lg:flex-row gap-3">
-          <div className="relative flex-1 min-w-0">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline">search</span>
-            <Input
-              className="pl-10"
-              type="text"
-              placeholder="Search vendor, purpose, OR number, or claim..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
+      <FilterBar
+        searchValue={searchTerm}
+        onSearchChange={setSearchTerm}
+        searchPlaceholder="Search vendor, purpose, OR number, or claim..."
+        popoverDescription="Narrow expenses using claim and purchase details."
+        quickFilters={[
+          {
+            type: 'select', key: 'category', label: 'Category', placeholder: 'All Categories',
+            value: selectedCategory, onChange: setSelectedCategory,
+            options: categoryOptions.map(c => ({ value: c, label: c })),
+          },
+          {
+            type: 'select', key: 'receiptStatus', label: 'Receipt status', placeholder: 'All Receipts',
+            value: receiptStatus === 'all' ? '' : receiptStatus,
+            onChange: v => setReceiptStatus((v || 'all') as typeof receiptStatus),
+            options: [{ value: 'attached', label: 'Receipt Attached' }, { value: 'missing', label: 'Missing Receipt' }],
+          },
+        ]}
+        popoverExtra={
+          <div className="mb-5">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-outline mb-2">Quick views</p>
+            <div className="flex flex-wrap gap-2">
+              <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setReceiptStatus('missing')}>Missing receipts</button>
+              <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={applyThisMonth}>This month</button>
+              <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setClaimStatusFilter(isFinance ? ClaimStatus.PROCESSING : ClaimStatus.PENDING_APPROVAL)}>{isFinance ? 'In processing' : 'Pending claims'}</button>
+              <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setAmountMin('1000')}>High-value expenses</button>
+            </div>
           </div>
-          <Select
-            aria-label="Filter expenses by category"
-            className="w-full lg:w-44"
-            value={selectedCategory}
-            onChange={e => setSelectedCategory(e.target.value)}
-          >
-            <option value="">All Categories</option>
-            {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
-          </Select>
-          <Select
-            aria-label="Filter by receipt status"
-            className="w-full lg:w-44"
-            value={receiptStatus}
-            onChange={e => setReceiptStatus(e.target.value as typeof receiptStatus)}
-          >
-            <option value="all">All Receipts</option>
-            <option value="attached">Receipt Attached</option>
-            <option value="missing">Missing Receipt</option>
-          </Select>
-          <div className="relative w-full lg:w-auto">
-            <Button
-              variant="outline"
-              className={`w-full lg:w-auto gap-2 justify-center ${hasAdvancedFilters ? 'border-primary text-primary bg-primary/5' : ''}`}
-              onClick={() => setShowAdvancedFilters(current => !current)}
-              aria-expanded={showAdvancedFilters}
-            >
-              <span className="material-symbols-outlined text-[18px]">tune</span>
-              Filters
-              {advancedFilterCount > 0 && (
-                <span className="min-w-5 h-5 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center">
-                  {advancedFilterCount}
-                </span>
-              )}
-            </Button>
-
-            {showAdvancedFilters && (
-              <div className="absolute right-0 top-full mt-2 z-30 w-[min(520px,calc(100vw-3rem))] rounded-xl border border-outline-variant bg-white shadow-xl p-5">
-                <div className="flex items-start justify-between gap-4 mb-4">
-                  <div>
-                    <h3 className="font-headline-sm text-on-surface">More filters</h3>
-                    <p className="text-xs text-outline mt-1">Narrow expenses using claim and purchase details.</p>
-                  </div>
-                  <button type="button" aria-label="Close filters" className="text-outline hover:text-on-surface" onClick={() => setShowAdvancedFilters(false)}>
-                    <span className="material-symbols-outlined">close</span>
-                  </button>
-                </div>
-
-                <div className="mb-5">
-                  <p className="text-[11px] font-bold uppercase tracking-wider text-outline mb-2">Quick views</p>
-                  <div className="flex flex-wrap gap-2">
-                    <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setReceiptStatus('missing')}>Missing receipts</button>
-                    <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={applyThisMonth}>This month</button>
-                    <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setClaimStatusFilter(isFinance ? ClaimStatus.PROCESSING : ClaimStatus.PENDING_APPROVAL)}>{isFinance ? 'In processing' : 'Pending claims'}</button>
-                    <button className="px-3 py-1.5 rounded-full border border-outline-variant text-xs font-semibold hover:border-primary hover:text-primary" onClick={() => setAmountMin('1000')}>High-value expenses</button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <Label>Claim status</Label>
-                    <Select value={claimStatusFilter} onChange={e => setClaimStatusFilter(e.target.value)}>
-                      <option value="">All Statuses</option>
-                      {(isFinance ? FINANCE_VISIBLE_STATUSES : Object.values(ClaimStatus)).map(status => <option key={status} value={status}>{status}</option>)}
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Claim type</Label>
-                    <Select value={claimTypeFilter} onChange={e => setClaimTypeFilter(e.target.value)}>
-                      <option value="">All Types</option>
-                      <option value="Reimbursement">Reimbursement</option>
-                      <option value="Transport Reimbursement">Transport Reimbursement</option>
-                      <option value="Cash Advance">Cash Advance</option>
-                      <option value="Liquidation">Liquidation</option>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Client</Label>
-                    <Select value={clientFilter} onChange={e => setClientFilter(e.target.value)}>
-                      <option value="">All Clients</option>
-                      {clientOptions.map(client => <option key={client} value={client}>{client}</option>)}
-                    </Select>
-                  </div>
-                  {(isFinance || (isApprover && scope === 'team')) && (
-                    <div>
-                      <Label>{isFinance ? 'Requestor' : 'Team member'}</Label>
-                      <Select value={selectedMember} onChange={e => setSelectedMember(e.target.value)}>
-                        <option value="">{isFinance ? 'All Requestors' : 'All Team Members'}</option>
-                        {availableMembers.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
-                      </Select>
-                    </div>
-                  )}
-                  <div>
-                    <Label>Purchased from</Label>
-                    <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-                  </div>
-                  <div>
-                    <Label>Purchased to</Label>
-                    <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
-                  </div>
-                  <div>
-                    <Label>Minimum amount</Label>
-                    <Input type="number" min="0" placeholder="₱0" value={amountMin} onChange={e => setAmountMin(e.target.value)} />
-                  </div>
-                  <div>
-                    <Label>Maximum amount</Label>
-                    <Input type="number" min="0" placeholder="No maximum" value={amountMax} onChange={e => setAmountMax(e.target.value)} />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between gap-3 mt-5 pt-4 border-t border-outline-variant">
-                  <Button variant="ghost" size="sm" onClick={clearAdvancedFilters} disabled={!hasAdvancedFilters}>Clear</Button>
-                  <Button size="sm" onClick={() => setShowAdvancedFilters(false)}>Done</Button>
-                </div>
-              </div>
-            )}
-          </div>
+        }
+        advancedFilters={[
+          {
+            type: 'select', key: 'claimStatus', label: 'Claim status', placeholder: 'All Statuses',
+            value: claimStatusFilter, onChange: setClaimStatusFilter,
+            options: (isFinance ? FINANCE_VISIBLE_STATUSES : Object.values(ClaimStatus)).map(s => ({ value: s, label: s })),
+          },
+          {
+            type: 'select', key: 'claimType', label: 'Claim type', placeholder: 'All Types',
+            value: claimTypeFilter, onChange: setClaimTypeFilter,
+            options: ['Reimbursement', 'Transport Reimbursement', 'Cash Advance', 'Liquidation'].map(t => ({ value: t, label: t })),
+          },
+          {
+            type: 'select', key: 'client', label: 'Client', placeholder: 'All Clients',
+            value: clientFilter, onChange: setClientFilter,
+            options: clientOptions.map(c => ({ value: c, label: c })),
+          },
+          ...((isFinance || (isApprover && scope === 'team')) ? [{
+            type: 'select' as const, key: 'member', label: isFinance ? 'Requestor' : 'Team member',
+            placeholder: isFinance ? 'All Requestors' : 'All Team Members',
+            value: selectedMember, onChange: setSelectedMember,
+            options: availableMembers.map(m => ({ value: m.id, label: m.name })),
+          }] : []),
+          {
+            type: 'dateRange', key: 'purchased', label: 'Purchased',
+            fromValue: dateFrom, toValue: dateTo, onFromChange: setDateFrom, onToChange: setDateTo,
+          },
+          {
+            type: 'numberRange', key: 'amount', label: 'Amount',
+            minValue: amountMin, maxValue: amountMax, onMinChange: setAmountMin, onMaxChange: setAmountMax,
+            formatValue: v => formatMoney(Number(v)),
+          },
+        ]}
+        extraRight={
           <Select
             aria-label="Sort expenses"
             className="w-full lg:w-44"
@@ -599,23 +487,8 @@ export function Receipts() {
             <option value="lowest">Lowest amount</option>
             <option value="missing">Missing receipts first</option>
           </Select>
-        </div>
-
-        {hasAnyFilters && (
-          <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-outline-variant">
-            <span className="text-xs font-semibold text-outline">Filtered by</span>
-            {selectedCategory && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setSelectedCategory('')}>{selectedCategory}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            {receiptStatus !== 'all' && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setReceiptStatus('all')}>{receiptStatus === 'attached' ? 'Receipt attached' : 'Missing receipt'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            {claimStatusFilter && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setClaimStatusFilter('')}>{claimStatusFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            {claimTypeFilter && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setClaimTypeFilter('')}>{claimTypeFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            {clientFilter && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setClientFilter('')}>{clientFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            {selectedMember && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => setSelectedMember('')}>{users.find(user => user.id === selectedMember)?.name || 'Requestor'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            {(dateFrom || dateTo) && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => { setDateFrom(''); setDateTo(''); }}>{dateFrom || 'Any date'} – {dateTo || 'Today'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            {(amountMin || amountMax) && <button className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold" onClick={() => { setAmountMin(''); setAmountMax(''); }}>{amountMin ? `From ${formatMoney(Number(amountMin))}` : 'Any minimum'}{amountMax ? ` to ${formatMoney(Number(amountMax))}` : ''}<span className="material-symbols-outlined text-[14px]">close</span></button>}
-            <button className="text-xs font-semibold text-outline hover:text-primary ml-1" onClick={clearAllFilters}>Clear all</button>
-          </div>
-        )}
-      </div>
+        }
+      />
 
       {/* Expense records */}
       {filteredReceipts.length === 0 ? (
@@ -631,7 +504,6 @@ export function Receipts() {
               {receiptGroups.length} {groupBy === 'member' ? (receiptGroups.length === 1 ? 'team member' : 'team members') : (receiptGroups.length === 1 ? 'client' : 'clients')}
               {' · '}{filteredReceipts.length} record{filteredReceipts.length === 1 ? '' : 's'}
             </p>
-            {groupControl}
           </div>
           {receiptGroups.map(group => (
             <Card key={group.key} className="overflow-hidden">
@@ -667,7 +539,6 @@ export function Receipts() {
           </div>
           <div className="flex items-center gap-3">
             <span className="font-label-sm text-outline whitespace-nowrap">{filteredReceipts.length} records</span>
-            {groupControl}
             <div className="flex rounded-lg border border-outline-variant bg-white p-1" aria-label="Expense view">
               <button
                 type="button"
@@ -697,6 +568,16 @@ export function Receipts() {
           onPageChange={setCurrentPage}
         />
         </Card>
+      )}
+
+      {isApprover && scope === 'team' && (
+        <TeamAnalytics
+          members={teamMembers}
+          claims={claims}
+          lineItems={lineItems}
+          title="Team Expense Analytics"
+          description="Compare reported expenses, reimbursements, and receipt completeness across direct reports."
+        />
       )}
 
       {/* Preview Modal */}

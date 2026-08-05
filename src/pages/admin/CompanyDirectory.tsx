@@ -14,7 +14,9 @@ export function CompanyDirectory() {
   const [searchTerm, setSearchTerm] = useState('');
   const [industryFilter, setIndustryFilter] = useState('');
   const [completenessFilter, setCompletenessFilter] = useState('');
+  const [reviewFilter, setReviewFilter] = useState<'' | 'pending' | 'reviewed'>('');
   const [sortOrder, setSortOrder] = useState<'name' | 'industry'>('name');
+  const [markingReviewedId, setMarkingReviewedId] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
@@ -30,16 +32,31 @@ export function CompanyDirectory() {
   const [contactEmail, setContactEmail] = useState('');
 
   const industries = Array.from(new Set(companies.map(company => company.industry).filter((value): value is string => Boolean(value)))).sort();
+  const pendingCount = companies.filter(c => c.pendingReview).length;
   const filtered = companies.filter(c => {
     const matchesSearch = [c.name, c.industry, c.notes, c.address, c.contactPerson, c.contactEmail].some(v => (v || '').toLowerCase().includes(searchTerm.toLowerCase()));
     const matchesIndustry = !industryFilter || c.industry === industryFilter;
     const isComplete = Boolean(c.contactPerson && c.contactEmail && c.address);
     const matchesCompleteness = !completenessFilter || (completenessFilter === 'complete' ? isComplete : !isComplete);
-    return matchesSearch && matchesIndustry && matchesCompleteness;
+    const matchesReview = !reviewFilter || (reviewFilter === 'pending' ? Boolean(c.pendingReview) : !c.pendingReview);
+    return matchesSearch && matchesIndustry && matchesCompleteness && matchesReview;
   }).sort((a, b) => sortOrder === 'industry'
     ? (a.industry || '').localeCompare(b.industry || '') || a.name.localeCompare(b.name)
     : a.name.localeCompare(b.name));
-  const hasFilters = Boolean(industryFilter || completenessFilter);
+  const hasFilters = Boolean(industryFilter || completenessFilter || reviewFilter);
+
+  const markReviewed = async (company: Company) => {
+    setMarkingReviewedId(company.id);
+    try {
+      await updateCompany(company.id, { pending_review: false });
+      await refresh();
+      addToast(`${company.name} marked as reviewed.`, 'success');
+    } catch (err: any) {
+      addToast(err?.message || 'Could not update the company.', 'error');
+    } finally {
+      setMarkingReviewedId(null);
+    }
+  };
 
   const openAdd = () => {
     setEditing(null);
@@ -140,7 +157,18 @@ export function CompanyDirectory() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
           <span className="font-label-sm text-primary font-bold tracking-wider uppercase">System Administration</span>
-          <h1 className="font-display text-display text-on-surface mt-1">Company Directory</h1>
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
+            <h1 className="font-display text-display text-on-surface">Company Directory</h1>
+            {pendingCount > 0 && (
+              <button
+                onClick={() => setReviewFilter('pending')}
+                className="inline-flex items-center gap-1.5 rounded-full bg-tertiary-container/60 text-on-tertiary-container px-3 py-1 text-xs font-bold hover:bg-tertiary-container transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">pending_actions</span>
+                {pendingCount} pending review
+              </button>
+            )}
+          </div>
           <p className="text-body-md text-outline mt-1">Client and partner entities — auto-created from meeting minutes and editable here.</p>
         </div>
         <div className="flex gap-2">
@@ -166,15 +194,17 @@ export function CompanyDirectory() {
           <div className="min-w-[240px] flex-1 max-w-xl"><Input type="text" placeholder="Search name, contact, location, or notes..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
           <Button variant="outline" className="gap-2" onClick={() => setShowFilters(open => !open)}><span className="material-symbols-outlined text-[18px]">filter_list</span>Filters{hasFilters ? ' (active)' : ''}</Button>
           <Select className="w-40" value={sortOrder} onChange={e => setSortOrder(e.target.value as typeof sortOrder)} aria-label="Sort company directory"><option value="name">Name A–Z</option><option value="industry">Industry A–Z</option></Select>
-          {(searchTerm || hasFilters || sortOrder !== 'name') && <button className="text-xs font-semibold text-primary hover:underline" onClick={() => { setSearchTerm(''); setIndustryFilter(''); setCompletenessFilter(''); setSortOrder('name'); }}>Clear all</button>}
+          {(searchTerm || hasFilters || sortOrder !== 'name') && <button className="text-xs font-semibold text-primary hover:underline" onClick={() => { setSearchTerm(''); setIndustryFilter(''); setCompletenessFilter(''); setReviewFilter(''); setSortOrder('name'); }}>Clear all</button>}
         </div>
-        {showFilters && <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-outline-variant pt-4">
+        {showFilters && <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 border-t border-outline-variant pt-4">
           <div><Label>Industry</Label><Select value={industryFilter} onChange={e => setIndustryFilter(e.target.value)}><option value="">All industries</option>{industries.map(item => <option key={item}>{item}</option>)}</Select></div>
           <div><Label>Directory Details</Label><Select value={completenessFilter} onChange={e => setCompletenessFilter(e.target.value)}><option value="">Any completeness</option><option value="complete">Complete contact details</option><option value="missing">Missing contact details</option></Select></div>
+          <div><Label>Review status</Label><Select value={reviewFilter} onChange={e => setReviewFilter(e.target.value as typeof reviewFilter)}><option value="">Any status</option><option value="pending">Pending review</option><option value="reviewed">Reviewed</option></Select></div>
         </div>}
         {hasFilters && <div className="mt-3 flex flex-wrap gap-2">
           {industryFilter && <button onClick={() => setIndustryFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{industryFilter}<span className="material-symbols-outlined text-[14px]">close</span></button>}
           {completenessFilter && <button onClick={() => setCompletenessFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{completenessFilter === 'complete' ? 'Complete details' : 'Missing details'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
+          {reviewFilter && <button onClick={() => setReviewFilter('')} className="inline-flex items-center gap-1 rounded-full bg-primary/8 text-primary px-3 py-1 text-xs font-semibold">{reviewFilter === 'pending' ? 'Pending review' : 'Reviewed'}<span className="material-symbols-outlined text-[14px]">close</span></button>}
         </div>}
       </Card>
 
@@ -206,14 +236,38 @@ export function CompanyDirectory() {
                 </tr>
               ) : filtered.map(company => (
                 <tr key={company.id} className="hover:bg-primary-container/5 transition-colors">
-                  <td className="px-6 py-4 font-bold text-on-surface">{company.name}</td>
+                  <td className="px-6 py-4 font-bold text-on-surface">
+                    <div className="flex items-center gap-2">
+                      {company.name}
+                      {company.pendingReview && (
+                        <span
+                          title="Auto-created from a requestor's meeting minutes — not yet reviewed by an admin."
+                          className="inline-flex items-center gap-1 rounded-full bg-tertiary-container/60 text-on-tertiary-container px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide whitespace-nowrap"
+                        >
+                          Pending review
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-6 py-4 text-on-surface-variant text-sm">{company.industry || '—'}</td>
                   <td className="px-6 py-4 text-on-surface-variant text-sm">{company.contactPerson || '—'}</td>
                   <td className="px-6 py-4 text-on-surface-variant text-sm">{company.contactEmail || '—'}</td>
                   <td className="px-6 py-4 text-on-surface-variant text-sm max-w-[200px] truncate" title={company.address}>{company.address || '—'}</td>
                   <td className="px-6 py-4 text-on-surface-variant text-sm max-w-[200px] truncate" title={company.notes}>{company.notes || '—'}</td>
                   <td className="px-6 py-4 text-right">
-                    <Button variant="outline" size="sm" onClick={() => openEdit(company)}>Edit</Button>
+                    <div className="flex justify-end gap-2">
+                      {company.pendingReview && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={markingReviewedId === company.id}
+                          onClick={() => markReviewed(company)}
+                        >
+                          {markingReviewedId === company.id ? 'Marking…' : 'Mark reviewed'}
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" onClick={() => openEdit(company)}>Edit</Button>
+                    </div>
                   </td>
                 </tr>
               ))}

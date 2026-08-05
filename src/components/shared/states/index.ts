@@ -32,7 +32,7 @@ export * from './ErrorState';
  *         icon="receipt_long"
  *         title="No claims found"
  *         description="You haven't submitted any reimbursement claims yet."
- *         action={<Button>Submit New Claim</Button>}
+ *         action={<Button>New Claim</Button>}
  *       />
  *     );
  *   }

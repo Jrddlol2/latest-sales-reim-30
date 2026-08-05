@@ -33,6 +33,77 @@ function generateUniqueKey(label: string, existingKeys: string[]): string {
 
 const CLAIM_TYPES: ClaimType[] = ['Reimbursement', 'Transport Reimbursement', 'Cash Advance', 'Liquidation'];
 
+/**
+ * Add / rename / remove the choices for a dropdown field. Bound directly to
+ * `editForm.options`; the same list is what DynamicFieldRenderer offers in
+ * every form the field appears in (e.g. the MoM Category dropdown shows up in
+ * both the standalone MoM form and the MoM step inside Submit Claim), so a
+ * change here propagates everywhere with no code change. Removing an option
+ * only stops it being offered in new entries — records that already stored the
+ * old value keep displaying it.
+ */
+function OptionsEditor({ editForm, setEditForm }: { editForm: Partial<FieldDefinition>; setEditForm: any }) {
+  const [draft, setDraft] = useState('');
+  const list = editForm.options || [];
+  const setList = (next: string[]) => setEditForm((p: any) => ({ ...p, options: next }));
+
+  // A field that pulls from a Master Data catalog gets its choices from there,
+  // not from this list — point the admin at the right screen instead.
+  if (editForm.master_data_entity) {
+    return (
+      <p className="mt-2 pt-2 border-t border-outline-variant text-[12px] text-tertiary">
+        Choices come from the <strong>{editForm.master_data_entity}</strong> catalog — edit them under Master Data.
+      </p>
+    );
+  }
+
+  const add = () => {
+    const value = draft.trim();
+    if (!value) return;
+    if (list.some(o => o.toLowerCase() === value.toLowerCase())) { setDraft(''); return; }
+    setList([...list, value]);
+    setDraft('');
+  };
+
+  return (
+    <div className="mt-2 pt-2 border-t border-outline-variant">
+      <p className="text-xs font-semibold text-outline mb-1">Dropdown options</p>
+      <div className="flex flex-col gap-1">
+        {list.map((opt, i) => (
+          <div key={i} className="flex items-center gap-1">
+            <Input
+              value={opt}
+              aria-label={`Option ${i + 1}`}
+              onChange={e => setList(list.map((o, idx) => (idx === i ? e.target.value : o)))}
+              className="text-xs py-1"
+            />
+            <button
+              type="button"
+              aria-label={`Remove ${opt}`}
+              title="Remove option"
+              onClick={() => setList(list.filter((_, idx) => idx !== i))}
+              className="text-outline hover:text-error shrink-0"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+          </div>
+        ))}
+        {list.length === 0 && <p className="text-[11px] text-outline italic">No options yet — add at least one.</p>}
+      </div>
+      <div className="flex items-center gap-1 mt-1.5">
+        <Input
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          placeholder="Add option…"
+          className="text-xs py-1"
+        />
+        <button type="button" onClick={add} className="text-primary hover:underline text-xs font-semibold shrink-0 px-1">Add</button>
+      </div>
+    </div>
+  );
+}
+
 function ClaimTypeCheckboxes({ editForm, setEditForm }: { editForm: Partial<FieldDefinition>, setEditForm: any }) {
   const toggleType = (type: ClaimType) => {
     setEditForm((prev: any) => {
@@ -95,6 +166,9 @@ export function FieldDefinitionsAdmin() {
           active: editForm.active ?? true,
           display_order: filteredFields.length + 1,
           allow_other: editForm.allow_other,
+          // A dropdown's choices are meaningless (and shouldn't be sent) once
+          // it's backed by a Master Data catalog instead of its own list.
+          options: editForm.input_type === 'dropdown' && !editForm.master_data_entity ? editForm.options : undefined,
           master_data_entity: editForm.master_data_entity,
           // applicableClaimTypes only means anything on a claim field.
           applicableClaimTypes: selectedEntity === 'claim' ? editForm.applicableClaimTypes : undefined,
@@ -106,6 +180,7 @@ export function FieldDefinitionsAdmin() {
           required: editForm.required,
           active: editForm.active,
           allow_other: editForm.allow_other,
+          options: editForm.input_type === 'dropdown' && !editForm.master_data_entity ? editForm.options : undefined,
           master_data_entity: editForm.master_data_entity,
           applicableClaimTypes: selectedEntity === 'claim' ? editForm.applicableClaimTypes : undefined,
         });
@@ -151,15 +226,23 @@ export function FieldDefinitionsAdmin() {
       </div>
       <Card>
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
+          {/* table-fixed makes the <th> width hints below authoritative —
+              under the default auto layout, a wide input's intrinsic content
+              width (e.g. the disabled Key field) overrides percentage hints
+              and starves Settings regardless of what's requested here. */}
+          <table className="w-full table-fixed text-left min-w-[900px]">
             <thead className="bg-surface-container-low text-outline font-label-sm uppercase tracking-wider">
               <tr>
-                <th className="px-6 py-4">Label</th>
-                <th className="px-6 py-4">Key</th>
-                <th className="px-6 py-4">Input Type</th>
-                <th className="px-6 py-4 text-center">Settings</th>
-                <th className="px-6 py-4 text-center">Active</th>
-                <th className="px-6 py-4 text-right">Actions</th>
+                <th className="px-6 py-4 w-[16%]">Label</th>
+                <th className="px-6 py-4 w-[14%]">Key</th>
+                <th className="px-6 py-4 w-[12%]">Input Type</th>
+                {/* Settings holds the richest content per row — checkboxes plus,
+                    for dropdowns, the full add/rename/remove options editor —
+                    so it gets the largest fixed share instead of the auto
+                    table layout starving it in favor of Key/Actions. */}
+                <th className="px-6 py-4 w-[38%] text-center">Settings</th>
+                <th className="px-6 py-4 w-[8%] text-center">Active</th>
+                <th className="px-6 py-4 w-[12%] text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant">
@@ -192,6 +275,7 @@ export function FieldDefinitionsAdmin() {
                       <td className="px-6 py-3">
                          <label className="flex items-center gap-2 mb-1 text-sm"><input type="checkbox" checked={editForm.required} onChange={e => setEditForm(p => ({...p, required: e.target.checked}))} /> Required</label>
                          {editForm.input_type === 'dropdown' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editForm.allow_other} onChange={e => setEditForm(p => ({...p, allow_other: e.target.checked}))} /> Allow "Other"</label>}
+                         {editForm.input_type === 'dropdown' && <OptionsEditor editForm={editForm} setEditForm={setEditForm} />}
                          {selectedEntity === 'claim' && <ClaimTypeCheckboxes editForm={editForm} setEditForm={setEditForm} />}
                       </td>
                       <td className="px-6 py-3 text-center">
@@ -213,6 +297,11 @@ export function FieldDefinitionsAdmin() {
                         {fd.required && <span className="block text-error">Required</span>}
                         {fd.allow_other && <span className="block text-primary">Allows "Other"</span>}
                         {fd.master_data_entity && <span className="block text-tertiary">Uses {fd.master_data_entity} catalog</span>}
+                        {fd.input_type === 'dropdown' && !fd.master_data_entity && (
+                          <span className="block text-outline" title={(fd.options || []).join(', ')}>
+                            {(fd.options || []).length} option{(fd.options || []).length === 1 ? '' : 's'}
+                          </span>
+                        )}
                         {selectedEntity === 'claim' && (
                           <span className="block text-[12px] text-outline mt-1 font-semibold">
                             {(!fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0) 
@@ -276,6 +365,7 @@ export function FieldDefinitionsAdmin() {
                    <td className="px-6 py-3">
                       <label className="flex items-center gap-2 mb-1 text-sm"><input type="checkbox" checked={editForm.required || false} onChange={e => setEditForm(p => ({...p, required: e.target.checked}))} /> Required</label>
                       {editForm.input_type === 'dropdown' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editForm.allow_other || false} onChange={e => setEditForm(p => ({...p, allow_other: e.target.checked}))} /> Allow "Other"</label>}
+                      {editForm.input_type === 'dropdown' && <OptionsEditor editForm={editForm} setEditForm={setEditForm} />}
                       {selectedEntity === 'claim' && <ClaimTypeCheckboxes editForm={editForm} setEditForm={setEditForm} />}
                    </td>
                    <td className="px-6 py-3 text-center">

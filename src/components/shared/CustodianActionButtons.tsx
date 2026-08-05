@@ -97,11 +97,11 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
   const handleConfirm = async () => {
     if (!activeModal) return;
 
-    // A claim code must be generated (and handed to the requestor) before the
+    // A release code must be generated (and handed to the requestor) before the
     // claim can be released — it's the code the requestor quotes back to confirm
     // receipt. Generating it is an explicit step in this same modal.
     if (activeModal === 'markReady' && !claim.releaseCode) {
-      setError('Generate the claim code first, then give it to the requestor.');
+      setError('Generate the release code first, then give it to the requestor.');
       return;
     }
     if (activeModal === 'markReady' && !paymentMethod) {
@@ -124,7 +124,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
     switch (activeModal) {
       case 'markReady':
         newStatus = ClaimStatus.READY_FOR_CLAIM;
-        toastMsg = `Marked ready. Claim code ${claim.releaseCode} — make sure the requestor has it.`;
+        toastMsg = `Marked ready. Release code ${claim.releaseCode} — make sure the requestor has it.`;
         updates = { paymentMethod };
         break;
       case 'release':
@@ -189,8 +189,8 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
         isOpen={activeModal === 'return'}
         onClose={() => setActiveModal(null)}
         onConfirm={handleCorrectionDecision}
-        title="Return to Requestor"
-        confirmLabel={isSubmitting ? 'Returning...' : 'Return for Revision'}
+        title="Return for Revision"
+        confirmLabel={isSubmitting ? 'Returning...' : 'Return to Requestor'}
         variant="warning"
         disabled={isSubmitting}
       >
@@ -218,7 +218,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
         onClose={() => setActiveModal(null)}
         onConfirm={handleCorrectionDecision}
         title="Reject Before Release"
-        confirmLabel={isSubmitting ? 'Rejecting...' : 'Reject Request'}
+        confirmLabel={isSubmitting ? 'Rejecting...' : 'Reject Claim'}
         variant="error"
         disabled={isSubmitting}
       >
@@ -324,7 +324,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
                 </p>
               </div>
               <div>
-                <label className="block text-label-md text-on-surface mb-1">Claim Code</label>
+                <label className="block text-label-md text-on-surface mb-1">Release Code</label>
                 {claim.releaseCode ? (
                   <div className="rounded-lg border border-primary/40 bg-primary-container/20 p-3">
                     <div className="flex items-center justify-between gap-3">
@@ -350,7 +350,7 @@ export function CustodianActionButtons({ claim, size = 'sm' }: CustodianActionBu
                     className="w-full p-3 rounded-lg border border-dashed border-outline-variant text-primary font-label-md hover:bg-primary/5 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-[18px]">key</span>
-                    {generatingCode ? 'Generating…' : 'Generate Claim Code'}
+                    {generatingCode ? 'Generating…' : 'Generate Release Code'}
                   </button>
                 )}
                 {error && <p className="text-error text-body-sm mt-2 flex items-center"><span className="material-symbols-outlined text-[16px] mr-1">error</span>{error}</p>}

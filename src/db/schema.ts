@@ -268,6 +268,12 @@ export const companies = pgTable('companies', {
   // Informational only — never read for approval routing. See serverTypes.ts's
   // own comment on this field; the DB layer must not add a code path that does.
   defaultApproverId: text('default_approver_id').references(() => users.id),
+  // True for a company auto-created from free-text entry (a requestor typing
+  // a client name that isn't in the directory yet) rather than deliberately
+  // added by an admin — surfaces in Company Directory as a to-review queue.
+  // Admin-created companies (POST /api/companies) default this false.
+  pendingReview: boolean('pending_review').notNull().default(false),
+  createdBy: text('created_by').references(() => users.id),
 });
 
 // --- master data catalogs -------------------------------------------------

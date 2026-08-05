@@ -7,16 +7,19 @@ import { Card, CardHeader, CardContent } from '../../components/ui/Card';
 import { cn } from '../../components/ui/Button';
 import { useAppContext } from '../../components/AppContext';
 import { DynamicFieldRenderer } from '../../components/shared/DynamicFieldRenderer';
+import { validateDynamicFields } from '../../lib/dynamicFieldValidation';
 import { useToast } from '../../components/shared/ToastContext';
 import { ConfirmModal } from '../../components/shared/ConfirmModal';
 import { MomClientPreviewModal } from '../../components/shared/MomClientPreviewModal';
 import { ContactPersonsField } from '../../components/shared/ContactPersonsField';
+import { CompanyPicker } from '../../components/shared/CompanyPicker';
 import { ClaimStatus, ClaimType, MOM, MomDocumentType, DOCUMENT_TYPE_LABEL } from '../../types';
 import { exportMomPdf, exportMomWord } from '../../lib/momExport';
 import { MomContact, serializeContacts, joinDesignations } from '../../lib/momContacts';
 import { submitClaimFlow, submitCashAdvanceFlow, submitLiquidationFlow, DraftLineItem } from '../../lib/api';
 import { formatMoney } from '../../lib/money';
 import { EXPENSE_CATEGORIES } from '../../lib/expenseCategories';
+import { isClaimTypeEnabled, COMING_SOON_MESSAGE } from '../../lib/featureFlags';
 import {
   getReimbursementDateError,
   getTodayIsoDate,
@@ -40,7 +43,11 @@ export function SubmitClaim() {
   const { currentUser, fieldDefinitions, users, claims, companies, masterData, paymentMethods, refresh } = useAppContext();
   const { addToast } = useToast();
   const [searchParams] = useSearchParams();
-  const typeFromQuery = TYPE_PARAM_MAP[searchParams.get('type') ?? ''];
+  const rawTypeFromQuery = TYPE_PARAM_MAP[searchParams.get('type') ?? ''];
+  // A deep link into a soft-launched-off type (e.g. /claims/new?type=liquidation)
+  // must not skip the picker straight into a form the user can't submit — treat
+  // it as if no type was given and surface the "coming soon" notice on mount.
+  const typeFromQuery = rawTypeFromQuery && isClaimTypeEnabled(rawTypeFromQuery) ? rawTypeFromQuery : undefined;
   const reimbursementIntent = searchParams.get('intent') === 'reimbursement';
 
   const [claimType, setClaimType] = useState<ClaimType>(typeFromQuery ?? 'Reimbursement');
@@ -48,6 +55,14 @@ export function SubmitClaim() {
   // Meeting step (2) rather than Details & Items (1) — see stepFlow below.
   const [step, setStep] = useState(typeFromQuery ? (typeFromQuery === 'Reimbursement' ? 2 : 1) : 0);
   const [loading, setLoading] = useState(false);
+  // Non-null while the "coming soon" popup is showing; holds the type name.
+  const [comingSoonType, setComingSoonType] = useState<ClaimType | null>(null);
+
+  React.useEffect(() => {
+    if (rawTypeFromQuery && !isClaimTypeEnabled(rawTypeFromQuery)) {
+      setComingSoonType(rawTypeFromQuery);
+    }
+  }, [rawTypeFromQuery]);
 
   // Form State. Holds the real File alongside the preview URL â€” the server
   // needs the bytes, and an object URL can't be re-read after a reload.
@@ -73,10 +88,6 @@ export function SubmitClaim() {
   const [emailError, setEmailError] = useState('');
   const [showMomPreview, setShowMomPreview] = useState(false);
   const [previewExporting, setPreviewExporting] = useState<'pdf' | 'word' | null>(null);
-  // A known Company Directory entry can pre-fill the meeting details below
-  // (mirrors the original system's "Company Auto-Fill" MOM behavior). Default
-  // to the picker when companies exist; fall back to free text otherwise.
-  const [clientMode, setClientMode] = useState<'select' | 'custom'>('select');
   const [cashAdvanceId, setCashAdvanceId] = useState<string>('');
   const [cashAdvanceAmount, setCashAdvanceAmount] = useState<number>(0);
   const [cashAdvancePurpose, setCashAdvancePurpose] = useState('');
@@ -174,9 +185,9 @@ export function SubmitClaim() {
         fd.entity === 'claim' && fd.active &&
         (!fd.applicableClaimTypes || fd.applicableClaimTypes.length === 0 || fd.applicableClaimTypes.includes(claimType))
       );
-      const missingRequired = activeClaimFields.find(fd => fd.required && (!claimCustomFields[fd.key] || claimCustomFields[fd.key].trim() === ''));
-      if (missingRequired) {
-        addToast(`Please fill required field: ${missingRequired.label}`, 'error');
+      const { firstError } = validateDynamicFields(activeClaimFields, claimCustomFields);
+      if (firstError) {
+        addToast(firstError.message, 'error');
         return;
       }
     }
@@ -186,9 +197,9 @@ export function SubmitClaim() {
         return;
       }
       const activeMomFields = fieldDefinitions.filter(fd => fd.entity === 'mom' && fd.active);
-      const missingRequired = activeMomFields.find(fd => fd.required && (!momData[fd.key] || momData[fd.key].trim() === ''));
-      if (missingRequired) {
-        addToast(`Please fill required field: ${missingRequired.label}`, 'error');
+      const { firstError } = validateDynamicFields(activeMomFields, momData);
+      if (firstError) {
+        addToast(firstError.message, 'error');
         return;
       }
     }
@@ -392,7 +403,6 @@ export function SubmitClaim() {
         ]);
         setClaimCustomFields(fillCustomFields('claim'));
         if (companies.length > 0) {
-          setClientMode('select');
           applyCompanyDefaults(companies[0].name);
         } else {
           setMomCore(p => ({ ...p, client: p.client || 'Acme Corporation' }));
@@ -584,63 +594,88 @@ export function SubmitClaim() {
               <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">A faster receipt-based flow with no meeting minutes required.</p>
             </CardContent>
           </Card>
-          {!reimbursementIntent && <Card
-            role="button"
-            tabIndex={0}
-            aria-label="Start a cash advance request"
-            className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            onClick={() => { setClaimType('Cash Advance'); setStep(1); }}
-            onKeyDown={event => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                setClaimType('Cash Advance');
-                setStep(1);
-              }
-            }}
-          >
-            <CardContent className="p-7">
-              <div className="w-12 h-12 rounded-xl bg-primary-container/30 text-primary flex items-center justify-center mb-5">
-                <span className="material-symbols-outlined text-[28px]">payments</span>
-              </div>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="font-headline-sm">Cash Advance</h3>
-                  <p className="text-sm text-on-surface-variant mt-2">Request company funds before an upcoming business expense.</p>
-                </div>
-                <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
-              </div>
-              <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">The released amount must be liquidated after the expense.</p>
-            </CardContent>
-          </Card>}
-          {!reimbursementIntent && <Card
-            role="button"
-            tabIndex={0}
-            aria-label="Start a liquidation"
-            className="group h-full border-2 hover:border-primary hover:shadow-lg cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            onClick={() => { setClaimType('Liquidation'); setStep(1); }}
-            onKeyDown={event => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                setClaimType('Liquidation');
-                setStep(1);
-              }
-            }}
-          >
-            <CardContent className="p-7">
-              <div className="w-12 h-12 rounded-xl bg-secondary-container/60 text-on-secondary-container flex items-center justify-center mb-5">
-                <span className="material-symbols-outlined text-[28px]">account_balance_wallet</span>
-              </div>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="font-headline-sm">Liquidation</h3>
-                  <p className="text-sm text-on-surface-variant mt-2">Submit receipts and settle an existing cash advance.</p>
-                </div>
-                <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>
-              </div>
-              <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">Available when you have a released advance to settle.</p>
-            </CardContent>
-          </Card>}
+          {!reimbursementIntent && (() => {
+            const enabled = isClaimTypeEnabled('Cash Advance');
+            const open = () => { if (enabled) { setClaimType('Cash Advance'); setStep(1); } else { setComingSoonType('Cash Advance'); } };
+            return (
+              <Card
+                role="button"
+                tabIndex={0}
+                aria-label={enabled ? 'Start a cash advance request' : 'Cash Advance — coming soon'}
+                aria-disabled={!enabled}
+                className={`group h-full border-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${enabled ? 'hover:border-primary hover:shadow-lg cursor-pointer' : 'cursor-not-allowed opacity-70'}`}
+                onClick={open}
+                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } }}
+              >
+                <CardContent className="p-7">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-5 ${enabled ? 'bg-primary-container/30 text-primary' : 'bg-surface-container-high text-outline'}`}>
+                    <span className="material-symbols-outlined text-[28px]">payments</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-headline-sm">Cash Advance</h3>
+                        {!enabled && <span className="inline-flex items-center rounded-full bg-tertiary-container/60 text-on-tertiary-container px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide">Coming soon</span>}
+                      </div>
+                      <p className="text-sm text-on-surface-variant mt-2">Request company funds before an upcoming business expense.</p>
+                    </div>
+                    {enabled && <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>}
+                  </div>
+                  <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">
+                    {enabled ? 'The released amount must be liquidated after the expense.' : 'Not available to submit yet — we’ll enable this soon.'}
+                  </p>
+                </CardContent>
+              </Card>
+            );
+          })()}
+          {!reimbursementIntent && (() => {
+            const enabled = isClaimTypeEnabled('Liquidation');
+            const open = () => { if (enabled) { setClaimType('Liquidation'); setStep(1); } else { setComingSoonType('Liquidation'); } };
+            return (
+              <Card
+                role="button"
+                tabIndex={0}
+                aria-label={enabled ? 'Start a liquidation' : 'Liquidation — coming soon'}
+                aria-disabled={!enabled}
+                className={`group h-full border-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${enabled ? 'hover:border-primary hover:shadow-lg cursor-pointer' : 'cursor-not-allowed opacity-70'}`}
+                onClick={open}
+                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } }}
+              >
+                <CardContent className="p-7">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-5 ${enabled ? 'bg-secondary-container/60 text-on-secondary-container' : 'bg-surface-container-high text-outline'}`}>
+                    <span className="material-symbols-outlined text-[28px]">account_balance_wallet</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-headline-sm">Liquidation</h3>
+                        {!enabled && <span className="inline-flex items-center rounded-full bg-tertiary-container/60 text-on-tertiary-container px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide">Coming soon</span>}
+                      </div>
+                      <p className="text-sm text-on-surface-variant mt-2">Submit receipts and settle an existing cash advance.</p>
+                    </div>
+                    {enabled && <span className="material-symbols-outlined text-outline group-hover:text-primary group-hover:translate-x-1 transition-all">arrow_forward</span>}
+                  </div>
+                  <p className="text-xs text-outline mt-5 pt-4 border-t border-outline-variant">
+                    {enabled ? 'Available when you have a released advance to settle.' : 'Not available to submit yet — we’ll enable this soon.'}
+                  </p>
+                </CardContent>
+              </Card>
+            );
+          })()}
         </div>
+        {comingSoonType && (
+          <ConfirmModal
+            isOpen
+            onClose={() => setComingSoonType(null)}
+            onConfirm={() => setComingSoonType(null)}
+            title={`${comingSoonType} — coming soon`}
+            confirmLabel="Got it"
+            showCancel={false}
+            closeOnBackdrop
+          >
+            {COMING_SOON_MESSAGE}
+          </ConfirmModal>
+        )}
       </div>
     );
   }
@@ -967,29 +1002,15 @@ export function SubmitClaim() {
                         they're rendered explicitly rather than via field defs. */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div>
-                        <div className="flex items-center justify-between">
-                          <Label required>Client / Company</Label>
-                          {companies.length > 0 && (
-                            <button
-                              type="button"
-                              className="text-[12px] text-primary font-semibold hover:underline mb-1"
-                              onClick={() => setClientMode(m => m === 'select' ? 'custom' : 'select')}
-                            >
-                              {clientMode === 'select' ? 'Type a new company' : 'Choose from directory'}
-                            </button>
-                          )}
-                        </div>
-                        {clientMode === 'select' && companies.length > 0 ? (
-                          <Select
-                            value={companies.some(c => c.name === momCore.client) ? momCore.client : ''}
-                            onChange={e => applyCompanyDefaults(e.target.value)}
-                          >
-                            <option value="">-- Select a company --</option>
-                            {companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                          </Select>
-                        ) : (
-                          <Input value={momCore.client} onChange={e => setMomCore(p => ({ ...p, client: e.target.value }))} placeholder="Who did you meet with?" />
-                        )}
+                        <Label required htmlFor="claim-mom-client">Client / Company</Label>
+                        <CompanyPicker
+                          id="claim-mom-client"
+                          value={momCore.client}
+                          companies={companies}
+                          onSelectExisting={company => applyCompanyDefaults(company.name)}
+                          onChangeText={name => setMomCore(p => ({ ...p, client: name }))}
+                          placeholder="Who did you meet with?"
+                        />
                       </div>
                       <div>
                         <Label required>Purpose of Meeting</Label>

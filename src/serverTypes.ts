@@ -270,6 +270,13 @@ export interface Company {
   // from the requestor's reports_to / an active ApproverDelegation per
   // CLAUDE.md's hard rule. No code path may branch on this field.
   default_approver_id?: string;
+  // True for a company auto-created from free-text entry (a requestor typing
+  // an unlisted client name) rather than deliberately added by an admin.
+  // Surfaces in Company Directory as a to-review queue; never blocks the
+  // company from being used on a claim/MoM in the meantime — set/cleared by
+  // getOrCreateCompany() and the admin company routes in server.ts.
+  pending_review?: boolean;
+  created_by?: string;
 }
 
 // Shared shape for the generic Master Data catalog entities managed in the

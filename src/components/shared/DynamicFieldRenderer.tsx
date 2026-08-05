@@ -69,8 +69,10 @@ export function DynamicFieldRenderer({ entity, values, onChange, errors = {}, cl
                 onChange={e => onChange(fd.key, e.target.value)} 
               />
             ) : (
-              // TODO: validation not enforced yet
-              <Input 
+              // Type/format enforcement lives in the submitting form via
+              // validateDynamicFields(); this input only paints the error state
+              // it's handed through `errors`.
+              <Input
                 {...accessibilityProps}
                 type={fd.input_type} 
                 value={values[fd.key] || ''} 

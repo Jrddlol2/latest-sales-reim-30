@@ -56,8 +56,11 @@
   --color-brand-row-hover: #EFF6FF;
   --color-brand-primary: #2563EB;
 
-  --font-hanken: 'Hanken Grotesk', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  /* Family names match what the self-hosted @fontsource-variable packages
+     register under (imported in main.tsx) — not the plain "Hanken Grotesk" /
+     "JetBrains Mono" names Google's CDN used to serve. */
+  --font-hanken: 'Hanken Grotesk Variable', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', monospace;
 
   /* Typographic scales */
   --text-display: 30px;
@@ -112,6 +115,12 @@
   }
   
   .material-symbols-outlined {
+    /* Google's CDN response used to bundle this class rule itself alongside
+       the @font-face — self-hosting the font alone doesn't include it, so
+       it has to be declared explicitly here now. */
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
     font-variation-settings:
       'FILL' 0,
       'wght' 400,

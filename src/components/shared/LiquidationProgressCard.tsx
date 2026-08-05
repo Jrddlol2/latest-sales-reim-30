@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/Button';
 import { Claim, ClaimStatus } from '../../types';
+import { isClaimTypeEnabled } from '../../lib/featureFlags';
 
 const LIQUIDATION_DEADLINE_DAYS = 7; // mirrors server.ts's LIQUIDATION_DEADLINE_DAYS
 
@@ -42,7 +43,11 @@ export function LiquidationProgressCard({ claims }: { claims: Claim[] }) {
               You have {openAdvances.length} cash advance{openAdvances.length === 1 ? '' : 's'} outstanding
               {overdueAdvances.length > 0 && <>, <span className="font-bold">{overdueAdvances.length} past the {LIQUIDATION_DEADLINE_DAYS}-day deadline</span></>}.
             </p>
-            <Button variant="secondary" className="w-full font-bold" onClick={() => navigate('/claims/new?type=liquidation')}>Start a Liquidation</Button>
+            {isClaimTypeEnabled('Liquidation') ? (
+              <Button variant="secondary" className="w-full font-bold" onClick={() => navigate('/claims/new?type=liquidation')}>Start a Liquidation</Button>
+            ) : (
+              <Button variant="secondary" className="w-full font-bold" disabled title="Liquidation submission is coming soon.">Liquidation — coming soon</Button>
+            )}
           </>
         )}
       </div>
