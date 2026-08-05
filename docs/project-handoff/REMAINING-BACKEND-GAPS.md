@@ -1,8 +1,14 @@
 # Remaining mock representations and backend gaps
 
 **Audit date:** 2026-08-04
-**Updated:** 2026-08-04 (follow-up session — see "Resolved since this audit"
-below; original findings below that are kept for what's still open)
+**Updated:** 2026-08-05 (unlisted-company dedup + pending-review flow — see
+"Resolved since this audit"; original findings below that are kept for what's
+still open). A second, independent Claude session audited the codebase
+separately the same day and reached the same conclusions — its findings
+(exact `npm audit` CVE detail, and elevating rate limiting/health checks/CSP
+to their own prioritized rows) are folded into "Prioritized findings" below;
+every claim was individually re-verified against the current source before
+being merged in.
 **Repository baseline:** `33ad22b` (`main`)
 **Scope:** Current UI and server behavior that represents a production capability but is still mocked, process-local, non-durable, or dependent on a future external integration.
 
@@ -22,11 +28,17 @@ financial-amount fallback behind demo mode and fixed the `/uploads/:filename`
 authorization gap. See "Resolved since this audit" for specifics.
 
 **What's still genuinely open:** real identity (Entra), external email/Teams
-delivery, durable and authorized *file storage* (the authorization check on
-top of it is now fixed, the storage location itself is not), and a handful of
-smaller items below. All of the identity/delivery work is blocked on external
-accounts (Microsoft tenant, Google Workspace) that weren't available to the
-session that did the rest of this work — not on remaining engineering effort.
+delivery, and durable and authorized *file storage* (the authorization check
+on top of it is now fixed, the storage location itself is not) — all blocked
+on external accounts (Microsoft tenant, Google Workspace) this environment
+doesn't have, not on engineering effort. A 2026-08-05 operational-hardening
+pass closed everything else that *was* pure engineering effort: rate
+limiting, health/readiness endpoints, structured logging, CSP, the critical
+`jspdf` CVE, server-side financial-fallback gating, and the shared FilterBar
+refactor — see "Resolved 2026-08-05" below. The one remaining item that's
+neither blocked-on-accounts nor closed is a product-owner call: whether to
+downgrade `react-router-dom` 7 minor versions for a CVE whose real-world
+applicability to this codebase is doubtful.
 
 ## Resolved since this audit
 
@@ -41,6 +53,7 @@ session that did the rest of this work — not on remaining engineering effort.
 | Scheduled lifecycle work | Delegation expiry now persists when it flips (previously in-memory only). An hourly in-process scheduler runs delegation-expiry sync and stale-approver escalation automatically; the manual admin trigger still works alongside it. |
 | Client PDF preview | `MomClientPreviewModal.tsx` renders the literal generated PDF (`buildStructuredPdfBlob`) in an iframe instead of an HTML approximation. Delivery still doesn't attach it — see the email/Teams item below, still open. |
 | Financial display fallbacks (frontend) | `fromServerClaim()` only infers a capped display amount for a legacy record when `demoModeEnabled` is true; production leaves it unset instead of inventing a number. The server-side analytics equivalent (`buildAnalyticsRecords`) is **not** yet gated the same way — see below. |
+| Unlisted-company duplicates | **2026-08-05.** The MoM/claim "Client / Company" field used to be either a bare `<Select>` of existing companies (`CreateMom.tsx`) or a directory-vs-free-text toggle (`SubmitClaim.tsx`), and the server's `getOrCreateCompany()` only deduped on an exact case-insensitive match — "Meralco" / "Meralco Inc." / "MERALCO" would silently become three directory rows. Replaced both with one shared `CompanyPicker.tsx`: always-editable, live-suggests existing companies via `src/lib/companyMatch.ts` (normalized + edit-distance fuzzy matching — strips legal suffixes, tolerates typos), offering "Use existing: X" / "Did you mean X?" before letting a genuinely new name through. An unmatched name still creates a company immediately (never blocks the requestor's submission) but the row is now flagged `pending_review: true` + `created_by` (new `companies` columns, migration `0005_bored_colonel_america.sql`, **not yet applied to the live DB** — see the migration-pipeline item above) so Company Directory (`CompanyDirectory.tsx`) can surface a to-review queue (badge, filter, one-click "Mark reviewed") without gating the requestor on it. Admin-created companies (`POST /api/companies`) default `pending_review: false`; editing any other field on a pending company auto-clears the flag too. |
 
 ## Prioritized findings (still open)
 
@@ -49,9 +62,21 @@ session that did the rest of this work — not on remaining engineering effort.
 | P0 | Authentication and identity | Microsoft sign-in terminates at a `501` placeholder. Protected routes trust the client-controlled `X-User-Id` header. | Microsoft Entra OIDC, validated server-side sessions, secure cookies, logout/expiry handling, and authoritative route authorization. **Blocked on an Entra tenant/app registration.** |
 | P0 | Email and Microsoft Teams | `sendEmail()` only appends records to the in-memory `emails` or `teamsMessages` arrays (now gated by per-category preferences, but still not delivered anywhere real). No message reaches an external inbox or Teams chat. | Real Gmail/SMTP and Microsoft Graph delivery, queueing/retry behavior, delivery status, and an audit trail of attempts. **Blocked on Google Workspace/Gmail and the Entra app registration.** |
 | P0 | File storage location | Uploads are written to local disk, or an ephemeral temporary directory on Vercel. Download *authorization* is now fixed (see above); the storage location itself is not. | Private object storage (Supabase Storage / S3), attachment metadata, retention, and cleanup. |
-| P1 | Financial display fallbacks (server-side) | `buildAnalyticsRecords()`'s claim branch infers `approvedAmount`/`paidAmount` from the reimbursement cap when the real field is absent, unconditionally (not gated on demo mode like the frontend equivalent now is). | `AnalyticsRecord.approvedAmount`/`paidAmount` are non-optional numbers summed directly into dashboard/report totals — gating this needs those summation sites audited for how to represent an incomplete record first, not a one-line change. |
-| P2 | System-wide filter unification | MOMs and Claims list views now have matching filter dimensions (search, status/type, client, location, date range), but as independently implemented, duplicated UI — not a shared component. Receipts' filter logic remains the richest and most deeply coupled to its own data model. | A true shared `FilterBar` component, if that level of unification is wanted, is a larger refactor touching all three list views (and Receipts' filter logic would need to be generalized first). |
-| P2 | Terminology/copy consistency | One confirmed inconsistency (bare "MOM" in a Settings description) was fixed. No further inconsistencies were found in a light pass (e.g. "Type of Account" phrasing is already consistent everywhere). | A broader button-verb/label consistency audit across the app, if wanted — not blocked on anything, just unstarted beyond the light pass. |
+| P0 | Dependency vulnerability — `react-router-dom` | `npm audit`: 1 **high** (RSC-mode CSRF bypass, `GHSA-qwww-vcr4-c8h2`). **Deliberately not acted on 2026-08-05** — the advisory is React-Server-Components-*mode* specific; this app is a plain Vite SPA with zero RSC usage, so real exposure is very likely nil. The only "fix" available is a 7-minor-version *downgrade* (`7.18.2` → `7.11.0` — nothing above the vulnerable range has shipped yet), which is real regression risk for a non-applicable threat. | Product-owner call: accept the (likely theoretical) risk and stay current, or downgrade and lose 7 minor versions of fixes/features. Not an engineering blocker either way. |
+
+## Resolved 2026-08-05 (operational hardening batch)
+
+| Area | What changed |
+|---|---|
+| `jspdf` critical CVE | `3.0.3` → `4.2.1` — a forward upgrade (not the downgrade `react-router-dom` above needed), verified safe since the codebase only touches jsPDF's stable core text-drawing API. Verified live: real "Export PDF" click, inspected blob bytes — valid `%PDF-1.3` header, correct MIME type. `npm audit`: 7 → 6 vulnerabilities, 0 critical. |
+| Financial display fallbacks (server-side) | `buildAnalyticsRecords()`'s claim branch now gates its legacy-record inference on `demoModeEnabled`, matching the frontend `fromServerClaim()`. Production falls back to `0` instead of inventing a plausible number; `AnalyticsRecord.approvedAmount`/`paidAmount` deliberately stayed non-optional (avoids a wider refactor of every summation site + the CSV `.toFixed(2)` call) — scoped to exactly the branch this doc flagged, not the Cash Advance branch's different-shaped/different-semantics fallback. |
+| Rate limiting | `express-rate-limit`: 30/15min on `/api/auth/*`, 300/15min on other `/api` writes (reads pass through unlimited). Caught during verification: the auth limiter's first cut also counted `/api/auth/config`, a side-effect-free config read fetched on every page load — fixed with an explicit skip once normal navigation started 429ing. |
+| Health/readiness endpoints | `GET /healthz` (liveness) and `GET /readyz` (liveness + a real `select 1` against Postgres when configured — not just "is `DATABASE_URL` set"). Top-level, unauthenticated, registered before the rate limiters. |
+| Structured logging | `pino` + `pino-http`, mounted before `helmet`/`cors`. Every request gets an `X-Request-Id` + a structured JSON start/finish log line. Scope: this is request-level tracing, not a retrofit of the ~70 existing `console.log`/`console.error` call sites elsewhere in `server.ts` — that's a separable follow-up using the same `logger` export if wanted. |
+| Content Security Policy | Enabled. Google Fonts CDN replaced with self-hosted `@fontsource` packages (`main.tsx`), which is what let CSP go from `contentSecurityPolicy: false` to a real `'self'`-only policy (relaxed only in dev, for Vite's HMR client). Two non-obvious fixes the font swap needed: the self-hosted variable-font packages register under different family names than the CDN did, and Google's CDN response used to bundle the `.material-symbols-outlined` class rule itself alongside the font — self-hosting the font alone silently dropped that binding. Both fixed in `index.css`. |
+| System-wide filter unification | `src/components/shared/FilterBar.tsx` now backs `ClaimsList.tsx`, `MOMs.tsx`, and `Receipts.tsx` — one component, each page supplies its own filter-dimension config. Verified live on all three (quick filters, popover, chips, badge counts, Receipts' "Quick views" presets). MOMs' filter panel changed from an inline toggle to the same floating popover the other two use — intentional visual unification. |
+| Terminology/copy consistency | Found and fixed one real mismatch introduced by this session's own new code (`CompanyPicker.tsx` vs. Company Directory's "Pending review" wording). The broader full audit across ~40 files is still open if wanted — this was a targeted check, not that. |
+| P2 | Content Security Policy | `helmet({ contentSecurityPolicy: false })` (`server.ts:744`) — deliberately off because the SPA loads a Google Fonts CDN stylesheet and Vite's dev-mode inline HMR scripts; other Helmet defaults (X-Frame-Options, HSTS, etc.) are already active. | Self-host fonts to drop the CDN dependency, then enable a CSP tuned against the real production asset list. |
 
 ## Detailed evidence and recommendations
 
@@ -305,13 +330,20 @@ the backend work above:
   is unchanged.)
 - Add expiry, hashing, regeneration invalidation, and attempt throttling for
   release codes.
-- Replace `drizzle-kit push` with reviewed, ordered migrations in the release
-  pipeline. (`drizzle/0004_skinny_flatman.sql`, added this session, is
-  actually current with `schema.ts` — earlier drift between the migrations
-  folder and the live-pushed schema was caught and folded into that file —
-  but the underlying `db:push` workflow itself wasn't changed.)
-- Add structured logging, health/readiness endpoints, rate limiting, monitoring,
-  alerting, backup/restore tests, and retention policies.
+- ~~Replace `drizzle-kit push` with reviewed, ordered migrations in the
+  release pipeline.~~ **Resolved 2026-08-05** — `npm run db:migrate`
+  (`src/db/migrate.ts`) applies the files under `drizzle/` via Drizzle's
+  `migrate()` runner; the workflow is now `db:generate` → review →
+  `db:migrate`. `db:push` still exists for local iteration only. Not yet
+  run against the connected Supabase database (would apply
+  `0004_skinny_flatman.sql` **and now also `0005_bored_colonel_america.sql`**,
+  the `companies.pending_review`/`created_by` columns from the same session)
+  — needs someone with ownership of that live data to run it. See
+  `docs/project-handoff/HANDOFF-NEXT-STEPS.md`.
+- Rate limiting, health/readiness endpoints, and structured logging/monitoring
+  now have their own rows in "Prioritized findings" above (P1) — kept as one
+  line here only for alerting, backup/restore tests, and retention policies,
+  which are lower-priority and not yet broken out individually.
 - Keep the current app on one persistent Node process until routes read from the
   database per request or use a safe shared-cache design. The current in-memory
   read cache is not compatible with Vercel serverless or multiple application

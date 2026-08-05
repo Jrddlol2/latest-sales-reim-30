@@ -58,8 +58,9 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current baseline is 70 tests across 10 files (2026-08-04 follow-up
-session added 3 covering the demo-mode-gated financial fallback).
+The current baseline is 87 tests across 12 files (grown from 70 across three
+2026-08-05 sessions — see `HANDOFF-NEXT-STEPS.md`'s "Resolved 2026-08-05"
+sections for what each batch added).
 
 ## Database-change rule
 
@@ -73,45 +74,50 @@ change affects persistence or record creation.
 
 ## Current priorities
 
-A 2026-08-04 follow-up session closed items 1, 3, and 4 below (see
-[`HANDOFF-NEXT-STEPS.md`](HANDOFF-NEXT-STEPS.md)'s "Resolved this session"
-for specifics) while working without Microsoft/Google accounts available —
-that's why 2 and 5 are still open: they're blocked on external credentials
-(an Entra tenant/app registration; Google Workspace/Gmail), not on
-engineering effort.
+Three sessions across 2026-08-04 and 2026-08-05 closed most of what's
+engineering-effort-only. What's left breaks into two very different kinds of
+"open":
 
-1. ~~Replace the HTML client-copy preview with the exact generated PDF.~~
-   Done — `MomClientPreviewModal.tsx` now renders the real generated PDF.
-2. Add real client email and internal Teams delivery with attachments, retries,
-   and delivery state. **Still open — blocked on Google Workspace/Gmail and
-   an Entra app registration.**
-3. ~~Replace the in-memory claim-number counter with an atomic database sequence
-   and unique constraint.~~ Done — Postgres sequence + `UNIQUE` constraint,
-   in-memory counter kept only for the no-database mode.
-4. ~~Make historical imports transactional and durable.~~ Done — one
-   Postgres transaction per import batch.
-5. Implement Microsoft Entra authentication and server-side sessions.
-   **Still open — blocked on an Entra tenant/app registration.**
-6. Move uploads to private object storage with record-level authorization.
-   **Partially open** — the authorization *rule* is now in place (a file
-   only serves to someone who can already see the record it's attached to);
-   the storage location itself is still local disk, not object storage.
+**Blocked on external accounts this environment doesn't have** (not on
+engineering effort):
+1. Real client email (Gmail/Workspace) and internal Teams delivery.
+2. Microsoft Entra authentication and server-side sessions — the API still
+   trusts `X-User-Id`.
+3. Private object storage for uploads (Supabase Storage/S3 credentials) —
+   the download *authorization* rule is done; files still live on local disk.
 
-Also closed this session, not on the original list above: notification
-preferences (persisted + enforced), implicit company creation (persisted),
-user/master-data audit history (persisted), delegation-expiry persistence
-plus an automatic hourly scheduler for stale-approver escalation (previously
-manual-only), the frontend's financial-amount fallback (now gated behind
-demo mode), and MOM list filter parity with the Claims list. Full detail in
-[`REMAINING-BACKEND-GAPS.md`](REMAINING-BACKEND-GAPS.md)'s "Resolved since
-this audit" table.
+**Needs a decision only the client/product owner can make** (found 2026-08-05,
+see `HANDOFF-NEXT-STEPS.md`'s "Resolved 2026-08-05 (continued)" for detail):
+4. The connected Supabase database's `claims` table has 252 of 254 rows with
+   duplicate `claim_number` values (accumulated demo-seed writes across many
+   dev-server restarts) — this blocks applying the `UNIQUE` constraint from
+   migration 0004 until someone decides how to handle the duplicates
+   (deleting demo pollution vs. investigating further). The sequence itself
+   is safe to create and was floored above the current max.
+5. Migrations 0004 and 0005 (claim-number sequence, `companies.pending_review`
+   columns) are still **not applied** to the live database — needs
+   `npm run db:migrate` run by someone with authority over that live,
+   shared data.
+6. `DEMO_MODE=false` hasn't been flipped — the live database's reference
+   data (field definitions, the six master-data catalogs) is nearly empty,
+   so flipping it today would boot the app with empty Category/Type of
+   Account/cost-center/department dropdowns. Needs that reference data
+   seeded for real first.
+
+Structural/operational hardening (rate limiting, health/readiness endpoints,
+self-hosted fonts + CSP, structured request logging, the `jspdf` critical
+CVE) and the shared FilterBar/CompanyPicker UI work are done — see
+`HANDOFF-NEXT-STEPS.md` and `REMAINING-BACKEND-GAPS.md` for full detail on
+all of the above.
 
 ## Documents intentionally excluded
 
-Older audits, roadmaps, production passes, and project-context documents remain
-in the parent `docs/` directory but are not copied here because later work has
-superseded significant parts of them. In particular, older statements that the
-database is not connected are no longer true.
+Older audits, roadmaps, production passes, and project-context documents were
+moved to `docs/archive/` (2026-08-05) rather than copied here, because later
+work has superseded significant parts of them. In particular, older
+statements that the database is not connected are no longer true. They're
+kept as historical reference, not deleted — `git log` on any of them still
+shows their full history from before the move.
 
 When a handoff document conflicts with the code, the current code wins. When two
 documents conflict, use `PROJECT-README.md`, then the newest dated handoff or
@@ -120,5 +126,8 @@ gap document.
 ## Snapshot information
 
 This handoff pack was assembled on 2026-08-04 from repository commit
-`f89196b`. The source documents outside this folder were not modified.
+`f89196b`, then updated across three 2026-08-05 sessions (test-suite
+hermeticity + dynamic-field validation + migration tooling; unlisted-company
+dedup; rate limiting/health checks/CSP/logging/FilterBar/`jspdf` CVE fix).
+The archived documents in `docs/archive/` were not modified.
 

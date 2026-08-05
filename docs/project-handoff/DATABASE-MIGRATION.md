@@ -29,11 +29,18 @@ lists what's genuinely still open.
   real, mutable fields the original schema draft missed.
 - **Client factory** (`src/db/index.ts`) — lazily creates a `drizzle()`
   instance from `DATABASE_URL`; falls back to a no-op proxy when unset, so
-  the test suite (which never sets it) keeps running purely in-memory.
-- **Migrations** — applied via `npm run db:push` (Drizzle's live-sync
-  command) rather than the generated `drizzle/0000_*.sql` + a manual
-  `migrate()` step; fine for this stage, worth revisiting for a real release
-  pipeline (see "Still open" below).
+  the test suite keeps running purely in-memory. `test/setup.ts` (added
+  2026-08-05) forces `DATABASE_URL` empty for every test run regardless of
+  what a local `.env` sets — the route/workflow suites POST real
+  claims/MoMs through the server, and without this they'd write into
+  whatever database `.env` points at instead of staying in-memory.
+- **Migrations** — now applied via `npm run db:migrate`
+  (`src/db/migrate.ts`, added 2026-08-05), Drizzle's own `migrate()` runner
+  against the generated `drizzle/*.sql` files, tracked in a
+  `drizzle.__drizzle_migrations` table. `npm run db:push` (the live-sync
+  command this replaced as the release-pipeline path) still exists for fast
+  local iteration. See "Still open" #4 below for what's not yet applied to
+  the live database.
 - **Repo modules, one per domain** (`src/db/usersRepo.ts`,
   `src/db/coreLoopRepo.ts`, `src/db/cashAdvanceRepo.ts`,
   `src/db/referenceDataRepo.ts`, `src/db/workflowExtrasRepo.ts`) — each with
@@ -111,22 +118,63 @@ Vercel serverless functions without further work.
 3. **`POST /api/admin/reset` clears and re-persists reference data, but this
    is the one route doing bulk multi-table clear+reseed** — worth a second
    look if its scope grows further.
-4. **Migrations still run via `drizzle-kit push`** (live schema sync), not
-   generated SQL files applied through a proper migration runner. Fine for
-   active development; before a real release pipeline exists, switch to
-   `drizzle-kit generate` + an explicit `migrate()` step so schema changes
-   are reviewable, ordered files instead of an implicit diff-and-apply.
-   `drizzle/0004_skinny_flatman.sql` (added 2026-08-04 for the claim-number
-   sequence + unique constraint) is the first migration file that's
-   genuinely current with `schema.ts` as of this note — running
-   `drizzle-kit generate` also caught and folded in earlier drift between
-   the migrations folder and what had actually been pushed live.
-5. **Mock email/outbox and `last_seen` remain intentionally in-memory-only**
+4. ~~Migrations still run via `drizzle-kit push`~~ **Resolved 2026-08-05.**
+   `npm run db:migrate` (`src/db/migrate.ts`) now applies the reviewed SQL
+   files in `drizzle/` via Drizzle's own `migrate()` runner, which tracks
+   what's already been applied in a `drizzle.__drizzle_migrations` table so
+   re-running it is a no-op. The release-pipeline workflow going forward:
+   edit `schema.ts` → `npm run db:generate` (writes a new numbered file
+   under `drizzle/`, review it like any other diff) → `npm run db:migrate`
+   (applies pending files in order) — instead of `db:push`'s implicit
+   live-diff-and-apply. `db:push` is left in `package.json` for fast local
+   iteration (e.g. exploring a schema change before generating its
+   migration) but should not be the way changes reach a real database going
+   forward. `drizzle/0004_skinny_flatman.sql` (added 2026-08-04 for the
+   claim-number sequence + unique constraint) is the first migration file
+   that's genuinely current with `schema.ts`, but as of this note it has
+   **not yet been applied** to the connected Supabase database — running
+   `npm run db:migrate` is what applies it (and any migration after it).
+   This wasn't run as part of adding the tooling since it mutates the live,
+   shared database; confirm with whoever owns that database before running
+   it. Until then, any code path that creates a claim while
+   `DATABASE_URL` is set will fail on `nextval('claim_number_seq')`.
+   **Update 2026-08-05:** a follow-up session got explicit go-ahead and
+   attempted this — and found `npm run db:migrate` itself fails on a
+   different problem first. The live database was built via `drizzle-kit
+   push`, so its schema already has 0000–0003's objects, but Drizzle's own
+   migration ledger (`drizzle.__drizzle_migrations`) has no record of
+   that — `migrate()` tries to replay 0000 from scratch and collides on
+   `CREATE TYPE "approval_decision"` already existing. Worse: even a
+   from-scratch, ledger-aware apply of 0004 would fail on its own merits —
+   the live `claims` table has **252 of 254 rows with duplicate
+   `claim_number` values** (one number shared by up to 36 rows), almost
+   certainly demo-seed pollution accumulated across repeated dev-server
+   restarts (writes persist to Postgres regardless of `DEMO_MODE`). Adding
+   0004's `UNIQUE` constraint over existing duplicates is something Postgres
+   will simply refuse. **Nothing was applied** — a direct attempt to apply
+   just the safe pieces (the sequence + `0005`'s `companies` columns) via
+   raw SQL was also blocked by Claude Code's own auto-mode safety classifier
+   for being DDL against live shared data outside the sanctioned tooling.
+   Two decisions needed from whoever owns that database before this can
+   move: (a) how to handle the 252 duplicate `claim_number` rows, and
+   separately (b) whether to baseline the migration ledger so 0000–0003
+   aren't replayed, or take some other path to get `db:migrate` itself
+   working cleanly going forward.
+5. **`drizzle/0005_bored_colonel_america.sql`** (added 2026-08-05 —
+   `companies.pending_review` + `companies.created_by`, for the
+   unlisted-company-dedup feature) has the same not-yet-applied status as
+   0004, for the same reason above.
+6. **Mock email/outbox and `last_seen` remain intentionally in-memory-only**
    — see the README for why. Migrate them only if a real need for that data
    to survive a restart shows up. `import_batches` no longer belongs on
    this list: historical import now persists the batch and every imported
    row transactionally (see item 2 above and
    [`REMAINING-BACKEND-GAPS.md`](REMAINING-BACKEND-GAPS.md)).
-6. **Row-Level Security (RLS)** is off on every Supabase table (the
-   dashboard flags this). Low-risk today (see the README's RLS section) but
-   worth enabling with default-deny policies as cheap defense-in-depth.
+7. ~~Row-Level Security (RLS) is off on every Supabase table.~~
+   **Corrected 2026-08-05** — checked directly via the live `DATABASE_URL`
+   connection: RLS is actually **on** for every table already (Supabase's
+   default for new tables), just with zero policies, which is functionally
+   default-deny for any role without `BYPASSRLS`. The app's own connection
+   (`postgres` role) has `BYPASSRLS = true` so this doesn't affect the app's
+   read/write path either way; only relevant if something else ever
+   connects with a different Supabase role, which nothing here does today.

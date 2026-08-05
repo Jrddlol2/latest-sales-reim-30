@@ -549,8 +549,9 @@ Useful commands:
 | `npm.cmd test` | Vitest test suite. |
 | `npm.cmd run build` | Vite frontend build and esbuild server bundle. |
 | `npm.cmd start` | Serve `dist/server.cjs`. |
-| `npm.cmd run db:generate` | Generate Drizzle migrations. |
-| `npm.cmd run db:push` | Push Drizzle schema when a database is configured. |
+| `npm.cmd run db:generate` | Write a new reviewable migration file under `drizzle/` from a `schema.ts` change. |
+| `npm.cmd run db:migrate` | Apply pending `drizzle/*.sql` files to `DATABASE_URL`, in order — the release-pipeline path. |
+| `npm.cmd run db:push` | Live-diff `schema.ts` straight onto `DATABASE_URL`, no migration file. Fast for local iteration; prefer `db:generate` + `db:migrate` for anything meant to reach a real database. |
 | `npm.cmd run db:studio` | Open Drizzle Studio when a database is configured. |
 
 ### Environment configuration
@@ -608,13 +609,26 @@ The repository contains Vercel configuration (`vercel.json`) and an API entry po
 6. Set `DEMO_MODE=false`, `AUTH_MODE=microsoft`, `ENABLE_DEMO_LOGIN=false`, and `AUTO_SEED=false`.
 7. Move uploads to durable object storage with ownership/authorization checks.
 8. Replace mock email/outbox behavior with an approved email/notification provider (and decide whether to persist it — currently intentionally in-memory only).
-9. Add structured logs, monitoring, error tracking, rate limiting, security headers/CSP review, and incident ownership.
-10. Remediate the known dependency CVEs (see [Dependency security](#dependency-security-known-cves)) and re-verify PDF export and routing.
+9. ~~Add structured logs, rate limiting, security headers/CSP review~~ — done
+   2026-08-05 (`pino`/`pino-http` request logging + IDs, `express-rate-limit`
+   on auth/write routes, self-hosted fonts + a real CSP). **Still open:**
+   monitoring/error tracking (e.g. Sentry — needs an account this
+   environment doesn't have) and incident ownership.
+10. `jspdf`'s critical CVE fixed 2026-08-05 (`3.0.3` → `4.2.1`, forward
+    upgrade, PDF export re-verified live). `react-router-dom`'s high CVE
+    deliberately left open — see [Dependency security](#dependency-security-known-cves)
+    for why forcing the only available "fix" (a 7-minor-version downgrade)
+    isn't clearly the right call for a CVE that's React-Server-Components-
+    mode-specific in an app with no RSC usage.
 11. Harden release codes further (expiry, hashed storage, attempt throttling) on top of the crypto generation and Postgres persistence already in place.
 12. Wrap multi-step writes (e.g. claim submission) in real Postgres transactions instead of sequential awaited upserts.
 13. Complete privacy, audit-retention, financial-control, and user-acceptance reviews.
 
-See `docs/production-cutover.md`, `docs/microsoft-auth-handoff.md`, and `docs/DATABASE-MIGRATION.md` for focused plans.
+See [`MICROSOFT-AUTH-HANDOFF.md`](MICROSOFT-AUTH-HANDOFF.md) and
+[`DATABASE-MIGRATION.md`](DATABASE-MIGRATION.md) in this same folder for
+focused plans. `docs/archive/production-cutover.md` and
+`docs/archive/microsoft-auth-handoff.md` are the original, now-historical
+versions these superseded (2026-08-05) — kept for reference, not current.
 
 ## Troubleshooting
 
@@ -635,7 +649,7 @@ See `docs/production-cutover.md`, `docs/microsoft-auth-handoff.md`, and `docs/DA
 | Priority | Issue | Why it matters |
 |---|---|---|
 | Critical | Demo `X-User-Id` identity | Anyone can impersonate a role; it is not authentication. This is now the single largest gap — persistence is done, auth is not. |
-| Critical | Dependency CVEs deferred | `jspdf` (critical) and `react-router` (high) have published advisories. The only fixes are **breaking** upgrades (jspdf 3→4; react-router), so they were intentionally deferred to keep the demo stable — see [Dependency security](#dependency-security-known-cves). Remediate before production. |
+| — | ~~Dependency CVEs deferred~~ | **`jspdf`'s critical CVE fixed 2026-08-05** (`3.0.3` → `4.2.1`, PDF export re-verified live). `react-router-dom`'s high CVE remains a deliberate, informed decision to not downgrade — see [Dependency security](#dependency-security-known-cves). |
 | High | Demo seed generator isn't gated | Real writes persist to Postgres correctly (see [Database persistence](#database-persistence)), but `seedYearOfData()` still regenerates fresh in-memory demo data on every restart while `DEMO_MODE=true`. Only matters once you start relying on restart-to-restart continuity while still presenting. |
 | High | Microsoft login is scaffolding only | No real Entra sign-in/session exists yet. |
 | High | Local upload storage | Not durable, and downloads are not authorized against the owning claim/MOM. |
@@ -650,14 +664,14 @@ See `docs/production-cutover.md`, `docs/microsoft-auth-handoff.md`, and `docs/DA
 
 ### Dependency security (known CVEs)
 
-As of 2026-08-04, `npm audit` reports 7 advisories (1 critical, 2 high, 4 moderate), concentrated in two packages:
+As of 2026-08-04, `npm audit` reported 7 advisories (1 critical, 2 high, 4 moderate). **Updated 2026-08-05** after the `jspdf` fix: 6 vulnerabilities (4 moderate, 2 high) per `npm audit`'s own summary line — only one high (`react-router`) shows an expanded advisory in the report; the 4 moderate are all `esbuild`/`drizzle-kit` dev-tooling, not shipped in the production bundle.
 
 | Package | Severity | Fix | Status |
 |---|---|---|---|
-| `jspdf` (PDF export) | Critical | Upgrade `3.0.3 → 4.x` — a **major/breaking** API change | Deferred; must be verified against `src/lib/*Export.ts` before adopting. |
-| `react-router` / `react-router-dom` (routing) | High | `npm audit fix` currently **downgrades** it (no patched forward version yet) | Deferred; revisit when a patched forward release exists. |
+| `jspdf` (PDF export) | ~~Critical~~ | Upgraded `3.0.3 → 4.2.1` | **Fixed 2026-08-05.** The codebase only used jsPDF's stable core text-drawing API (`setFont`, `text`, `splitTextToSize`, `output('blob')`, ...), unaffected by 4.x's hardening changes. Verified live: real "Export PDF" click, inspected blob bytes — valid `%PDF-1.3` header, correct MIME type. |
+| `react-router` / `react-router-dom` (routing) | High | `npm audit fix` currently **downgrades** it 7 minor versions (`7.18.2 → 7.11.0` — no patched forward version has shipped yet) | **Deliberately deferred 2026-08-05, not just carried over.** The advisory (`GHSA-qwww-vcr4-c8h2`) is a React-Server-Components-*mode* CSRF bypass; this app is a plain Vite SPA with zero RSC usage, so real exposure is very likely nil. Downgrading 7 minor versions to dodge a non-applicable threat is real regression risk for unclear benefit — this needs a product-owner call, not a default "always take the audit's suggested fix." |
 
-**Decision:** deferred during the demo/presentation phase to avoid regressing PDF export and navigation. Do **not** run `npm audit fix --force` blindly. Address these as part of the pre-production hardening (they are deployment blockers, not demo blockers), then re-run `npm run lint && npm test && npm run build` and manually verify PDF export and routing.
+**Decision:** `jspdf` was a clean forward fix with no reason to wait, so it's done. `react-router-dom` is a genuine judgment call between "stay current, accept the (likely theoretical) advisory" and "downgrade 7 minor versions" — re-evaluate once a patched forward release exists, which resolves the dilemma entirely.
 
 ## Recommended handoff order
 
