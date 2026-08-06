@@ -24,9 +24,26 @@
 import { eq, sql } from 'drizzle-orm';
 import { getDb } from './index';
 import { moms as momsTable, claims as claimsTable, expenseLineItems as expenseLineItemsTable, approvals as approvalsTable, statusHistories as statusHistoriesTable, importBatches as importBatchesTable } from './schema';
+import { recordDbFailure, recordDbSuccess } from './persistenceHealth';
 import type { Mom, Claim, ExpenseLineItem, Approval, StatusHistory, MomStatus, MinutesSource, ClaimStatus, ImportBatch } from '../serverTypes';
 
 export const isDbConfigured = () => !!process.env.DATABASE_URL;
+
+/**
+ * Wraps a repo write so a failure is recorded in the persistence-health
+ * registry (surfaced on /readyz) and then RE-THROWN unchanged — every caller
+ * keeps its existing log-and-continue `try/catch`, so request behavior and log
+ * output are identical to before instrumentation. See persistenceHealth.ts.
+ */
+async function trackedWrite(context: string, op: () => Promise<unknown>): Promise<void> {
+  try {
+    await op();
+    recordDbSuccess();
+  } catch (err) {
+    recordDbFailure(context, err);
+    throw err;
+  }
+}
 
 // --- moms -------------------------------------------------------------
 
@@ -100,7 +117,8 @@ export async function persistMom(mom: Mom): Promise<void> {
   if (!isDbConfigured()) return;
   const db = getDb();
   const row = momToRow(mom);
-  await db.insert(momsTable).values(row).onConflictDoUpdate({ target: momsTable.id, set: row });
+  await trackedWrite('persistMom', () =>
+    db.insert(momsTable).values(row).onConflictDoUpdate({ target: momsTable.id, set: row }));
 }
 
 // --- claims -------------------------------------------------------------
@@ -195,7 +213,8 @@ export async function persistClaim(claim: Claim): Promise<void> {
   if (!isDbConfigured()) return;
   const db = getDb();
   const row = claimToRow(claim);
-  await db.insert(claimsTable).values(row).onConflictDoUpdate({ target: claimsTable.id, set: row });
+  await trackedWrite('persistClaim', () =>
+    db.insert(claimsTable).values(row).onConflictDoUpdate({ target: claimsTable.id, set: row }));
 }
 
 /**
@@ -215,20 +234,21 @@ export async function persistClaim(claim: Claim): Promise<void> {
 export async function persistClaimWithLineItems(claim: Claim, items: ExpenseLineItem[], moms: Mom[] = []): Promise<void> {
   if (!isDbConfigured()) return;
   const db = getDb();
-  await db.transaction(async (tx: typeof db) => {
-    const claimRow = claimToRow(claim);
-    await tx.insert(claimsTable).values(claimRow).onConflictDoUpdate({ target: claimsTable.id, set: claimRow });
+  await trackedWrite('persistClaimWithLineItems', () =>
+    db.transaction(async (tx: typeof db) => {
+      const claimRow = claimToRow(claim);
+      await tx.insert(claimsTable).values(claimRow).onConflictDoUpdate({ target: claimsTable.id, set: claimRow });
 
-    await tx.delete(expenseLineItemsTable).where(eq(expenseLineItemsTable.claimId, claim.id));
-    for (const item of items) {
-      await tx.insert(expenseLineItemsTable).values(expenseToRow(item));
-    }
+      await tx.delete(expenseLineItemsTable).where(eq(expenseLineItemsTable.claimId, claim.id));
+      for (const item of items) {
+        await tx.insert(expenseLineItemsTable).values(expenseToRow(item));
+      }
 
-    for (const mom of moms) {
-      const momRow = momToRow(mom);
-      await tx.insert(momsTable).values(momRow).onConflictDoUpdate({ target: momsTable.id, set: momRow });
-    }
-  });
+      for (const mom of moms) {
+        const momRow = momToRow(mom);
+        await tx.insert(momsTable).values(momRow).onConflictDoUpdate({ target: momsTable.id, set: momRow });
+      }
+    }));
 }
 
 /**
@@ -301,12 +321,13 @@ function expenseFromRow(r: typeof expenseLineItemsTable.$inferSelect): ExpenseLi
 export async function persistExpenseLineItems(claimId: string, items: ExpenseLineItem[]): Promise<void> {
   if (!isDbConfigured()) return;
   const db = getDb();
-  await db.transaction(async (tx: typeof db) => {
-    await tx.delete(expenseLineItemsTable).where(eq(expenseLineItemsTable.claimId, claimId));
-    for (const item of items) {
-      await tx.insert(expenseLineItemsTable).values(expenseToRow(item));
-    }
-  });
+  await trackedWrite('persistExpenseLineItems', () =>
+    db.transaction(async (tx: typeof db) => {
+      await tx.delete(expenseLineItemsTable).where(eq(expenseLineItemsTable.claimId, claimId));
+      for (const item of items) {
+        await tx.insert(expenseLineItemsTable).values(expenseToRow(item));
+      }
+    }));
 }
 
 // --- approvals (insert-only — an approval decision is never edited) -------
@@ -336,7 +357,8 @@ function approvalFromRow(r: typeof approvalsTable.$inferSelect): Approval {
 export async function insertApproval(approval: Approval): Promise<void> {
   if (!isDbConfigured()) return;
   const db = getDb();
-  await db.insert(approvalsTable).values(approvalToRow(approval)).onConflictDoNothing();
+  await trackedWrite('insertApproval', () =>
+    db.insert(approvalsTable).values(approvalToRow(approval)).onConflictDoNothing());
 }
 
 // --- status history (insert-only) ------------------------------------------
@@ -399,7 +421,11 @@ export function persistStatusHistoryFireAndForget(entry: StatusHistory): void {
   if (!isDbConfigured() || !hasScope) return;
   const db = getDb();
   db.insert(statusHistoriesTable).values(historyToRow(entry)).onConflictDoNothing()
-    .catch((err: unknown) => console.error('[db] Could not persist status history entry:', err));
+    .then(() => recordDbSuccess())
+    .catch((err: unknown) => {
+      recordDbFailure('persistStatusHistory', err);
+      console.error('[db] Could not persist status history entry:', err);
+    });
 }
 
 /**

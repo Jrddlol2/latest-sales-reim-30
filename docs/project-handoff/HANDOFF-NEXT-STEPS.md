@@ -66,6 +66,25 @@ needed no IT/auth/provider input:
   (`GET /uploads/:filename` resolves each file to its owning record and
   applies that record's access predicate). Only durable object storage
   remains open there.
+- **Persistence-health surfacing** (punchlist #17, architecture follow-up) —
+  the write-through model logs Postgres failures with `console.error` and
+  keeps serving from memory, so a *persistent* write failure (e.g. schema
+  drift / a missing migration) is silent until a `DEMO_MODE=false` cutover
+  reads a stale DB. New `src/db/persistenceHealth.ts` registry records those
+  failures; the core reimbursement-loop writes (`coreLoopRepo.ts`) report into
+  it, and `/readyz` now returns a `persistence` block (`healthy`,
+  `consecutiveFailures`, `lastFailure`). **Reported but does not fail
+  readiness** — a write-through failure shouldn't pull a still-serving demo
+  out of a load balancer. Verified live: a wrong release-code attempt against
+  the migration-`0006`-less Supabase DB flipped `/readyz` to
+  `persistence.healthy:false` with `context:"persistClaim"`, while the user
+  still got the correct 400. **Follow-up:** extend the same two calls
+  (`recordDbFailure`/`recordDbSuccess`) to the other repos (cashAdvance,
+  users, companies, master data) — currently only the core loop is
+  instrumented. Related open architecture work discussed 2026-08-06 but NOT
+  done (needs a throwaway Postgres this environment lacks): a persist→load
+  round-trip test suite against a real/ephemeral Postgres, since the whole
+  automated suite runs `DATABASE_URL=''` and never exercises the DB path.
 
 ## Resolved this session
 

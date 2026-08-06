@@ -38,6 +38,7 @@ import {
   persistStatusHistoryFireAndForget, loadCoreLoopFromDb, clearCoreLoopInDb,
   nextClaimNumberFromDb, syncClaimNumberSequenceFloor, persistHistoricalImportBatch,
 } from './src/db/coreLoopRepo';
+import { getPersistenceHealth } from './src/db/persistenceHealth';
 import {
   persistCashAdvance, persistLiquidation, persistLiquidationLineItems,
   persistLiquidationLineItem, deleteLiquidationLineItem, loadCashAdvanceLoopFromDb, clearCashAdvanceLoopInDb,
@@ -868,15 +869,24 @@ export async function createApp() {
   // readiness in that mode is the same as liveness. When a database IS
   // configured, a real round-trip query is required — DATABASE_URL being
   // *set* doesn't mean the database is actually reachable right now.
+  // `persistence` reports write-through health: whether the most recent
+  // instrumented Postgres write succeeded (see src/db/persistenceHealth.ts).
+  // It is REPORTED but does NOT affect the pass/fail status here — a
+  // write-through failure means Postgres is drifting behind the in-memory
+  // arrays, which a monitor should alert on, but the app is still serving
+  // correct data from memory, so failing readiness (and pulling the process
+  // out of a load balancer) would be the wrong response while DEMO_MODE=true.
+  // The active `select 1` probe below is what gates readiness on the DB.
   app.get('/readyz', async (_req, res) => {
+    const persistence = getPersistenceHealth();
     if (!isDbConfigured()) {
-      return res.status(200).json({ status: 'ok', database: 'not_configured' });
+      return res.status(200).json({ status: 'ok', database: 'not_configured', persistence });
     }
     try {
       await getDb().execute(sql`select 1`);
-      res.status(200).json({ status: 'ok', database: 'reachable' });
+      res.status(200).json({ status: 'ok', database: 'reachable', persistence });
     } catch (err: any) {
-      res.status(503).json({ status: 'unavailable', database: 'unreachable', error: err?.message });
+      res.status(503).json({ status: 'unavailable', database: 'unreachable', error: err?.message, persistence });
     }
   });
 

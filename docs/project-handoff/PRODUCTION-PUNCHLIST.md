@@ -44,7 +44,7 @@ Legend: 🔴 blocker · 🟠 high · 🟡 medium · 🟢 low/nice-to-have · ✅
 | 13 | **Remediate `esbuild` MODERATE CVE (dev-only)** | via `drizzle-kit` → `@esbuild-kit/*` | GHSA-67mh-4wv8-2f99, dev-server only, not in the shipped bundle. Fix needs a breaking `drizzle-kit` bump (0.31 → 1.0.0-rc, prerelease as of 2026-08-06) — schedule deliberately, re-test `db:generate`/`db:push` against it before adopting. |
 | 15 | **Server-side search for large data** | workspace search | Client-side is fine for demo volume only. |
 | 16 | **Backups, migration ownership, retention, restore testing** | DB ops | Supabase PITR (paid tier) or own backup job. |
-| 17 | **Logs / monitoring / error tracking / incident ownership** | ops | Rate limiting, Helmet CSP, and pino structured logs already added — review CSP + add monitoring/error tracking + on-call. |
+| 17 | **Logs / monitoring / error tracking / incident ownership** | ops | Rate limiting, Helmet CSP, and pino structured logs already added. Write-through **persistence health** is now surfaced on `/readyz` (`persistence` field — flips `healthy:false` when an instrumented Postgres write fails, catching silent memory-vs-DB drift like a missing migration; added 2026-08-06, currently covers the core reimbursement-loop writes). **Still open:** review CSP + wire an external monitor to poll `/readyz` + error tracking (e.g. Sentry) + on-call. |
 
 ## 🟢 Low
 
