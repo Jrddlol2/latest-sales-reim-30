@@ -81,10 +81,39 @@ needed no IT/auth/provider input:
   still got the correct 400. **Follow-up:** extend the same two calls
   (`recordDbFailure`/`recordDbSuccess`) to the other repos (cashAdvance,
   users, companies, master data) — currently only the core loop is
-  instrumented. Related open architecture work discussed 2026-08-06 but NOT
-  done (needs a throwaway Postgres this environment lacks): a persist→load
-  round-trip test suite against a real/ephemeral Postgres, since the whole
-  automated suite runs `DATABASE_URL=''` and never exercises the DB path.
+  instrumented.
+- **Persist→load round-trip tests against a real schema** (same-day
+  follow-up to the item above) — this sandbox has no Docker/psql/pg-mem-free
+  local Postgres, so instead of skipping it, built one with **pg-mem**
+  (`pg-mem` npm package, pure JS, no external binary — added as a
+  `devDependency` only). `test/helpers/pgMemDb.ts` replays this repo's real
+  `drizzle/*.sql` migration files against a fresh pg-mem instance and returns
+  a `drizzle-orm/node-postgres` client wired to it; `src/db/index.ts` grew a
+  test-only `__setTestDb()` seam so every repo function (`coreLoopRepo.ts`,
+  `usersRepo.ts`, …) can be pointed at it with zero call-site changes.
+  `test/db-persistence.test.ts` round-trips a claim + expense line items +
+  MOM backfill through the real `persistClaimWithLineItems()` /
+  `loadCoreLoopFromDb()` functions and asserts every field, including the
+  release-code expiry/attempts/lockout columns. Its last test **reproduces
+  the exact production failure**: building a pg-mem DB stopped at migration
+  `0005` (the live Supabase DB's actual state) and asserting `persistClaim()`
+  throws the same "column release_code_expires_at does not exist" error
+  Supabase did. +3 tests (97/97 total).
+  **Two real pg-mem/drizzle incompatibilities found and worked around** (both
+  documented at length in `pgMemDb.ts`, both test-infra-only — nothing in
+  `server.ts` or the repo files changed): (1) `drizzle-orm/node-postgres`
+  always attaches a `types.getTypeParser` override pg-mem's adapter
+  unconditionally rejects — stripped at the pool boundary, changes no
+  returned values since pg-mem never parses a wire format to begin with; (2)
+  drizzle's `select()` path requests `rowMode: 'array'`, which pg-mem doesn't
+  support at all (object-mode rows only) — reshaped via `Object.values(row)`,
+  verified directly that pg-mem preserves SELECT-list column order in its
+  object rows, and the round-trip tests are the actual proof it's correct
+  (every written field comes back matching).
+  **Fidelity caveat, stated plainly:** pg-mem is a SQL emulator, not real
+  Postgres — this is a net for schema/code drift (a column a repo function
+  writes that a migration never added), not a substitute for verifying a
+  migration against the real Supabase instance before it reaches production.
 
 ## Resolved this session
 

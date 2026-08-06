@@ -58,9 +58,13 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current baseline is 89 tests across 12 files (grown from 70 across the
-2026-08-05 sessions, +2 for the release-code lockout on 2026-08-06 — see
+The current baseline is 97 tests across 14 files (grown from 70 across the
+2026-08-05 sessions, +2 for the release-code lockout and +3 for the new
+pg-mem-backed persistence round-trip suite on 2026-08-06 — see
 `HANDOFF-NEXT-STEPS.md`'s "Resolved" sections for what each batch added).
+One of those 14 files, `test/db-persistence.test.ts`, is the exception to
+the "runs without `DATABASE_URL`" rule below — it deliberately points the
+repo functions at an in-process pg-mem schema instead.
 
 ## Database-change rule
 

@@ -7,7 +7,7 @@ with real data until…" checklist, the Known-limitations register, and the curr
 
 - **Status as of 2026-08-06:** ✅ ready as a demo / pilot (in-memory or Postgres,
   demo login). ❌ **not** ready for real data — blocked on authentication.
-- **Health baseline:** 89/89 vitest pass · `tsc --noEmit` clean · `npm run build` clean.
+- **Health baseline:** 97/97 vitest pass · `tsc --noEmit` clean · `npm run build` clean.
 - **Note:** migration `0006` (release-code hardening columns, see #9) is also
   unapplied against the live Supabase DB — same gap as #5, folded into that item.
 - **Hosting rule:** deploy to a persistent-process host (Render / Railway / Fly.io).
@@ -63,7 +63,9 @@ Legend: 🔴 blocker · 🟠 high · 🟡 medium · 🟢 low/nice-to-have · ✅
 - ✅ **Cryptographic release-code generation + Postgres persistence, now with expiry and attempt throttling** (2026-08-06). Plaintext storage is a deliberate tradeoff, not an oversight — custodians re-display the code later in the Ready-for-Claim queue and Payouts history to read it back to a requestor, which a one-way hash would break. `RELEASE_CODE_VALIDITY_DAYS` (14d), `RELEASE_CODE_MAX_ATTEMPTS` (5), `RELEASE_CODE_LOCKOUT_MINUTES` (15) in `server.ts`; confirm compares with `crypto.timingSafeEqual`. Migration `0006` adds the new columns (unapplied on the live DB — folded into #5).
 - ✅ **Multi-step claim writes now transactional** (2026-08-06) — `persistClaimWithLineItems()` in `src/db/coreLoopRepo.ts` wraps the claim + expense line items + MOM backfill in one `db.transaction()` for new-claim submission, resubmission, and the cash-advance-shortfall auto-claim. (The liquidation-review route's claim/cash-advance/liquidation write still spans two repo modules and wasn't folded in — flagged as a follow-up, not attempted here.)
 - ✅ **Demo-seed gating collapsed to one switch** (2026-08-06) — `seedYearOfData()` itself now throws if `DEMO_MODE` is disabled, as a backstop under the existing per-route 404 checks, so a future call site can't accidentally reseed a real deployment.
-- ✅ **TypeScript strict mode** (2026-08-06) — `tsconfig.json` now sets `strict: true` (previously only `strictNullChecks`/`noImplicitAny`). Verified in isolation first: zero new errors, since those two flags already covered most of what `strict` adds. `tsc --noEmit`, 89/89 tests, and build all still clean.
+- ✅ **TypeScript strict mode** (2026-08-06) — `tsconfig.json` now sets `strict: true` (previously only `strictNullChecks`/`noImplicitAny`). Verified in isolation first: zero new errors, since those two flags already covered most of what `strict` adds.
+- ✅ **Write-through persistence health surfaced on `/readyz`** (2026-08-06) — a failed `persist*()` call was previously logged and silently swallowed (by design, so a transient DB blip never fails a request), which meant a *persistent* failure — like #5's live migration gap — went unnoticed until discovered by hand. `src/db/persistenceHealth.ts` + `/readyz`'s new `persistence` field make that visible without changing request behavior. Currently instruments the core reimbursement-loop writes only.
+- ✅ **Persist→load round-trip tests against a real schema** (2026-08-06) — `test/db-persistence.test.ts`, built on pg-mem (pure-JS Postgres emulator, `devDependency` only, no Docker/local Postgres needed) replaying the real `drizzle/*.sql` migration files. Catches the exact class of bug #5 describes automatically now: one of its 3 tests builds a database stopped at migration `0005` and asserts `persistClaim()` throws the same error the live Supabase DB actually threw. See `HANDOFF-NEXT-STEPS.md` for the two pg-mem/drizzle compatibility gaps found and worked around, and the fidelity caveat (emulator, not a substitute for verifying against real Supabase before a migration ships).
 
 ## Current `npm audit` (2026-08-05)
 

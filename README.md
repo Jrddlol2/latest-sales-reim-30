@@ -314,7 +314,7 @@ Everything runs in a single Node process: `tsx server.ts` serves the Express API
 | Persistence | Supabase Postgres via Drizzle ORM + `pg` | 0.45 / 8 | Schema in `src/db/schema.ts` (25 tables). Live and wired — every write persists; see [Database persistence](#database-persistence) for the in-memory-cache-plus-write-through architecture and its hosting constraint. |
 | PDF/doc export | jsPDF (+ html2canvas) | 3 | `src/lib/*Export.ts`, `documentExport.ts`. See dependency CVE note below. |
 | IDs | `uuid` | 14 | |
-| Testing | Vitest + `tsc` | 4 / 5.8 | 89 tests / 12 files (2026-08-06). Run without `DATABASE_URL`, so they verify the in-memory code paths only — persistence itself was verified live against Supabase (see [Database persistence](#database-persistence)), not by the automated suite. |
+| Testing | Vitest + `tsc` | 4 / 5.8 | 97 tests / 14 files (2026-08-06). Almost all run without `DATABASE_URL`, verifying the in-memory code paths only; `test/db-persistence.test.ts` is the one exception — it points the repo write/read functions at pg-mem (an in-process schema-accurate Postgres emulator, no Docker needed) built from the real migration files, so the DB path now has automated coverage too. Still not a substitute for the live Supabase verification noted in [Database persistence](#database-persistence). |
 | Bundling (server) | esbuild | 0.25 | `npm run build` → `dist/server.cjs`. |
 | CI | GitHub Actions | — | `.github/workflows/ci.yml`: `npm ci`, type-check, test, build. |
 | Deploy target | A persistent-process host (Render/Railway/Fly.io) | — | `npm start` binds to `process.env.PORT`, ready for a standard web-service setup. **Not** Vercel serverless functions (`vercel.json`/`api/` are present but incompatible with the current persistence design — see [Database persistence](#database-persistence)). |
@@ -544,7 +544,7 @@ Copy `.env.example` into the deployment environment and set only environment-spe
 
 ## Testing
 
-The project uses Vitest. As of 2026-08-06, the suite contains **89 tests in 12 test files**. The `test/` files run against the real Express app on an ephemeral port (no mocking); the `src/lib/` files unit-test framework-free logic.
+The project uses Vitest. As of 2026-08-06, the suite contains **97 tests in 14 test files**. Most `test/` files run against the real Express app on an ephemeral port (no mocking) with `DATABASE_URL` unset; `test/db-persistence.test.ts` is the exception, running the actual Postgres write/read functions against a pg-mem-backed schema built from the real migration files. The `src/lib/` files unit-test framework-free logic.
 
 | Test area | Files |
 |---|---|
