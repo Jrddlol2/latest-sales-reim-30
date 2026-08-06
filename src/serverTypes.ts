@@ -209,6 +209,9 @@ export interface Claim {
   payment_reference?: string;
   payment_method?: string;
   release_code?: string;
+  release_code_expires_at?: string;
+  release_code_attempts?: number;
+  release_code_locked_until?: string;
   flagged_high_value?: boolean;
   approved_at?: string;
   paid_at?: string;

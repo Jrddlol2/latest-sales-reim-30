@@ -182,6 +182,13 @@ export const claims = pgTable('claims', {
   paymentReference: text('payment_reference'),
   paymentMethod: text('payment_method'),
   releaseCode: text('release_code'),
+  // Production hardening (punchlist #9): the code stays a operator-facing
+  // plaintext value (custodians re-display it in the Ready-for-Claim queue
+  // and Payouts history), so hashing it at rest isn't compatible with that
+  // UX. Expiry + attempt throttling are the mitigations that don't break it.
+  releaseCodeExpiresAt: timestamp('release_code_expires_at', { withTimezone: true }),
+  releaseCodeAttempts: integer('release_code_attempts').default(0),
+  releaseCodeLockedUntil: timestamp('release_code_locked_until', { withTimezone: true }),
   flaggedHighValue: boolean('flagged_high_value').default(false),
   approvedAt: timestamp('approved_at', { withTimezone: true }),
   paidAt: timestamp('paid_at', { withTimezone: true }),

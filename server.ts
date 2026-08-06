@@ -34,7 +34,7 @@ import { isDbConfigured, loadUsersFromDb, syncUsersToDb, clearUsersInDb, loadUse
 import { getDb } from './src/db/index';
 import { sql } from 'drizzle-orm';
 import {
-  persistMom, persistClaim, persistExpenseLineItems, insertApproval,
+  persistMom, persistClaim, persistExpenseLineItems, persistClaimWithLineItems, insertApproval,
   persistStatusHistoryFireAndForget, loadCoreLoopFromDb, clearCoreLoopInDb,
   nextClaimNumberFromDb, syncClaimNumberSequenceFloor, persistHistoricalImportBatch,
 } from './src/db/coreLoopRepo';
@@ -91,10 +91,21 @@ const LIQUIDATION_DEADLINE_DAYS = 7;
  * confirm receipt. Uses crypto.randomBytes (not Math.random) so codes aren't
  * predictable, and excludes ambiguous characters (0/O, 1/I) so a custodian can
  * read it aloud without confusion. See docs/SYSTEM-AUDIT-2026-08-03.md (release
- * codes). Production hardening still owes expiry, hashed storage, and attempt
- * throttling — tracked in the README known-limitations section.
+ * codes).
+ *
+ * Production hardening (punchlist #9): the code is deliberately kept
+ * plaintext at rest rather than hashed — custodians re-display it later in
+ * the Ready-for-Claim queue and Payouts history so they can read it back to
+ * a requestor in person, which a one-way hash would make impossible. Expiry
+ * and attempt throttling (below) are the mitigations that don't break that
+ * workflow: a leaked/guessed code has a limited window and a limited number
+ * of tries before it's useless.
  */
 const RELEASE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const RELEASE_CODE_VALIDITY_DAYS = 14;
+const RELEASE_CODE_MAX_ATTEMPTS = 5;
+const RELEASE_CODE_LOCKOUT_MINUTES = 15;
+
 function generateReleaseCode(length = 6): string {
   const bytes = crypto.randomBytes(length);
   let code = '';
@@ -102,6 +113,30 @@ function generateReleaseCode(length = 6): string {
     code += RELEASE_CODE_ALPHABET[bytes[i] % RELEASE_CODE_ALPHABET.length];
   }
   return code;
+}
+
+function releaseCodeExpiryFrom(date: Date): string {
+  return new Date(date.getTime() + RELEASE_CODE_VALIDITY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/** Resets a claim's release-code security state whenever a code is (re)issued. */
+function resetReleaseCodeSecurity(claim: Claim, issuedAt: Date = new Date()) {
+  claim.release_code_expires_at = releaseCodeExpiryFrom(issuedAt);
+  claim.release_code_attempts = 0;
+  claim.release_code_locked_until = undefined;
+}
+
+/** Constant-time equality so a wrong guess can't be timed to leak how many characters matched. */
+function timingSafeCodeEquals(input: string, actual: string): boolean {
+  const a = Buffer.from(input);
+  const b = Buffer.from(actual);
+  if (a.length !== b.length) {
+    // Compare against itself so this branch takes comparable time to a real mismatch,
+    // rather than returning immediately and leaking length via timing.
+    crypto.timingSafeEqual(a, a);
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
 }
 
 let moms: Mom[] = [];
@@ -2856,11 +2891,11 @@ ${user.name}`;
 
     // Order matters: the claim row must exist before addHistory's
     // fire-and-forget insert (status_histories.claim_id FKs to it), and
-    // before persisting the mom (moms.claim_id FKs to claims.id too).
+    // before persisting the mom (moms.claim_id FKs to claims.id too). All
+    // three writes go through one transaction so a mid-sequence failure
+    // can't leave the claim committed without its expenses (or vice versa).
     try {
-      await persistClaim(claim);
-      await persistExpenseLineItems(claim.id, expenses.filter(e => e.claim_id === claim.id));
-      if (mom) await persistMom(mom);
+      await persistClaimWithLineItems(claim, expenses.filter(e => e.claim_id === claim.id), mom ? [mom] : []);
     } catch (err) {
       console.error('[db] Could not persist new claim to Postgres:', err);
     }
@@ -3286,10 +3321,8 @@ You'll receive another email as soon as ${approverName} makes a decision.`,
     }
 
     try {
-      await persistClaim(claim);
-      await persistExpenseLineItems(claim.id, expenses.filter(e => e.claim_id === claim.id));
-      if (unlinkedOldMom) await persistMom(unlinkedOldMom);
-      if (mom) await persistMom(mom);
+      const momsToBackfill = [unlinkedOldMom, mom].filter((m): m is NonNullable<typeof m> => !!m);
+      await persistClaimWithLineItems(claim, expenses.filter(e => e.claim_id === claim.id), momsToBackfill);
     } catch (err) {
       console.error('[db] Could not persist resubmitted claim to Postgres:', err);
     }
@@ -3647,6 +3680,9 @@ Manual reassignment may be needed.`));
       claim.processing_date = undefined;
       claim.processed_by = undefined;
       claim.release_code = undefined;
+      claim.release_code_expires_at = undefined;
+      claim.release_code_attempts = 0;
+      claim.release_code_locked_until = undefined;
       addHistory(claim.id, oldStatus, newStatus, user.id, `Custodian ${decision.toLowerCase()}: ${comment.trim()}`);
 
       const claimNumber = claim.claim_number || `REIM-${claim.id.substring(0, 6)}`;
@@ -3738,6 +3774,7 @@ Manual reassignment may be needed.`));
     const { code } = req.body;
     const isRegen = !!claim.release_code;
     claim.release_code = code || generateReleaseCode();
+    resetReleaseCodeSecurity(claim);
 
     addHistory(claim.id, claim.status, claim.status, user.id, isRegen ? `Regenerated Claim Code to ${claim.release_code}` : `Generated Claim Code ${claim.release_code}`);
 
@@ -3767,6 +3804,7 @@ Manual reassignment may be needed.`));
 
     if (!claim.release_code) {
       claim.release_code = generateReleaseCode();
+      resetReleaseCodeSecurity(claim);
     }
 
     const { payment_method } = req.body;
@@ -3830,9 +3868,34 @@ BSM Assistant | BSD - IT Security Business`;
     }
 
     const { code } = req.body;
-    if (!code || code !== claim.release_code) {
+    if (!code) {
       return res.status(400).json({ error: 'Incorrect Claim Code' });
     }
+
+    if (claim.release_code_locked_until && new Date(claim.release_code_locked_until) > new Date()) {
+      const minutesLeft = Math.max(1, Math.ceil((new Date(claim.release_code_locked_until).getTime() - Date.now()) / 60000));
+      return res.status(429).json({ error: `Too many incorrect attempts. Try again in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}, or ask your custodian to regenerate the code.` });
+    }
+
+    if (claim.release_code_expires_at && new Date(claim.release_code_expires_at) < new Date()) {
+      return res.status(400).json({ error: 'This claim code has expired. Ask your custodian to regenerate it.' });
+    }
+
+    if (!claim.release_code || !timingSafeCodeEquals(code, claim.release_code)) {
+      claim.release_code_attempts = (claim.release_code_attempts || 0) + 1;
+      if (claim.release_code_attempts >= RELEASE_CODE_MAX_ATTEMPTS) {
+        claim.release_code_locked_until = new Date(Date.now() + RELEASE_CODE_LOCKOUT_MINUTES * 60 * 1000).toISOString();
+      }
+      try {
+        await persistClaim(claim);
+      } catch (err) {
+        console.error('[db] Could not persist release-code attempt to Postgres:', err);
+      }
+      return res.status(400).json({ error: 'Incorrect Claim Code' });
+    }
+
+    claim.release_code_attempts = 0;
+    claim.release_code_locked_until = undefined;
 
     const oldStatus = claim.status;
     claim.status = ClaimStatus.COMPLETED;
@@ -4922,10 +4985,10 @@ You'll receive another email as soon as a decision is made.`
         // Persist before logging history: addHistory's insert is
         // fire-and-forget and would otherwise race ahead of this brand-new
         // claim row, FK-violating against a claim_id that doesn't exist in
-        // Postgres yet.
+        // Postgres yet. Claim + its one expense line go through a single
+        // transaction so a failure can't commit one without the other.
         try {
-          await persistClaim(shortFallClaim);
-          await persistExpenseLineItems(claimId, expenses.filter(e => e.claim_id === claimId));
+          await persistClaimWithLineItems(shortFallClaim, expenses.filter(e => e.claim_id === claimId));
         } catch (err) {
           console.error('[db] Could not persist shortfall claim to Postgres:', err);
         }
@@ -5292,6 +5355,15 @@ You'll receive another email as soon as a decision is made.`
   // just loaded from Postgres. Explicit admin seed/reset routes always pass
   // the default (true) — an admin choosing to reseed means reseed everything.
   async function seedYearOfData(options: SeedDataOptions = FULL_SEED_OPTIONS, resetUsers = true) {
+    // Every call site already checks demoModeEnabled before calling this
+    // (route handlers return 404 first for a clean response; the boot-time
+    // auto-seed only calls in if demoModeEnabled) — this is the backstop so
+    // a real deploy can never regenerate demo data even if a future call
+    // site forgets that check. One switch, enforced here, not by convention
+    // at every caller (punchlist #10).
+    if (!demoModeEnabled) {
+      throw new Error('Refusing to seed demo data: DEMO_MODE is disabled.');
+    }
     moms = [];
     claims = [];
     expenses = [];
@@ -5549,6 +5621,10 @@ You'll receive another email as soon as a decision is made.`
         remarks: `Reimbursement for sales meeting with ${opts.mom.client} team.`,
         supporting_documents: 'Proposal_Draft_v1.pdf',
         release_code: isReleaseStage ? (opts.releaseCode || Math.random().toString(36).substring(2, 8).toUpperCase()) : undefined,
+        // Only a still-outstanding (Ready for Claim) code needs an expiry —
+        // give it one relative to processedAt so demo data never seeds an
+        // already-expired code (see RELEASE_CODE_VALIDITY_DAYS).
+        release_code_expires_at: opts.status === ClaimStatus.READY_FOR_CLAIM ? releaseCodeExpiryFrom(new Date(processedAt)) : undefined,
         payment_method: isReleaseStage ? 'Cash' : undefined,
         processed_by: isReleaseStage ? 'u3' : undefined,
         processing_date: isReleaseStage ? processedAt : undefined,

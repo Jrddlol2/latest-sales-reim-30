@@ -249,6 +249,7 @@ export interface Claim {
   
   // Custodian processing
   releaseCode?: string;
+  releaseCodeExpiresAt?: string;
   paymentReference?: string;
   paymentMethod?: string;
   processedBy?: string;

@@ -11,9 +11,12 @@ tooling; unlisted-company dedup + pending-review queue; then rate limiting,
 health/readiness endpoints, self-hosted fonts + CSP, structured request
 logging, server-side financial-fallback gating, a shared FilterBar
 component replacing three independently-built filter UIs, a terminology
-pass, and the `jspdf` critical CVE fix. Baseline is green: 87/87 vitest (up
-from 70 at the start of 2026-08-05), `tsc --noEmit` clean, production build
-succeeds, `npm audit` down to 6 (0 critical, 2 high, 4 moderate dev-only).
+pass, and the `jspdf` critical CVE fix. A further 2026-08-06 pass added
+release-code expiry + attempt lockout, transactional multi-step claim
+writes, a demo-seed hard gate, and TypeScript strict mode (see "Resolved
+2026-08-06" below). Baseline is green: 89/89 vitest (up from 70 at the start
+of 2026-08-05), `tsc --noEmit` clean (now under `strict: true`), production
+build succeeds, `npm audit` down to 6 (0 critical, 2 high, 4 moderate dev-only).
 
 **Preview launch config gotcha:** this repo's own `.claude/launch.json` names
 its one entry **"new-ui"**, but if this repo sits inside a parent workspace
@@ -26,6 +29,43 @@ assuming the code regressed — this cost real debugging time on 2026-08-05.
 In that environment, the working config name was **"latest-30"**.
 
 ---
+
+## Resolved 2026-08-06
+
+A no-external-dependencies hardening pass working straight down the
+production punch-list (`PRODUCTION-PUNCHLIST.md`), picking only items that
+needed no IT/auth/provider input:
+
+- **Release-code hardening** (punchlist #9) — codes now carry an expiry
+  (`RELEASE_CODE_VALIDITY_DAYS` = 14) and lock out after
+  `RELEASE_CODE_MAX_ATTEMPTS` (5) wrong tries for
+  `RELEASE_CODE_LOCKOUT_MINUTES` (15), all in `server.ts`; the confirm route
+  compares with `crypto.timingSafeEqual`. Storage stays **plaintext by
+  design** — custodians re-read the code aloud from the Ready-for-Claim queue
+  and Payouts history, which a one-way hash would break — so hashed storage
+  was deliberately not adopted, contrary to the original punchlist wording.
+  New columns via migration `drizzle/0006` (unapplied on the live Supabase DB
+  — same gap as the other pending migrations, see `PRODUCTION-PUNCHLIST.md`
+  #5). Verified end-to-end in the browser: 5 wrong entries produced the
+  lockout message. Two regression tests added to `workflow-guards.test.ts`.
+- **Transactional multi-step writes** (punchlist #11) — new
+  `persistClaimWithLineItems()` in `src/db/coreLoopRepo.ts` wraps the
+  claim + expense line items + MOM backfill in one `db.transaction()`. Wired
+  into new-claim submission, revise-and-resubmit, and the cash-advance
+  shortfall auto-claim. **Still open:** the liquidation-review route's write
+  spans two repo modules (`coreLoopRepo` + `cashAdvanceRepo`) and wasn't
+  folded in — a larger cross-module refactor left as follow-up.
+- **Demo-seed hard gate** (punchlist #10) — `seedYearOfData()` now throws if
+  `DEMO_MODE` is disabled, as a backstop beneath the existing per-route 404
+  checks, so no future call site can regenerate demo data on a real deploy.
+- **TypeScript strict mode** (punchlist #14) — `tsconfig.json` now sets
+  `strict: true` (was only `strictNullChecks` + `noImplicitAny`). Verified in
+  isolation first: zero new errors.
+- **Doc correction** — punchlist #7's "downloads not authorized against the
+  owning claim/MOM" was stale; that authorization already exists
+  (`GET /uploads/:filename` resolves each file to its owning record and
+  applies that record's access predicate). Only durable object storage
+  remains open there.
 
 ## Resolved this session
 

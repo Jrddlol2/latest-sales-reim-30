@@ -58,9 +58,9 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current baseline is 87 tests across 12 files (grown from 70 across three
-2026-08-05 sessions — see `HANDOFF-NEXT-STEPS.md`'s "Resolved 2026-08-05"
-sections for what each batch added).
+The current baseline is 89 tests across 12 files (grown from 70 across the
+2026-08-05 sessions, +2 for the release-code lockout on 2026-08-06 — see
+`HANDOFF-NEXT-STEPS.md`'s "Resolved" sections for what each batch added).
 
 ## Database-change rule
 

@@ -347,6 +347,7 @@ export function fromServerClaim(c: any, demoModeEnabled = false): Claim {
     location: c.mom?.location || undefined,
     flaggedHighValue: Boolean(c.flagged_high_value),
     releaseCode: c.release_code || undefined,
+    releaseCodeExpiresAt: c.release_code_expires_at || undefined,
     paymentReference: c.payment_reference || undefined,
     paymentMethod: c.payment_method || undefined,
     processedBy: c.processed_by || undefined,

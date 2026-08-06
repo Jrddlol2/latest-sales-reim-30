@@ -323,23 +323,35 @@ must set `DEMO_MODE=false`, `AUTH_MODE=microsoft`,
 These items are not mock representations, but should be completed alongside
 the backend work above:
 
-- Wrap multi-record claim/MOM/expense writes in database transactions. (The
-  historical-import route now does this — item 3 above — as one example;
-  the original per-route sequential-awaited-upserts pattern elsewhere, e.g.
-  claim submission's persistClaim → persistExpenseLineItems → persistMom,
-  is unchanged.)
-- Add expiry, hashing, regeneration invalidation, and attempt throttling for
-  release codes.
+- ~~Wrap multi-record claim/MOM/expense writes in database transactions.~~
+  **Mostly resolved 2026-08-06** — claim submission, resubmission, and the
+  cash-advance-shortfall auto-claim now go through
+  `persistClaimWithLineItems()` (`src/db/coreLoopRepo.ts`), a single
+  `db.transaction()` over claim + expenses + MOM backfill; the
+  historical-import route already did this (item 3 above). **Still open:** the
+  liquidation-review route's claim/cash-advance/liquidation write spans two
+  repo modules and wasn't folded in.
+- ~~Add expiry, hashing, regeneration invalidation, and attempt throttling for
+  release codes.~~ **Resolved 2026-08-06** — expiry (14 days), attempt
+  throttling (5 tries → 15-min lockout), and regeneration invalidation
+  (`resetReleaseCodeSecurity()` clears attempts/lockout and re-stamps expiry
+  on every (re)issue) are all in `server.ts`; confirm compares with
+  `crypto.timingSafeEqual`. **Hashing intentionally not adopted** — custodians
+  re-read the code aloud from the queue/history, which a one-way hash would
+  break; expiry + throttling are the mitigations that fit that workflow. New
+  columns via migration `0006` (unapplied on the live DB — see the migration
+  note two items below).
 - ~~Replace `drizzle-kit push` with reviewed, ordered migrations in the
   release pipeline.~~ **Resolved 2026-08-05** — `npm run db:migrate`
   (`src/db/migrate.ts`) applies the files under `drizzle/` via Drizzle's
   `migrate()` runner; the workflow is now `db:generate` → review →
   `db:migrate`. `db:push` still exists for local iteration only. Not yet
   run against the connected Supabase database (would apply
-  `0004_skinny_flatman.sql` **and now also `0005_bored_colonel_america.sql`**,
-  the `companies.pending_review`/`created_by` columns from the same session)
-  — needs someone with ownership of that live data to run it. See
-  `docs/project-handoff/HANDOFF-NEXT-STEPS.md`.
+  `0004_skinny_flatman.sql`, `0005_bored_colonel_america.sql` — the
+  `companies.pending_review`/`created_by` columns — **and now
+  `0006_harden_release_codes.sql`**, the release-code expiry/attempts/lockout
+  columns from 2026-08-06) — needs someone with ownership of that live data
+  to run it. See `docs/project-handoff/HANDOFF-NEXT-STEPS.md`.
 - Rate limiting, health/readiness endpoints, and structured logging/monitoring
   now have their own rows in "Prioritized findings" above (P1) — kept as one
   line here only for alerting, backup/restore tests, and retention policies,

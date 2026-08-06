@@ -22,8 +22,7 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "strictNullChecks": true,
-    "noImplicitAny": true
+    "strict": true
   },
   "include": [
     "src/**/*.ts",

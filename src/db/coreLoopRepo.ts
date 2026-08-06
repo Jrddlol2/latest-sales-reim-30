@@ -129,6 +129,9 @@ function claimToRow(c: Claim) {
     paymentReference: c.payment_reference ?? null,
     paymentMethod: c.payment_method ?? null,
     releaseCode: c.release_code ?? null,
+    releaseCodeExpiresAt: c.release_code_expires_at ? new Date(c.release_code_expires_at) : null,
+    releaseCodeAttempts: c.release_code_attempts ?? 0,
+    releaseCodeLockedUntil: c.release_code_locked_until ? new Date(c.release_code_locked_until) : null,
     flaggedHighValue: !!c.flagged_high_value,
     approvedAt: c.approved_at ? new Date(c.approved_at) : null,
     paidAt: c.paid_at ? new Date(c.paid_at) : null,
@@ -169,6 +172,9 @@ function claimFromRow(r: typeof claimsTable.$inferSelect): Claim {
     payment_reference: r.paymentReference ?? undefined,
     payment_method: r.paymentMethod ?? undefined,
     release_code: r.releaseCode ?? undefined,
+    release_code_expires_at: r.releaseCodeExpiresAt ? r.releaseCodeExpiresAt.toISOString() : undefined,
+    release_code_attempts: r.releaseCodeAttempts ?? undefined,
+    release_code_locked_until: r.releaseCodeLockedUntil ? r.releaseCodeLockedUntil.toISOString() : undefined,
     flagged_high_value: r.flaggedHighValue ?? undefined,
     approved_at: r.approvedAt ? r.approvedAt.toISOString() : undefined,
     paid_at: r.paidAt ? r.paidAt.toISOString() : undefined,
@@ -190,6 +196,39 @@ export async function persistClaim(claim: Claim): Promise<void> {
   const db = getDb();
   const row = claimToRow(claim);
   await db.insert(claimsTable).values(row).onConflictDoUpdate({ target: claimsTable.id, set: row });
+}
+
+/**
+ * Persists a claim, its full set of expense line items, and any MOM
+ * backfill(s) as one transaction — covers POST /api/claims (new submission,
+ * one MOM) and the revise-and-resubmit route (claim + expenses, and up to
+ * two MOMs when the requestor swapped which meeting the claim links to).
+ * Previously these were separately-awaited upserts: a failure partway
+ * through (e.g. the line-item insert) could leave a claim row committed
+ * with no expenses, or expenses committed with a MOM link never backfilled.
+ * Same write order as before (claim, then its line items, then MOM
+ * backfill(s)) — the claim insert only needs each MOM row to already exist
+ * (it references moms.id), which it does since a MOM is always created and
+ * persisted before it can be selected/linked here; only the reverse link
+ * (moms.claim_id) is backfilled after.
+ */
+export async function persistClaimWithLineItems(claim: Claim, items: ExpenseLineItem[], moms: Mom[] = []): Promise<void> {
+  if (!isDbConfigured()) return;
+  const db = getDb();
+  await db.transaction(async (tx: typeof db) => {
+    const claimRow = claimToRow(claim);
+    await tx.insert(claimsTable).values(claimRow).onConflictDoUpdate({ target: claimsTable.id, set: claimRow });
+
+    await tx.delete(expenseLineItemsTable).where(eq(expenseLineItemsTable.claimId, claim.id));
+    for (const item of items) {
+      await tx.insert(expenseLineItemsTable).values(expenseToRow(item));
+    }
+
+    for (const mom of moms) {
+      const momRow = momToRow(mom);
+      await tx.insert(momsTable).values(momRow).onConflictDoUpdate({ target: momsTable.id, set: momRow });
+    }
+  });
 }
 
 /**

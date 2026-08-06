@@ -122,6 +122,54 @@ describe('custodian claim-code guard', () => {
   });
 });
 
+describe('release code confirm guard', () => {
+  it('locks out after too many incorrect confirm attempts, blocking even the correct code', async () => {
+    const claimId = await submitClaim('lockout-test');
+    await approve(claimId);
+    await genCode(claimId);
+    await markReady(claimId);
+
+    const wrongAttempt = () =>
+      api(`/api/claims/${claimId}/claim`, REQUESTOR_ID, { method: 'POST', body: JSON.stringify({ code: 'WRONG1' }) });
+
+    // The 5th wrong attempt itself still reports "incorrect code" but is the
+    // one that trips the lockout for every attempt after it.
+    for (let i = 0; i < 5; i++) {
+      const res = await wrongAttempt();
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Incorrect Claim Code');
+    }
+    const locked = await wrongAttempt();
+    expect(locked.status).toBe(429);
+    expect(locked.body.error).toContain('Too many incorrect attempts');
+
+    // Even the correct code is rejected while locked out.
+    const claim = await api(`/api/claims/${claimId}`, REQUESTOR_ID);
+    const correctWhileLocked = await api(`/api/claims/${claimId}/claim`, REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({ code: claim.body.release_code }),
+    });
+    expect(correctWhileLocked.status).toBe(429);
+  });
+
+  it('resets the attempt counter after a successful confirm', async () => {
+    const claimId = await submitClaim('reset-test');
+    await approve(claimId);
+    await genCode(claimId);
+    await markReady(claimId);
+
+    await api(`/api/claims/${claimId}/claim`, REQUESTOR_ID, { method: 'POST', body: JSON.stringify({ code: 'WRONG1' }) });
+
+    const claim = await api(`/api/claims/${claimId}`, REQUESTOR_ID);
+    const success = await api(`/api/claims/${claimId}/claim`, REQUESTOR_ID, {
+      method: 'POST',
+      body: JSON.stringify({ code: claim.body.release_code }),
+    });
+    expect(success.status).toBe(200);
+    expect(success.body.status).toBe('Completed');
+  });
+});
+
 describe('ready-for-claim transition guard', () => {
   it('rejects marking a claim ready before it is in Processing', async () => {
     const claimId = await submitClaim('early-ready'); // still Pending Approval

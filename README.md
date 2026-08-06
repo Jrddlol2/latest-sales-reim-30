@@ -314,7 +314,7 @@ Everything runs in a single Node process: `tsx server.ts` serves the Express API
 | Persistence | Supabase Postgres via Drizzle ORM + `pg` | 0.45 / 8 | Schema in `src/db/schema.ts` (25 tables). Live and wired — every write persists; see [Database persistence](#database-persistence) for the in-memory-cache-plus-write-through architecture and its hosting constraint. |
 | PDF/doc export | jsPDF (+ html2canvas) | 3 | `src/lib/*Export.ts`, `documentExport.ts`. See dependency CVE note below. |
 | IDs | `uuid` | 14 | |
-| Testing | Vitest + `tsc` | 4 / 5.8 | 67 tests / 10 files. Run without `DATABASE_URL`, so they verify the in-memory code paths only — persistence itself was verified live against Supabase (see [Database persistence](#database-persistence)), not by the automated suite. |
+| Testing | Vitest + `tsc` | 4 / 5.8 | 89 tests / 12 files (2026-08-06). Run without `DATABASE_URL`, so they verify the in-memory code paths only — persistence itself was verified live against Supabase (see [Database persistence](#database-persistence)), not by the automated suite. |
 | Bundling (server) | esbuild | 0.25 | `npm run build` → `dist/server.cjs`. |
 | CI | GitHub Actions | — | `.github/workflows/ci.yml`: `npm ci`, type-check, test, build. |
 | Deploy target | A persistent-process host (Render/Railway/Fly.io) | — | `npm start` binds to `process.env.PORT`, ready for a standard web-service setup. **Not** Vercel serverless functions (`vercel.json`/`api/` are present but incompatible with the current persistence design — see [Database persistence](#database-persistence)). |
@@ -544,7 +544,7 @@ Copy `.env.example` into the deployment environment and set only environment-spe
 
 ## Testing
 
-The project uses Vitest. At the time this README was updated, the suite contains **67 tests in 10 test files**. The `test/` files run against the real Express app on an ephemeral port (no mocking); the `src/lib/` files unit-test framework-free logic.
+The project uses Vitest. As of 2026-08-06, the suite contains **89 tests in 12 test files**. The `test/` files run against the real Express app on an ephemeral port (no mocking); the `src/lib/` files unit-test framework-free logic.
 
 | Test area | Files |
 |---|---|
@@ -574,18 +574,19 @@ The repository contains Vercel configuration (`vercel.json`) and an API entry po
 ### Do not deploy with real data until all of the following are complete
 
 1. ~~Connect `server.ts` to PostgreSQL~~ — done (2026-08-04); see [Database persistence](#database-persistence).
-2. Gate the demo seed generator behind `DEMO_MODE` too, so a real deployment's data isn't at risk of ever being regenerated (currently only a code-path concern, not a real risk, since `seedYearOfData()` only runs when `DEMO_MODE=true`, which itself gates real deployments off from ever calling it — but the two mechanisms should eventually collapse into one).
+2. ~~Gate the demo seed generator behind `DEMO_MODE`~~ — done (2026-08-06); `seedYearOfData()` now throws if `DEMO_MODE` is disabled, so a real deployment can never regenerate demo data even if a call site forgets the check.
 3. Add backups, migration ownership, retention, and restore testing (Supabase point-in-time recovery on paid tiers, or your own backup job).
 4. Implement Microsoft Entra OIDC and a server-side session model.
 5. Remove `X-User-Id` trust and demo account access.
 6. Set `DEMO_MODE=false`, `AUTH_MODE=microsoft`, `ENABLE_DEMO_LOGIN=false`, and `AUTO_SEED=false`.
-7. Move uploads to durable object storage with ownership/authorization checks.
+7. Move uploads to durable object storage (per-object authorization is already done — see [Known limitations](#known-limitations-and-technical-debt)).
 8. Replace mock email/outbox behavior with an approved email/notification provider (and decide whether to persist it — currently intentionally in-memory only).
 9. Add structured logs, monitoring, error tracking, rate limiting, security headers/CSP review, and incident ownership.
 10. Remediate the known dependency CVEs (see [Dependency security](#dependency-security-known-cves)) and re-verify PDF export and routing.
-11. Harden release codes further (expiry, hashed storage, attempt throttling) on top of the crypto generation and Postgres persistence already in place.
-12. Wrap multi-step writes (e.g. claim submission) in real Postgres transactions instead of sequential awaited upserts.
-13. Complete privacy, audit-retention, financial-control, and user-acceptance reviews.
+11. ~~Harden release codes further (expiry, attempt throttling)~~ — done (2026-08-06); codes now expire after 14 days and lock out after 5 wrong attempts. Storage stays plaintext by design (custodians re-read the code aloud from the queue/history), so hashing was intentionally not adopted.
+12. ~~Wrap multi-step writes (e.g. claim submission) in real Postgres transactions~~ — done (2026-08-06); `persistClaimWithLineItems()` wraps claim + expenses + MOM in one transaction. (The liquidation-review write still spans two repo modules — remaining follow-up.)
+13. ~~Enable TypeScript strict mode~~ — done (2026-08-06); `tsconfig.json` now sets `strict: true`.
+14. Complete privacy, audit-retention, financial-control, and user-acceptance reviews.
 
 See `docs/production-cutover.md`, `docs/microsoft-auth-handoff.md`, and `docs/DATABASE-MIGRATION.md` for focused plans.
 
@@ -601,36 +602,33 @@ See `docs/production-cutover.md`, `docs/microsoft-auth-handoff.md`, and `docs/DA
 | Old favicon/title remains | Browser cache. | Hard refresh the affected tab. |
 | Another role tab looks stale | Tabs refresh while visible/focused; backend data is shared. | Focus the tab or refresh it. |
 | Upload disappears after deploy/restart | Local filesystem is not persistent. | Use durable object storage before production. |
-| Type check passes but behavior is wrong | TypeScript is not in strict mode and workflow rules are server-dependent. | Run tests and exercise the actual role flow. |
+| Type check passes but behavior is wrong | Workflow rules are server-dependent; strict mode catches type errors, not policy errors. | Run tests and exercise the actual role flow. |
 
 ## Known limitations and technical debt
 
 | Priority | Issue | Why it matters |
 |---|---|---|
 | Critical | Demo `X-User-Id` identity | Anyone can impersonate a role; it is not authentication. This is now the single largest gap — persistence is done, auth is not. |
-| Critical | Dependency CVEs deferred | `jspdf` (critical) and `react-router` (high) have published advisories. The only fixes are **breaking** upgrades (jspdf 3→4; react-router), so they were intentionally deferred to keep the demo stable — see [Dependency security](#dependency-security-known-cves). Remediate before production. |
-| High | Demo seed generator isn't gated | Real writes persist to Postgres correctly (see [Database persistence](#database-persistence)), but `seedYearOfData()` still regenerates fresh in-memory demo data on every restart while `DEMO_MODE=true`. Only matters once you start relying on restart-to-restart continuity while still presenting. |
+| High | Dependency CVEs deferred | The `jspdf` critical CVE is **fixed** (3→4, 2026-08-06). Still open: `react-router` (high, RSC-mode CSRF — app isn't in RSC mode so exposure is low) with no clean forward fix yet, and a dev-only `esbuild`/`drizzle-kit` moderate. See [Dependency security](#dependency-security-known-cves). Remediate before production. |
 | High | Microsoft login is scaffolding only | No real Entra sign-in/session exists yet. |
-| High | Local upload storage | Not durable, and downloads are not authorized against the owning claim/MOM. |
+| High | Local upload storage isn't durable | Files live on the local filesystem, lost on restart/redeploy — move to object storage. (Per-object authorization is already enforced: `GET /uploads/:filename` resolves each file to its owning claim/MOM/liquidation and applies that record's access check.) |
 | High | Mock email/outbox | Records are generated, but external email delivery is not production-integrated; also not persisted (deliberately — see [Database persistence](#database-persistence)). |
-| High | Release codes lack expiry/hashing/throttling | Codes are cryptographically generated (2026-08-04) and now persist to Postgres, but they are stored in plaintext, never expire, and confirmation attempts are unlimited. |
 | Medium | Client-side workspace search | Good for demo volume; not suitable as a large-data search service. |
-| Medium | TypeScript is not strict | Green lint does not prove runtime correctness. |
 | Medium | Authorization needs formal audit | Route/UI scoping should be validated against a production server-side policy. Reimbursement transition guards were added (2026-08-04); cash-advance/liquidation already had them, but a full server-side policy review is still owed. |
-| Medium | Multi-step writes aren't atomic DB transactions | A route like claim submission persists several rows (claim, expenses, MOM) as sequential awaited calls, not one Postgres transaction — a mid-sequence failure can leave a partial write. Each individual `persist*()` call is a complete, valid upsert, so this is a durability/atomicity refinement, not silent data corruption. |
 | Medium | Serverless hosting (Vercel) is incompatible with the current persistence design | The in-memory-cache-plus-write-through pattern requires one continuous process — see [Database persistence](#database-persistence)'s hosting note. Deploy to Render/Railway/Fly.io, not Vercel serverless functions, without further work. |
 | Low | Historical import/import-batch behavior is evolving | Treat it as a controlled admin prototype feature; `import_batches` is intentionally not persisted yet (see [Database persistence](#database-persistence)). |
 
 ### Dependency security (known CVEs)
 
-As of 2026-08-04, `npm audit` reports 7 advisories (1 critical, 2 high, 4 moderate), concentrated in two packages:
+As of 2026-08-06, `npm audit` reports 6 advisories (2 high, 4 moderate) — **no critical** (the `jspdf` critical was fixed):
 
 | Package | Severity | Fix | Status |
 |---|---|---|---|
-| `jspdf` (PDF export) | Critical | Upgrade `3.0.3 → 4.x` — a **major/breaking** API change | Deferred; must be verified against `src/lib/*Export.ts` before adopting. |
-| `react-router` / `react-router-dom` (routing) | High | `npm audit fix` currently **downgrades** it (no patched forward version yet) | Deferred; revisit when a patched forward release exists. |
+| `jspdf` (PDF export) | ~~Critical~~ | Upgraded `3.0.3 → 4.2.1` | **Fixed** (2026-08-06); verified against PDF export. |
+| `react-router` / `react-router-dom` (routing) | High | `npm audit fix` currently **downgrades** it (no patched forward version yet — latest 7.18.2 is still in the vulnerable range) | Deferred; app isn't in RSC mode so exposure is low. Revisit when a patched forward release exists. |
+| `esbuild` (via `drizzle-kit` dev toolchain) | Moderate | Needs a breaking `drizzle-kit` 0.31 → 1.0.0-rc bump | Deferred; dev-server only, not in the shipped bundle. |
 
-**Decision:** deferred during the demo/presentation phase to avoid regressing PDF export and navigation. Do **not** run `npm audit fix --force` blindly. Address these as part of the pre-production hardening (they are deployment blockers, not demo blockers), then re-run `npm run lint && npm test && npm run build` and manually verify PDF export and routing.
+**Decision:** the remaining two are deployment blockers, not demo blockers. Do **not** run `npm audit fix --force` blindly (it downgrades). Address as part of pre-production hardening, then re-run `npm run lint && npm test && npm run build` and manually verify PDF export and routing.
 
 ## Recommended handoff order
 
