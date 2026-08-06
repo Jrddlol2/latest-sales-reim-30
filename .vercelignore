@@ -2,7 +2,3 @@ node_modules
 uploads
 dist
 *.log
-fix_*.cjs
-update_*.js
-use_portals.cjs
-clean_receipts.cjs
